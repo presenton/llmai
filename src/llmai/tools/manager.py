@@ -1,9 +1,7 @@
 from typing import Dict, List, Union
 
 from llmai.models.errors import ToolError
-from tools.handlers import SyncToolHandler, AsyncToolHandler
-
-ToolHandler = Union[SyncToolHandler, AsyncToolHandler]
+from tools.handlers import ToolHandler
 
 class ToolsManager:
     def __init__(self):
@@ -14,12 +12,14 @@ class ToolsManager:
         return list(self._registry.keys())
 
     def add(self, name: str, handler: ToolHandler):
+        if name in self._registry:
+            raise ToolError(400, f"Tool {name} already registered")
         self._registry[name] = handler
     
     def remove(self, name: str):
         self._registry.pop(name)
 
-    async def execute(
+    def execute(
         self,
         name: str,
         arguments: dict | None,
@@ -27,10 +27,4 @@ class ToolsManager:
         handler = self._registry.get(name)
         if not handler:
             raise ToolError(404, f"Tool {name} not registered")
-        
-        if isinstance(handler, SyncToolHandler):
-            return handler.execute(arguments)
-        elif isinstance(handler, AsyncToolHandler):
-            return await handler.execute(arguments)
-        else:
-            raise ToolError(500, "Invalid tool handler")
+        return handler.execute(arguments)

@@ -29,7 +29,8 @@ class AssistantMessage(Message):
 
 class ToolResponseMessage(Message):
     role: Literal["tool"] = "tool"
-    
+    id: str
+    content: str | None = None   
 
 
 class GoogleAssistantMessage(LLMMessage):
