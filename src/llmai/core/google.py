@@ -16,12 +16,13 @@ from pydantic import BaseModel
 
 from core.base import BaseClient
 from llmai.models.errors import LLMError
-from llmai.models.responses import (
-    JSONObjectResponse,
+from llmai.models.response_formats import (
     JSONSchemaResponse,
-    ResponseFormat,
+    JSONObjectResponse,
     TextResponse,
+    ResponseFormat,
 )
+from llmai.models.responses import ResponseContent, ResponseStreamContentChunk
 from llmai.models.tools import LLMTool
 from llmai.tools.manager import ToolsManager
 from llmai.utils.schema import get_schema_as_dict
@@ -169,6 +170,24 @@ class GoogleClient(BaseClient):
             )
         return tool_responses
 
+    def _content_to_assistant_message(self, content: GoogleContent) -> AssistantMessage:
+        text_content = None
+        tool_calls: List[AssistantToolCall] = []
+        for each_part in content.parts or []:
+            if each_part.function_call:
+                tool_calls.append(
+                    AssistantToolCall(
+                        id=each_part.function_call.id or "",
+                        name=each_part.function_call.name,
+                        arguments=json.dumps(each_part.function_call.args)
+                        if each_part.function_call.args
+                        else None,
+                    )
+                )
+            if each_part.text:
+                text_content = each_part.text
+        return AssistantMessage(content=text_content, tool_calls=tool_calls)
+
     def generate(
         self,
         *,
@@ -187,15 +206,6 @@ class GoogleClient(BaseClient):
         )
         config = GenerateContentConfig(
             tools=google_tools,
-            tool_config=(
-                GoogleToolConfig(
-                    function_calling_config=GoogleFunctionCallingConfig(
-                        mode=GoogleFunctionCallingConfigMode.ANY,
-                    )
-                )
-                if google_tools
-                else None
-            ),
             system_instruction=self._get_system_prompt(messages),
             response_mime_type=self._get_response_mime_type(
                 response_format, use_tools_for_structured_output
@@ -206,8 +216,6 @@ class GoogleClient(BaseClient):
             max_output_tokens=max_tokens,
             temperature=temperature,
         )
-        if extra_body:
-            config.model_dump()
 
         response = self._client.models.generate_content(
             model=model,
@@ -215,44 +223,35 @@ class GoogleClient(BaseClient):
             config=config,
         )
 
-        content = response.candidates[0].content
-        response_parts = content.parts
-
-        if not response_parts:
+        if not (
+            response.candidates
+            and response.candidates[0].content
+            and response.candidates[0].content.parts
+        ):
             raise LLMError(400, "No content returned from LLM")
 
-        text_content = None
-        tool_calls: List[AssistantToolCall] = []
-        for each_part in response_parts:
-            if each_part.function_call:
-                tool_calls.append(
-                    AssistantToolCall(
-                        id=each_part.function_call.id or "",
-                        name=each_part.function_call.name,
-                        arguments=json.dumps(each_part.function_call.args)
-                        if each_part.function_call.args
-                        else None,
-                    )
-                )
-            if each_part.text:
-                text_content = each_part.text
+        assistant_message = self._content_to_assistant_message(
+            response.candidates[0].content
+        )
 
-        if tool_calls:
-            for each in tool_calls:
+        if assistant_message.tool_calls:
+            for each in assistant_message.tool_calls:
                 if each.name == "ResponseSchema":
-                    return json.loads(each.arguments) if each.arguments else None
+                    return ResponseContent(
+                        content=json.loads(each.arguments) if each.arguments else {}
+                    )
 
             if self._tools_manager:
-                tool_responses = self._handle_tool_calls(tool_calls)
+                tool_responses = self._handle_tool_calls(assistant_message.tool_calls)
                 new_messages = [
                     *messages,
-                    AssistantMessage(content=text_content, tool_calls=tool_calls),
+                    assistant_message,
                     *tool_responses,
                 ]
             else:
                 new_messages = [
                     *messages,
-                    AssistantMessage(content=text_content, tool_calls=tool_calls),
+                    assistant_message,
                 ]
 
             return self.generate(
@@ -267,10 +266,10 @@ class GoogleClient(BaseClient):
                 depth=depth + 1,
             )
 
-        if text_content and response_format:
-            return json.loads(text_content)
+        if assistant_message.content and response_format:
+            return ResponseContent(content=json.loads(assistant_message.content))
 
-        return text_content
+        return ResponseContent(content=assistant_message.content or "")
 
     def stream(
         self,
@@ -309,8 +308,6 @@ class GoogleClient(BaseClient):
             max_output_tokens=max_tokens,
             temperature=temperature,
         )
-        if extra_body:
-            config.model_dump()
 
         tool_calls: List[AssistantToolCall] = []
         has_response_schema_tool_call = False
@@ -328,7 +325,11 @@ class GoogleClient(BaseClient):
 
             for each_part in event.candidates[0].content.parts:
                 if each_part.text and not use_tools_for_structured_output:
-                    yield each_part.text
+                    yield ResponseStreamContentChunk(
+                        id=str(depth),
+                        source="direct",
+                        chunk=each_part.text,
+                    )
 
                 if each_part.function_call:
                     tool_calls.append(
@@ -343,7 +344,11 @@ class GoogleClient(BaseClient):
                     if each_part.function_call.name == "ResponseSchema":
                         has_response_schema_tool_call = True
                         if each_part.function_call.args:
-                            yield json.dumps(each_part.function_call.args)
+                            yield ResponseStreamContentChunk(
+                                id=str(depth),
+                                source="tool",
+                                chunk=json.dumps(each_part.function_call.args),
+                            )
 
         if tool_calls and not has_response_schema_tool_call:
             new_messages = [

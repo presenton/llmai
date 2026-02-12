@@ -2,15 +2,20 @@ import json
 from logging import Logger
 from typing import List, Optional
 
-from anthropic import Anthropic, MessageStreamEvent
-from anthropic.types import Message as AnthropicMessage
+from anthropic import Anthropic, MessageStreamEvent, Omit
+from anthropic.types import (
+    Message as AnthropicMessage,
+    MessageParam,
+    TextBlockParam,
+    ToolParam,
+    ToolResultBlockParam,
+    ToolUseBlockParam,
+)
 from pydantic import BaseModel
 
 from core.base import BaseClient
-from llmai.models.errors import LLMError
-from llmai.models.responses import (
-    ResponseFormat,
-)
+from llmai.models.response_formats import ResponseFormat
+from llmai.models.responses import ResponseContent, ResponseStreamContentChunk
 from llmai.models.tools import LLMTool
 from llmai.tools.manager import ToolsManager
 from llmai.utils.schema import get_schema_as_dict
@@ -36,74 +41,75 @@ class AnthropicClient(BaseClient):
         self._client = Anthropic(api_key=api_key)
         self._tools_manager = tools_manager
 
-    def _get_system_prompt(self, messages: List[Message]) -> str:
+    def _get_system_prompt(self, messages: List[Message]) -> str | Omit:
         for message in messages:
             if isinstance(message, SystemMessage):
                 return message.content
-        return ""
+        return Omit()
 
-    def _messages_to_anthropic_messages(self, messages: List[Message]) -> List[dict]:
+    def _messages_to_anthropic_messages(
+        self, messages: List[Message]
+    ) -> List[MessageParam]:
         anthropic_messages = []
         for message in messages:
-            if isinstance(message, SystemMessage):
-                continue
             if isinstance(message, UserMessage):
                 anthropic_messages.append(
-                    {"role": "user", "content": message.content}
+                    MessageParam(role="user", content=message.content)
                 )
             elif isinstance(message, AssistantMessage):
-                if message.tool_calls:
-                    content_blocks = []
-                    if message.content:
-                        content_blocks.append(
-                            {"type": "text", "text": message.content}
-                        )
-                    for tool_call in message.tool_calls:
-                        arguments = {}
-                        if tool_call.arguments:
-                            try:
-                                arguments = json.loads(tool_call.arguments)
-                            except json.JSONDecodeError as exc:
-                                raise LLMError(
-                                    400, "Invalid tool arguments"
-                                ) from exc
-                        content_blocks.append(
-                            {
-                                "type": "tool_use",
-                                "id": tool_call.id,
-                                "name": tool_call.name,
-                                "input": arguments,
-                            }
-                        )
-                    anthropic_messages.append(
-                        {"role": "assistant", "content": content_blocks}
-                    )
-                elif message.content:
-                    anthropic_messages.append(
-                        {"role": "assistant", "content": message.content}
-                    )
+                anthropic_messages.append(
+                    self._assistant_message_to_message_param(message)
+                )
             elif isinstance(message, ToolResponseMessage):
                 anthropic_messages.append(
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "tool_result",
-                                "tool_use_id": message.id,
-                                "content": message.content or "",
-                            }
+                    MessageParam(
+                        role="user",
+                        content=[
+                            ToolResultBlockParam(
+                                type="tool_result",
+                                tool_use_id=response.id,
+                                content=response.content or "",
+                                is_error=False,
+                            )
+                            for response in message.responses
                         ],
-                    }
+                    )
                 )
         return anthropic_messages
 
-    def _llm_tools_to_anthropic_tools(self, tools: List[LLMTool]) -> List[dict]:
+    def _assistant_message_to_message_param(
+        self, message: AssistantMessage
+    ) -> MessageParam:
+        content_blocks = []
+        if message.content:
+            content_blocks.append(
+                TextBlockParam(
+                    type="text",
+                    text=message.content,
+                )
+            )
+        for each in message.tool_calls:
+            content_blocks.append(
+                ToolUseBlockParam(
+                    type="tool_use",
+                    id=each.id,
+                    name=each.name,
+                    input=each.arguments,
+                )
+            )
+        return MessageParam(
+            role="assistant",
+            content=content_blocks,
+        )
+
+    def _llm_tools_to_anthropic_tools(self, tools: List[LLMTool]) -> List[ToolParam]:
         return [
-            {
-                "name": tool.name,
-                "description": tool.description,
-                "input_schema": get_schema_as_dict(tool.schema),
-            }
+            ToolParam(
+                name=tool.name,
+                description=tool.description,
+                strict=tool.strict,
+                input_schema=get_schema_as_dict(tool.schema),
+            )
             for tool in tools
         ]
 
@@ -117,15 +123,14 @@ class AnthropicClient(BaseClient):
     def _get_anthropic_tools(
         self,
         tools: Optional[List[LLMTool]],
-        use_tools_for_structured_output: Optional[bool],
         response_format: Optional[BaseModel | dict],
     ) -> Optional[List[dict]]:
         anthropic_tools: List[dict] = []
         if tools:
             anthropic_tools = self._llm_tools_to_anthropic_tools(tools)
-        if use_tools_for_structured_output:
+        if response_format:
             anthropic_tools.append(self._response_schema_tool(response_format))
-        return anthropic_tools or None
+        return anthropic_tools or Omit()
 
     def _handle_tool_calls(
         self, calls: List[AssistantToolCall]
@@ -160,39 +165,35 @@ class AnthropicClient(BaseClient):
         use_tools_for_structured_output: Optional[bool] = None,
         depth: int = 0,
     ):
-        anthropic_tools = self._get_anthropic_tools(
-            tools, use_tools_for_structured_output, response_format
-        )
+        anthropic_tools = self._get_anthropic_tools(tools, response_format)
         response: AnthropicMessage = self._client.messages.create(
             model=model,
             system=self._get_system_prompt(messages),
             messages=self._messages_to_anthropic_messages(messages),
             tools=anthropic_tools,
             max_tokens=max_tokens or 8000,
-            temperature=temperature if temperature is not None else 1.0,
+            temperature=temperature or Omit(),
             extra_body=extra_body,
         )
 
         text_content = None
         tool_calls: List[AssistantToolCall] = []
         for content in response.content:
-            if content.type == "text" and isinstance(content.text, str):
+            if content.type == "text":
                 text_content = content.text
             if content.type == "tool_use":
                 tool_calls.append(
                     AssistantToolCall(
                         id=content.id,
                         name=content.name,
-                        arguments=json.dumps(content.input)
-                        if content.input is not None
-                        else None,
+                        arguments=json.dumps(content.input),
                     )
                 )
 
         if tool_calls:
             for each in tool_calls:
                 if each.name == "ResponseSchema":
-                    return json.loads(each.arguments) if each.arguments else None
+                    return ResponseContent(content=json.loads(each.arguments))
 
             if self._tools_manager:
                 tool_responses = self._handle_tool_calls(tool_calls)
@@ -220,9 +221,9 @@ class AnthropicClient(BaseClient):
             )
 
         if text_content and response_format:
-            return json.loads(text_content)
+            return ResponseContent(content=json.loads(text_content))
 
-        return text_content
+        return ResponseContent(content=text_content or "")
 
     def stream(
         self,
@@ -237,9 +238,7 @@ class AnthropicClient(BaseClient):
         use_tools_for_structured_output: Optional[bool] = None,
         depth: int = 0,
     ):
-        anthropic_tools = self._get_anthropic_tools(
-            tools, use_tools_for_structured_output, response_format
-        )
+        anthropic_tools = self._get_anthropic_tools(tools, response_format)
 
         tool_calls: List[AssistantToolCall] = []
         has_response_schema_tool_call = False
@@ -250,13 +249,21 @@ class AnthropicClient(BaseClient):
             messages=self._messages_to_anthropic_messages(messages),
             tools=anthropic_tools,
             max_tokens=max_tokens or 8000,
-            temperature=temperature if temperature is not None else 1.0,
+            temperature=temperature or Omit(),
             extra_body=extra_body,
         ) as stream:
             for event in stream:
                 event: MessageStreamEvent = event
-                if event.type == "text" and not use_tools_for_structured_output:
-                    yield event.text
+                if (
+                    event.type == "content_block_delta"
+                    and event.delta.type == "text_delta"
+                    and not use_tools_for_structured_output
+                ):
+                    yield ResponseStreamContentChunk(
+                        id=str(depth),
+                        source="direct",
+                        chunk=event.delta.text,
+                    )
 
                 if (
                     event.type == "content_block_start"
@@ -271,7 +278,11 @@ class AnthropicClient(BaseClient):
                     and event.delta.type == "input_json_delta"
                     and is_response_schema_tool_call_started
                 ):
-                    yield event.delta.partial_json
+                    yield ResponseStreamContentChunk(
+                        id=str(depth),
+                        source="tool",
+                        chunk=event.delta.partial_json,
+                    )
 
                 if (
                     event.type == "content_block_stop"
@@ -286,6 +297,8 @@ class AnthropicClient(BaseClient):
                             else None,
                         )
                     )
+                    if is_response_schema_tool_call_started:
+                        is_response_schema_tool_call_started = False
 
         if tool_calls and not has_response_schema_tool_call:
             new_messages = [

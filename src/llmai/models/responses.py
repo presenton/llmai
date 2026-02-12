@@ -1,15 +1,18 @@
 from typing import Literal
 from pydantic import BaseModel
 
-class ResponseFormat(BaseModel):
-    pass
 
-class JSONSchemaResponse(ResponseFormat):
-    type: Literal["json_schema"] = "json_schema"
-    json_schema: BaseModel | dict
+class ResponseContent(BaseModel):
+    type: Literal["content"] = "content"
+    content: str | dict
 
-class JSONObjectResponse(ResponseFormat):
-    type: Literal["json_object"] = "json_object"
 
-class TextResponse(ResponseFormat):
-    type: Literal["text"] = "text"
+class ResponseStreamChunk(BaseModel):
+    type: Literal["content_content_chunk"]
+    id: str
+
+
+class ResponseStreamContentChunk(ResponseStreamChunk):
+    type: Literal["content_content_chunk"] = "content_content_chunk"
+    source: Literal["direct", "tool"]
+    chunk: str

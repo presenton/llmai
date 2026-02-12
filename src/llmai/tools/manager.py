@@ -1,4 +1,4 @@
-from typing import Dict, List, Union
+from typing import Dict, List
 
 from llmai.models.errors import ToolError
 from tools.handlers import ToolHandler

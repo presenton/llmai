@@ -32,12 +32,13 @@ from pydantic import BaseModel
 
 from core.base import BaseClient
 from llmai.models.errors import LLMError
-from llmai.models.responses import (
-    JSONObjectResponse,
+from llmai.models.response_formats import (
     JSONSchemaResponse,
-    ResponseFormat,
+    JSONObjectResponse,
     TextResponse,
+    ResponseFormat,
 )
+from llmai.models.responses import ResponseContent, ResponseStreamContentChunk
 from llmai.models.tools import LLMTool
 from llmai.tools.manager import ToolsManager
 from llmai.utils.schema import get_schema_as_dict
@@ -234,7 +235,7 @@ class OpenAIClient(BaseClient):
         extra_body: Optional[dict] = None,
         use_tools_for_structured_output: Optional[bool] = None,
         depth: int = 0,
-    ) -> Tuple[str | dict | None, List[Message]]:
+    ) -> Tuple[ResponseContent, List[Message]]:
 
         response = self._client.chat.completions.create(
             model=model,
@@ -261,7 +262,10 @@ class OpenAIClient(BaseClient):
         if assistant_message.tool_calls:
             for each in assistant_message.tool_calls:
                 if each.name == "ResponseSchema":
-                    return json.loads(each.arguments), new_messages
+                    return (
+                        ResponseContent(content=json.loads(each.arguments)),
+                        new_messages,
+                    )
 
             if self._tools_manager:
                 tool_responses = self._handle_tool_calls(assistant_message.tool_calls)
@@ -280,10 +284,15 @@ class OpenAIClient(BaseClient):
             )
 
         if assistant_message.content and response_format:
-            return json.loads(assistant_message.content), new_messages
+            return (
+                ResponseContent(content=json.loads(assistant_message.content)),
+                new_messages,
+            )
+        
+        if not assistant_message.content:
+            raise LLMError(400, "No content returned from LLM")
 
-        return assistant_message.content, new_messages
-
+        return ResponseContent(content=assistant_message.content), new_messages
 
     def stream(
         self,
@@ -323,7 +332,11 @@ class OpenAIClient(BaseClient):
         for event in response:
             content_chunk = event.choices[0].delta.content
             if content_chunk and not use_tools_for_structured_output:
-                yield content_chunk
+                yield ResponseStreamContentChunk(
+                    id=str(depth),
+                    source="direct",
+                    chunk=content_chunk,
+                )
 
             tool_call_chunk = event.choices[0].delta.tool_calls
             if tool_call_chunk:
@@ -354,7 +367,11 @@ class OpenAIClient(BaseClient):
 
                 if current_name == "ResponseSchema":
                     if tool_arguments:
-                        yield tool_arguments
+                        yield ResponseStreamContentChunk(
+                            id=str(depth),
+                            source="tool",
+                            chunk=tool_arguments,
+                        )
                     has_response_schema_tool_call = True
 
         if current_id is not None:
