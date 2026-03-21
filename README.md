@@ -1,20 +1,167 @@
-# Same Interface for ALL LLMs
+# llmai
 
-Seamlessly interact with all leading Large Language Model providers through a unified and intuitive client.
+`llmai` is a Python library for working with multiple LLM providers through a shared set of message, tool, schema, and response primitives.
 
-## Features
+Today the repository includes adapters for:
 
-- Supports multiple providers (OpenAI, Anthropic, Google Gemini, and more)
-- Easy integration for any workflow or application
-- Fast, reliable, and secure requests
+- OpenAI
+- Anthropic
+- Google Gemini
+
+Each provider client exposes the same core entrypoints:
+
+- `generate(...)`
+- `stream(...)`
+
+## Why This Exists
+
+Provider SDKs differ in how they represent messages, tool calls, structured output, and streaming events. `llmai` smooths those differences out so application code can stay closer to one mental model.
+
+## Installation
+
+Install the project locally with `uv`:
+
+```bash
+uv sync
+```
+
+Or install it in editable mode with `pip`:
+
+```bash
+pip install -e .
+```
+
+## Quick Start
+
+```python
+from llmai import OpenAIClient
+from llmai.shared import UserMessage
+
+client = OpenAIClient(api_key="OPENAI_API_KEY")
+
+result = client.generate(
+    model="your-openai-model",
+    messages=[
+        UserMessage(content="Write a two-line poem about clean interfaces."),
+    ],
+)
+
+print(result.content)
+```
+
+If you want to swap providers, the overall call shape stays the same. In most cases you only need to change the client class, credentials, and model name.
+
+## Structured Output
+
+```python
+from pydantic import BaseModel
+
+from llmai import GoogleClient
+from llmai.shared import JSONSchemaResponse, UserMessage
+
+
+class Summary(BaseModel):
+    title: str
+    bullets: list[str]
+
+
+client = GoogleClient(api_key="GOOGLE_API_KEY")
+
+result = client.generate(
+    model="your-google-model",
+    messages=[
+        UserMessage(content="Summarize retrieval-augmented generation in simple terms."),
+    ],
+    response_format=JSONSchemaResponse(json_schema=Summary),
+)
+
+print(result.content)
+```
+
+Use `JSONSchemaResponse`, `JSONObjectResponse`, or `TextResponse` to request different response shapes.
+
+## Tool Calling
+
+```python
+from pydantic import BaseModel
+
+from llmai import OpenAIClient
+from llmai.shared import ToolChoices, ToolHandler, ToolsChoice, ToolsManager, UserMessage
+
+
+class WeatherArgs(BaseModel):
+    city: str
+
+
+class WeatherTool(ToolHandler):
+    def __init__(self):
+        super().__init__(
+            name="get_weather",
+            description="Look up the weather for a city.",
+            schema=WeatherArgs,
+        )
+
+    def execute(self, arguments: dict | None) -> str:
+        city = (arguments or {}).get("city", "unknown")
+        return f"It is sunny in {city}."
+
+
+weather_tool = WeatherTool()
+tools_manager = ToolsManager()
+tools_manager.add("get_weather", weather_tool)
+
+client = OpenAIClient(
+    api_key="OPENAI_API_KEY",
+    tools_manager=tools_manager,
+)
+
+result = client.generate(
+    model="your-openai-model",
+    messages=[
+        UserMessage(content="What is the weather in Kathmandu?"),
+    ],
+    tools=ToolChoices(
+        choices=[
+            ToolsChoice(optional=[weather_tool.tool]),
+        ],
+    ),
+)
+
+print(result.content)
+```
+
+## Streaming
+
+```python
+from llmai import AnthropicClient
+from llmai.shared import UserMessage
+
+client = AnthropicClient(api_key="ANTHROPIC_API_KEY")
+
+for chunk in client.stream(
+    model="your-anthropic-model",
+    messages=[
+        UserMessage(content="Explain recursion in one paragraph."),
+    ],
+):
+    if chunk.type == "stream_content":
+        print(chunk.chunk, end="")
+```
+
+`stream(...)` yields incremental `ResponseStreamContentChunk` values while the model is responding. Some clients also emit a `ResponseStreamCompletionChunk` when the stream finishes.
 
 ## Package Layout
 
-- `llmai/openai` for the OpenAI client
-- `llmai/google` for the Google Gemini client
-- `llmai/anthropic` for the Anthropic client
-- `llmai/shared` for shared message, tool, schema, and response models
+- `llmai/openai`: OpenAI adapter
+- `llmai/anthropic`: Anthropic adapter
+- `llmai/google`: Google Gemini adapter
+- `llmai/shared`: common message, tool, schema, and response models
 
----
+## Core Types
 
-**Stay tuned!**  
+The shared layer includes the main primitives you will use across providers:
+
+- `UserMessage`, `SystemMessage`, `AssistantMessage`
+- `Tool`, `ToolHandler`, `ToolsManager`, `ToolChoices`
+- `JSONSchemaResponse`, `JSONObjectResponse`, `TextResponse`
+- `ResponseContent`, `ResponseStreamContentChunk`, `ResponseStreamCompletionChunk`
