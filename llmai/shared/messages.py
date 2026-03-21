@@ -1,10 +1,11 @@
-from typing import List, Literal, Optional
-from pydantic import BaseModel
+from typing import Literal
 
+from pydantic import BaseModel, Field
 
 
 class Message(BaseModel):
     pass
+
 
 class UserMessage(Message):
     role: Literal["user"] = "user"
@@ -15,20 +16,20 @@ class SystemMessage(Message):
     role: Literal["system"] = "system"
     content: str
 
+
 class AssistantToolCall(BaseModel):
     id: str
     name: str
-    arguments: str | None
+    arguments: str | None = None
+
 
 class AssistantMessage(Message):
     role: Literal["assistant"] = "assistant"
     content: str | None = None
-    tool_calls: Optional[List[AssistantToolCall]] = None
+    tool_calls: list[AssistantToolCall] = Field(default_factory=list)
 
-class ToolResponse(BaseModel):
-    id: str
-    content: str | None
 
 class ToolResponseMessage(Message):
     role: Literal["tool"] = "tool"
-    responses: List[ToolResponse]
+    id: str
+    content: str | None = None

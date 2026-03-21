@@ -8,6 +8,13 @@ Seamlessly interact with all leading Large Language Model providers through a un
 - Easy integration for any workflow or application
 - Fast, reliable, and secure requests
 
+## Package Layout
+
+- `llmai/openai` for the OpenAI client
+- `llmai/google` for the Google Gemini client
+- `llmai/anthropic` for the Anthropic client
+- `llmai/shared` for shared message, tool, schema, and response models
+
 ---
 
 **Stay tuned!**  
