@@ -25,6 +25,36 @@ class BaseClient(ABC):
             case LogLevel.ERROR:
                 self._logger.error(message)
 
+    def _dump_value(self, value: Any) -> Any:
+        if value is None:
+            return None
+
+        if hasattr(value, "model_dump"):
+            return value.model_dump(exclude_none=True)
+
+        if isinstance(value, dict):
+            return {
+                key: self._dump_value(item)
+                for key, item in value.items()
+                if item is not None
+            }
+
+        if isinstance(value, (list, tuple)):
+            return [self._dump_value(item) for item in value]
+
+        if hasattr(value, "__dict__"):
+            return {
+                key: self._dump_value(item)
+                for key, item in vars(value).items()
+                if not key.startswith("_") and item is not None
+            }
+
+        return value
+
+    def _dump_model(self, value: Any) -> dict[str, Any]:
+        dumped = self._dump_value(value)
+        return dumped if isinstance(dumped, dict) else {}
+
     @abstractmethod
     def generate(
         self,

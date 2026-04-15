@@ -12,6 +12,8 @@ def test_generate():
         ],
     )
     print(response)
+    print(response.usage)
+    print(response.duration_seconds)
 
 
 test_generate()

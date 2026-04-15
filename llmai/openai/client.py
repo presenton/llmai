@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 from logging import Logger
+from time import perf_counter
 
 from openai import Omit, OpenAI
 from openai.types.chat import (
@@ -57,6 +58,7 @@ from llmai.shared.responses import (
     ResponseContent,
     ResponseStreamCompletionChunk,
     ResponseStreamContentChunk,
+    ResponseUsage,
 )
 from llmai.shared.schema import get_schema_as_dict
 from llmai.shared.tools import Tool, ToolChoice, resolve_tools
@@ -290,6 +292,29 @@ class OpenAIClient(BaseClient):
 
         return content
 
+    def _response_usage(self, usage: object | None) -> ResponseUsage | None:
+        raw_usage = self._dump_model(usage)
+        prompt_tokens = getattr(usage, "prompt_tokens", None)
+        completion_tokens = getattr(usage, "completion_tokens", None)
+        total_tokens = getattr(usage, "total_tokens", None)
+
+        if not raw_usage and all(
+            value is None for value in (prompt_tokens, completion_tokens, total_tokens)
+        ):
+            return None
+
+        details = dict(raw_usage)
+        details.pop("prompt_tokens", None)
+        details.pop("completion_tokens", None)
+        details.pop("total_tokens", None)
+
+        return ResponseUsage(
+            input_tokens=prompt_tokens,
+            output_tokens=completion_tokens,
+            total_tokens=total_tokens,
+            details=details,
+        )
+
     def generate(
         self,
         *,
@@ -309,6 +334,7 @@ class OpenAIClient(BaseClient):
             self._get_openai_tools_and_tool_choice_or_omit(tools, tool_choice)
         )
 
+        start_time = perf_counter()
         response = self._client.chat.completions.create(
             model=model,
             messages=self._messages_to_openai_messages(messages),
@@ -319,6 +345,7 @@ class OpenAIClient(BaseClient):
             max_completion_tokens=max_tokens,
             extra_body=extra_body,
         )
+        duration_seconds = perf_counter() - start_time
 
         if not response.choices:
             raise LLMError(400, "No content returned from LLM")
@@ -335,6 +362,8 @@ class OpenAIClient(BaseClient):
             ),
             messages=new_messages,
             tool_calls=assistant_message.tool_calls,
+            usage=self._response_usage(getattr(response, "usage", None)),
+            duration_seconds=duration_seconds,
         )
 
     def stream(
@@ -356,6 +385,7 @@ class OpenAIClient(BaseClient):
             self._get_openai_tools_and_tool_choice_or_omit(tools, tool_choice)
         )
 
+        start_time = perf_counter()
         response = self._client.chat.completions.create(
             model=model,
             messages=self._messages_to_openai_messages(messages),
@@ -366,14 +396,23 @@ class OpenAIClient(BaseClient):
             max_completion_tokens=max_tokens,
             extra_body=extra_body,
             stream=True,
+            stream_options={"include_usage": True},
         )
 
         stream_id = "0"
         content = ""
         partial_tool_calls: dict[int, dict[str, str | None]] = {}
         tool_order: list[int] = []
+        usage: ResponseUsage | None = None
 
         for event in response:
+            event_usage = self._response_usage(getattr(event, "usage", None))
+            if event_usage is not None:
+                usage = event_usage
+
+            if not getattr(event, "choices", None):
+                continue
+
             delta = event.choices[0].delta
 
             if delta.content:
@@ -433,6 +472,7 @@ class OpenAIClient(BaseClient):
             tool_calls=tool_calls,
         )
         new_messages = [*messages, assistant_message]
+        duration_seconds = perf_counter() - start_time
 
         yield ResponseStreamCompletionChunk(
             id=stream_id,
@@ -442,4 +482,6 @@ class OpenAIClient(BaseClient):
             ),
             messages=new_messages,
             tool_calls=tool_calls,
+            usage=usage,
+            duration_seconds=duration_seconds,
         )

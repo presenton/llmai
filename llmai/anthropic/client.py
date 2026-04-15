@@ -3,8 +3,9 @@ from __future__ import annotations
 import base64
 import json
 from logging import Logger
+from time import perf_counter
 
-from anthropic import Anthropic, MessageStreamEvent, Omit
+from anthropic import Anthropic, Omit
 from anthropic.types import (
     ImageBlockParam,
     Message as AnthropicMessage,
@@ -35,6 +36,7 @@ from llmai.shared.responses import (
     ResponseContent,
     ResponseStreamCompletionChunk,
     ResponseStreamContentChunk,
+    ResponseUsage,
 )
 from llmai.shared.schema import get_schema_as_dict
 from llmai.shared.tools import Tool, ToolChoice, resolve_tools
@@ -210,6 +212,43 @@ class AnthropicClient(BaseClient):
 
         return anthropic_tools or Omit(), anthropic_tool_choice
 
+    def _response_usage(self, usage: object | None) -> ResponseUsage | None:
+        raw_usage = self._dump_model(usage)
+        if not raw_usage:
+            return None
+
+        direct_input_tokens = raw_usage.get("input_tokens")
+        cache_creation_input_tokens = raw_usage.get("cache_creation_input_tokens") or 0
+        cache_read_input_tokens = raw_usage.get("cache_read_input_tokens") or 0
+        output_tokens = raw_usage.get("output_tokens")
+
+        input_tokens = None
+        if (
+            direct_input_tokens is not None
+            or cache_creation_input_tokens
+            or cache_read_input_tokens
+        ):
+            input_tokens = (
+                (direct_input_tokens or 0)
+                + cache_creation_input_tokens
+                + cache_read_input_tokens
+            )
+
+        total_tokens = None
+        if input_tokens is not None or output_tokens is not None:
+            total_tokens = (input_tokens or 0) + (output_tokens or 0)
+
+        details = dict(raw_usage)
+        details.pop("input_tokens", None)
+        details.pop("output_tokens", None)
+
+        return ResponseUsage(
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            total_tokens=total_tokens,
+            details=details,
+        )
+
     def generate(
         self,
         *,
@@ -232,6 +271,7 @@ class AnthropicClient(BaseClient):
             )
         )
 
+        start_time = perf_counter()
         response: AnthropicMessage = self._client.messages.create(
             model=model,
             system=self._get_system_prompt(messages),
@@ -242,6 +282,7 @@ class AnthropicClient(BaseClient):
             temperature=temperature or Omit(),
             extra_body=extra_body,
         )
+        duration_seconds = perf_counter() - start_time
 
         text_chunks: list[str] = []
         thinking_chunks: list[str] = []
@@ -282,6 +323,8 @@ class AnthropicClient(BaseClient):
             content=final_content,
             messages=new_messages,
             tool_calls=user_tool_calls,
+            usage=self._response_usage(getattr(response, "usage", None)),
+            duration_seconds=duration_seconds,
         )
 
     def stream(
@@ -312,6 +355,8 @@ class AnthropicClient(BaseClient):
         response_schema_content: dict | None = None
         user_tool_calls: list[AssistantToolCall] = []
         active_tool_name: str | None = None
+        start_time = perf_counter()
+        usage: ResponseUsage | None = None
 
         with self._client.messages.stream(
             model=model,
@@ -324,9 +369,6 @@ class AnthropicClient(BaseClient):
             extra_body=extra_body,
         ) as stream:
             for event in stream:
-                event = event  # Helps static readers; Anthropic yields union events.
-                event = event if isinstance(event, MessageStreamEvent) else event
-
                 if event.type == "content_block_start":
                     if event.content_block.type == "tool_use":
                         active_tool_name = event.content_block.name
@@ -377,6 +419,10 @@ class AnthropicClient(BaseClient):
                         user_tool_calls.append(tool_call)
                     active_tool_name = None
 
+            if hasattr(stream, "get_final_message"):
+                final_message = stream.get_final_message()
+                usage = self._response_usage(getattr(final_message, "usage", None))
+
         assistant_message = AssistantMessage(
             content=content_from_text("".join(text_chunks) or None),
             thinking="".join(thinking_chunks) or None,
@@ -389,10 +435,13 @@ class AnthropicClient(BaseClient):
             final_content = assistant_message.content
         if final_content is None and not user_tool_calls:
             final_content = ""
+        duration_seconds = perf_counter() - start_time
 
         yield ResponseStreamCompletionChunk(
             id=stream_id,
             content=final_content,
             messages=new_messages,
             tool_calls=user_tool_calls,
+            usage=usage,
+            duration_seconds=duration_seconds,
         )

@@ -34,13 +34,37 @@ class FakeOpenAICompletions:
 
 
 class FakeAnthropicMessages:
-    def __init__(self, response):
+    def __init__(self, response=None, stream_response=None):
         self.response = response
+        self.stream_response = stream_response
         self.calls = []
+        self.stream_calls = []
 
     def create(self, **kwargs):
         self.calls.append(kwargs)
         return self.response
+
+    def stream(self, **kwargs):
+        self.stream_calls.append(kwargs)
+        return self.stream_response
+
+
+class FakeAnthropicStream:
+    def __init__(self, events, final_message=None):
+        self.events = events
+        self.final_message = final_message
+
+    def __iter__(self):
+        return iter(self.events)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return None
+
+    def get_final_message(self):
+        return self.final_message
 
 
 class FakeGoogleModels:
@@ -124,6 +148,44 @@ class ClientBehaviorTests(unittest.TestCase):
             isinstance(fake_completions.calls[0]["tool_choice"], dict)
             and fake_completions.calls[0]["tool_choice"].get("type") == "allowed_tools"
         )
+
+    def test_openai_generate_returns_usage_and_duration(self):
+        fake_message = SimpleNamespace(
+            content="final answer",
+            tool_calls=None,
+        )
+        fake_response = SimpleNamespace(
+            choices=[SimpleNamespace(message=fake_message)],
+            usage=SimpleNamespace(
+                prompt_tokens=11,
+                completion_tokens=7,
+                total_tokens=18,
+                prompt_tokens_details=SimpleNamespace(cached_tokens=2),
+                completion_tokens_details=SimpleNamespace(reasoning_tokens=3),
+            ),
+        )
+        fake_completions = FakeOpenAICompletions(fake_response)
+
+        client = OpenAIClient(api_key="test")
+        client._client = SimpleNamespace(
+            chat=SimpleNamespace(completions=fake_completions)
+        )
+
+        result = client.generate(
+            model="gpt-test",
+            messages=[UserMessage(content=text_parts("Hello"))],
+        )
+
+        self.assertEqual(result.usage.input_tokens, 11)
+        self.assertEqual(result.usage.output_tokens, 7)
+        self.assertEqual(result.usage.total_tokens, 18)
+        self.assertEqual(result.usage.details["prompt_tokens_details"]["cached_tokens"], 2)
+        self.assertEqual(
+            result.usage.details["completion_tokens_details"]["reasoning_tokens"],
+            3,
+        )
+        self.assertIsNotNone(result.duration_seconds)
+        self.assertGreaterEqual(result.duration_seconds, 0)
 
     def test_openai_serializes_user_image_parts(self):
         client = OpenAIClient(api_key="test")
@@ -209,6 +271,15 @@ class ClientBehaviorTests(unittest.TestCase):
                         )
                     ]
                 ),
+                SimpleNamespace(
+                    choices=[],
+                    usage=SimpleNamespace(
+                        prompt_tokens=10,
+                        completion_tokens=4,
+                        total_tokens=14,
+                        completion_tokens_details=SimpleNamespace(reasoning_tokens=1),
+                    ),
+                ),
             ]
         )
         fake_completions = FakeOpenAICompletions(events)
@@ -235,6 +306,19 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(
             chunks[-1].tool_calls[0].arguments,
             '{"city":"Kathmandu"}',
+        )
+        self.assertEqual(chunks[-1].usage.input_tokens, 10)
+        self.assertEqual(chunks[-1].usage.output_tokens, 4)
+        self.assertEqual(chunks[-1].usage.total_tokens, 14)
+        self.assertEqual(
+            chunks[-1].usage.details["completion_tokens_details"]["reasoning_tokens"],
+            1,
+        )
+        self.assertIsNotNone(chunks[-1].duration_seconds)
+        self.assertGreaterEqual(chunks[-1].duration_seconds, 0)
+        self.assertEqual(
+            fake_completions.calls[0]["stream_options"],
+            {"include_usage": True},
         )
 
     def test_openai_generate_parses_structured_output(self):
@@ -352,6 +436,70 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(result.content[0].text, "final answer")
         self.assertEqual(result.messages[-1].thinking, "internal")
 
+    def test_anthropic_generate_returns_usage_and_duration(self):
+        fake_response = SimpleNamespace(
+            content=[SimpleNamespace(type="text", text="final answer")],
+            usage=SimpleNamespace(
+                input_tokens=10,
+                cache_creation_input_tokens=2,
+                cache_read_input_tokens=3,
+                output_tokens=5,
+            ),
+        )
+        fake_messages = FakeAnthropicMessages(fake_response)
+
+        client = AnthropicClient(api_key="test")
+        client._client = SimpleNamespace(messages=fake_messages)
+
+        result = client.generate(
+            model="claude-test",
+            messages=[UserMessage(content=text_parts("Answer me"))],
+        )
+
+        self.assertEqual(result.usage.input_tokens, 15)
+        self.assertEqual(result.usage.output_tokens, 5)
+        self.assertEqual(result.usage.total_tokens, 20)
+        self.assertEqual(result.usage.details["cache_creation_input_tokens"], 2)
+        self.assertEqual(result.usage.details["cache_read_input_tokens"], 3)
+        self.assertIsNotNone(result.duration_seconds)
+        self.assertGreaterEqual(result.duration_seconds, 0)
+
+    def test_anthropic_stream_returns_usage_and_duration(self):
+        fake_stream = FakeAnthropicStream(
+            events=[
+                SimpleNamespace(
+                    type="content_block_delta",
+                    delta=SimpleNamespace(type="text_delta", text="Hello"),
+                )
+            ],
+            final_message=SimpleNamespace(
+                usage=SimpleNamespace(
+                    input_tokens=8,
+                    cache_creation_input_tokens=1,
+                    output_tokens=2,
+                )
+            ),
+        )
+        fake_messages = FakeAnthropicMessages(stream_response=fake_stream)
+
+        client = AnthropicClient(api_key="test")
+        client._client = SimpleNamespace(messages=fake_messages)
+
+        chunks = list(
+            client.stream(
+                model="claude-test",
+                messages=[UserMessage(content=text_parts("Stream please"))],
+            )
+        )
+
+        self.assertEqual(chunks[0].chunk, "Hello")
+        self.assertEqual(chunks[-1].usage.input_tokens, 9)
+        self.assertEqual(chunks[-1].usage.output_tokens, 2)
+        self.assertEqual(chunks[-1].usage.total_tokens, 11)
+        self.assertEqual(chunks[-1].usage.details["cache_creation_input_tokens"], 1)
+        self.assertIsNotNone(chunks[-1].duration_seconds)
+        self.assertGreaterEqual(chunks[-1].duration_seconds, 0)
+
     def test_anthropic_generate_hides_internal_response_schema_tool(self):
         fake_response = SimpleNamespace(
             content=[
@@ -449,7 +597,14 @@ class ClientBehaviorTests(unittest.TestCase):
                         ]
                     )
                 )
-            ]
+            ],
+            usage_metadata=SimpleNamespace(
+                prompt_token_count=10,
+                tool_use_prompt_token_count=4,
+                candidates_token_count=7,
+                thoughts_token_count=3,
+                total_token_count=24,
+            ),
         )
         fake_models = FakeGoogleModels(response=fake_response)
 
@@ -466,6 +621,13 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(result.content[0].text, "I found an image.")
         self.assertEqual(result.content[1].mime_type, "image/png")
         self.assertEqual(result.content[1].data, b"img-bytes")
+        self.assertEqual(result.usage.input_tokens, 14)
+        self.assertEqual(result.usage.output_tokens, 10)
+        self.assertEqual(result.usage.total_tokens, 24)
+        self.assertEqual(result.usage.details["tool_use_prompt_token_count"], 4)
+        self.assertEqual(result.usage.details["thoughts_token_count"], 3)
+        self.assertIsNotNone(result.duration_seconds)
+        self.assertGreaterEqual(result.duration_seconds, 0)
 
     def test_google_stream_includes_images_only_in_completion(self):
         fake_models = FakeGoogleModels(
@@ -508,6 +670,14 @@ class ClientBehaviorTests(unittest.TestCase):
                             )
                         ]
                     ),
+                    SimpleNamespace(
+                        candidates=[],
+                        usage_metadata=SimpleNamespace(
+                            prompt_token_count=6,
+                            candidates_token_count=2,
+                            total_token_count=8,
+                        ),
+                    ),
                 ]
             )
         )
@@ -529,6 +699,11 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertIsInstance(chunks[-1].content, list)
         self.assertEqual(chunks[-1].content[0].text, "Hello")
         self.assertEqual(chunks[-1].content[1].mime_type, "image/png")
+        self.assertEqual(chunks[-1].usage.input_tokens, 6)
+        self.assertEqual(chunks[-1].usage.output_tokens, 2)
+        self.assertEqual(chunks[-1].usage.total_tokens, 8)
+        self.assertIsNotNone(chunks[-1].duration_seconds)
+        self.assertGreaterEqual(chunks[-1].duration_seconds, 0)
 
     def test_google_generate_hides_internal_response_schema_tool(self):
         fake_response = SimpleNamespace(
