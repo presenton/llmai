@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Annotated, Literal, TypeAlias
+from typing import List, Literal, TypeAlias
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -30,38 +30,30 @@ class ImageContentPart(BaseModel):
         return self
 
 
-ContentPart: TypeAlias = Annotated[
-    TextContentPart | ImageContentPart,
-    Field(discriminator="type"),
-]
-MessageContent: TypeAlias = str | list[ContentPart]
-AssistantContent: TypeAlias = MessageContent | None
+ContentPart: TypeAlias = TextContentPart | ImageContentPart
+MessageContent: TypeAlias = List[ContentPart]
+AssistantContent: TypeAlias = List[ContentPart] | None
+TextMessageContent: TypeAlias = List[TextContentPart]
 
 
 def normalize_content_parts(content: MessageContent | None) -> list[ContentPart]:
-    if content is None:
-        return []
-
-    if isinstance(content, str):
-        return [TextContentPart(text=content)]
-
-    return list(content)
+    return [] if content is None else list(content)
 
 
 def collapse_content_parts(parts: list[ContentPart]) -> AssistantContent:
-    if not parts:
+    return list(parts) or None
+
+
+def content_from_text(text: str | None) -> AssistantContent:
+    if text is None:
         return None
 
-    if all(isinstance(part, TextContentPart) for part in parts):
-        return "".join(part.text for part in parts if isinstance(part, TextContentPart))
-
-    return list(parts)
+    return [TextContentPart(text=text)]
 
 
 def content_has_images(content: AssistantContent) -> bool:
     return any(
-        isinstance(part, ImageContentPart)
-        for part in normalize_content_parts(content)
+        isinstance(part, ImageContentPart) for part in normalize_content_parts(content)
     )
 
 
@@ -76,7 +68,7 @@ class UserMessage(Message):
 
 class SystemMessage(Message):
     role: Literal["system"] = "system"
-    content: str
+    content: TextMessageContent
 
 
 class AssistantToolCall(BaseModel):
@@ -95,4 +87,4 @@ class AssistantMessage(Message):
 class ToolResponseMessage(Message):
     role: Literal["tool"] = "tool"
     id: str
-    content: str | None = None
+    content: TextMessageContent | None = None

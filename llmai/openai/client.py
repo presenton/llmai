@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 from logging import Logger
 
 from openai import Omit, OpenAI
@@ -41,6 +42,7 @@ from llmai.shared.messages import (
     SystemMessage,
     ToolResponseMessage,
     UserMessage,
+    content_from_text,
     content_has_images,
     normalize_content_parts,
 )
@@ -80,7 +82,7 @@ class OpenAIClient(BaseClient):
         message: ChatCompletionMessage,
     ) -> AssistantMessage:
         return AssistantMessage(
-            content=message.content,
+            content=content_from_text(message.content),
             tool_calls=[
                 AssistantToolCall(
                     id=tool_call.id,
@@ -131,6 +133,16 @@ class OpenAIClient(BaseClient):
 
         return "".join(part.text for part in normalize_content_parts(content))
 
+    def _text_content_to_string(
+        self,
+        content: list[object] | None,
+    ) -> str:
+        return "".join(
+            part.text
+            for part in normalize_content_parts(content)
+            if hasattr(part, "text")
+        )
+
     def _image_content_part_to_openai_image_url(
         self,
         part: ImageContentPart,
@@ -144,10 +156,7 @@ class OpenAIClient(BaseClient):
     def _user_content_to_openai_content(
         self,
         content: MessageContent,
-    ) -> str | list[dict[str, object]]:
-        if isinstance(content, str):
-            return content
-
+    ) -> list[dict[str, object]]:
         openai_content: list[dict[str, object]] = []
         for part in normalize_content_parts(content):
             if isinstance(part, ImageContentPart):
@@ -180,7 +189,7 @@ class OpenAIClient(BaseClient):
                 openai_messages.append(
                     ChatCompletionSystemMessageParam(
                         role="system",
-                        content=message.content,
+                        content=self._text_content_to_string(message.content),
                     )
                 )
             elif isinstance(message, UserMessage):
@@ -200,7 +209,7 @@ class OpenAIClient(BaseClient):
                 openai_messages.append(
                     ChatCompletionToolMessageParam(
                         role="tool",
-                        content=message.content or "",
+                        content=self._text_content_to_string(message.content),
                         tool_call_id=message.id,
                     )
                 )
@@ -267,6 +276,20 @@ class OpenAIClient(BaseClient):
 
         return openai_tools, "required"
 
+    def _final_content(
+        self,
+        content: AssistantContent,
+        response_format: ResponseFormat | None,
+    ) -> object:
+        text_content = self._assistant_content_to_openai_content(content)
+        if (
+            text_content
+            and isinstance(response_format, (JSONSchemaResponse, JSONObjectResponse))
+        ):
+            return json.loads(text_content)
+
+        return content
+
     def generate(
         self,
         *,
@@ -306,7 +329,10 @@ class OpenAIClient(BaseClient):
         new_messages = [*messages, assistant_message]
 
         return ResponseContent(
-            content=assistant_message.content,
+            content=self._final_content(
+                assistant_message.content,
+                response_format,
+            ),
             messages=new_messages,
             tool_calls=assistant_message.tool_calls,
         )
@@ -403,14 +429,17 @@ class OpenAIClient(BaseClient):
         ]
 
         assistant_message = AssistantMessage(
-            content=content or None,
+            content=content_from_text(content or None),
             tool_calls=tool_calls,
         )
         new_messages = [*messages, assistant_message]
 
         yield ResponseStreamCompletionChunk(
             id=stream_id,
-            content=assistant_message.content,
+            content=self._final_content(
+                assistant_message.content,
+                response_format,
+            ),
             messages=new_messages,
             tool_calls=tool_calls,
         )

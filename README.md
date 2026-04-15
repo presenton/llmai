@@ -35,14 +35,14 @@ pip install -e .
 
 ```python
 from llmai import OpenAIClient
-from llmai.shared import UserMessage
+from llmai.shared import TextContentPart, UserMessage
 
 client = OpenAIClient(api_key="OPENAI_API_KEY")
 
 result = client.generate(
     model="your-openai-model",
     messages=[
-        UserMessage(content="Write a two-line poem about clean interfaces."),
+        UserMessage(content=[TextContentPart(text="Write a two-line poem about clean interfaces.")]),
     ],
 )
 
@@ -57,7 +57,7 @@ If you want to swap providers, the overall call shape stays the same. In most ca
 from pydantic import BaseModel
 
 from llmai import GoogleClient
-from llmai.shared import JSONSchemaResponse, UserMessage
+from llmai.shared import JSONSchemaResponse, TextContentPart, UserMessage
 
 
 class Summary(BaseModel):
@@ -70,7 +70,13 @@ client = GoogleClient(api_key="GOOGLE_API_KEY")
 result = client.generate(
     model="your-google-model",
     messages=[
-        UserMessage(content="Summarize retrieval-augmented generation in simple terms."),
+        UserMessage(
+            content=[
+                TextContentPart(
+                    text="Summarize retrieval-augmented generation in simple terms."
+                )
+            ]
+        ),
     ],
     response_format=JSONSchemaResponse(json_schema=Summary),
 )
@@ -105,7 +111,7 @@ print(result.content)
 print(result.messages[-1].thinking)
 ```
 
-Request messages can mix text and image parts. Response image parts are returned as `list[TextContentPart | ImageContentPart]` when the provider supports normal multimodal completions; text-only responses still come back as plain strings.
+Request messages can mix text and image parts. Normal completion content is surfaced as `list[TextContentPart | ImageContentPart]` when the provider returns message content, including text-only replies.
 
 ## Tool Calling
 
@@ -113,7 +119,7 @@ Request messages can mix text and image parts. Response image parts are returned
 from pydantic import BaseModel
 
 from llmai import OpenAIClient
-from llmai.shared import Tool, ToolResponseMessage, UserMessage
+from llmai.shared import TextContentPart, Tool, ToolResponseMessage, UserMessage
 
 
 class WeatherArgs(BaseModel):
@@ -131,7 +137,9 @@ client = OpenAIClient(api_key="OPENAI_API_KEY")
 first = client.generate(
     model="your-openai-model",
     messages=[
-        UserMessage(content="What is the weather in Kathmandu?"),
+        UserMessage(
+            content=[TextContentPart(text="What is the weather in Kathmandu?")]
+        ),
     ],
     tools=[weather_tool],
     tool_choice={"optional": ["get_weather"]},
@@ -147,7 +155,7 @@ for tool_call in first.tool_calls:
             *first.messages,
             ToolResponseMessage(
                 id=tool_call.id,
-                content="It is sunny in Kathmandu.",
+                content=[TextContentPart(text="It is sunny in Kathmandu.")],
             ),
         ],
         tools=[weather_tool],
@@ -161,14 +169,16 @@ for tool_call in first.tool_calls:
 
 ```python
 from llmai import AnthropicClient
-from llmai.shared import UserMessage
+from llmai.shared import TextContentPart, UserMessage
 
 client = AnthropicClient(api_key="ANTHROPIC_API_KEY")
 
 for chunk in client.stream(
     model="your-anthropic-model",
     messages=[
-        UserMessage(content="Explain recursion in one paragraph."),
+        UserMessage(
+            content=[TextContentPart(text="Explain recursion in one paragraph.")]
+        ),
     ],
 ):
     if chunk.type == "stream_content":

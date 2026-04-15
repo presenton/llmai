@@ -19,6 +19,10 @@ def make_tool(name: str) -> Tool:
     return Tool(name=name, description=f"{name} description")
 
 
+def text_parts(text: str) -> list[TextContentPart]:
+    return [TextContentPart(text=text)]
+
+
 class FakeOpenAICompletions:
     def __init__(self, response):
         self.response = response
@@ -105,7 +109,7 @@ class ClientBehaviorTests(unittest.TestCase):
 
         result = client.generate(
             model="gpt-test",
-            messages=[UserMessage(content="Weather?")],
+            messages=[UserMessage(content=text_parts("Weather?"))],
             tools=[make_tool("get_weather"), make_tool("time")],
             tool_choice={"optional": ["get_weather"]},
         )
@@ -217,7 +221,7 @@ class ClientBehaviorTests(unittest.TestCase):
         chunks = list(
             client.stream(
                 model="gpt-test",
-                messages=[UserMessage(content="Weather?")],
+                messages=[UserMessage(content=text_parts("Weather?"))],
                 tools=[make_tool("get_weather")],
             )
         )
@@ -232,6 +236,67 @@ class ClientBehaviorTests(unittest.TestCase):
             chunks[-1].tool_calls[0].arguments,
             '{"city":"Kathmandu"}',
         )
+
+    def test_openai_generate_parses_structured_output(self):
+        fake_message = SimpleNamespace(
+            content='{"answer":"pong"}',
+            tool_calls=None,
+        )
+        fake_response = SimpleNamespace(
+            choices=[SimpleNamespace(message=fake_message)]
+        )
+        fake_completions = FakeOpenAICompletions(fake_response)
+
+        client = OpenAIClient(api_key="test")
+        client._client = SimpleNamespace(
+            chat=SimpleNamespace(completions=fake_completions)
+        )
+
+        result = client.generate(
+            model="gpt-test",
+            messages=[UserMessage(content=text_parts("Answer in JSON"))],
+            response_format=JSONSchemaResponse(json_schema=AnswerSchema),
+        )
+
+        self.assertEqual(result.content, {"answer": "pong"})
+
+    def test_openai_stream_parses_structured_output_in_final_completion(self):
+        events = iter(
+            [
+                SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(
+                            delta=SimpleNamespace(content='{"answer":"', tool_calls=None)
+                        )
+                    ]
+                ),
+                SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(
+                            delta=SimpleNamespace(content='pong"}', tool_calls=None)
+                        )
+                    ]
+                ),
+            ]
+        )
+        fake_completions = FakeOpenAICompletions(events)
+
+        client = OpenAIClient(api_key="test")
+        client._client = SimpleNamespace(
+            chat=SimpleNamespace(completions=fake_completions)
+        )
+
+        chunks = list(
+            client.stream(
+                model="gpt-test",
+                messages=[UserMessage(content=text_parts("Answer in JSON"))],
+                response_format=JSONSchemaResponse(json_schema=AnswerSchema),
+            )
+        )
+
+        self.assertEqual(chunks[0].chunk, '{"answer":"')
+        self.assertEqual(chunks[1].chunk, 'pong"}')
+        self.assertEqual(chunks[-1].content, {"answer": "pong"})
 
     def test_anthropic_required_tool_choice_keeps_optional_tools_visible(self):
         client = AnthropicClient(api_key="test")
@@ -281,10 +346,10 @@ class ClientBehaviorTests(unittest.TestCase):
 
         result = client.generate(
             model="claude-test",
-            messages=[UserMessage(content="Answer me")],
+            messages=[UserMessage(content=text_parts("Answer me"))],
         )
 
-        self.assertEqual(result.content, "final answer")
+        self.assertEqual(result.content[0].text, "final answer")
         self.assertEqual(result.messages[-1].thinking, "internal")
 
     def test_anthropic_generate_hides_internal_response_schema_tool(self):
@@ -305,7 +370,7 @@ class ClientBehaviorTests(unittest.TestCase):
 
         result = client.generate(
             model="claude-test",
-            messages=[UserMessage(content="Answer in JSON")],
+            messages=[UserMessage(content=text_parts("Answer in JSON"))],
             response_format=JSONSchemaResponse(json_schema=AnswerSchema),
         )
 
@@ -393,7 +458,7 @@ class ClientBehaviorTests(unittest.TestCase):
 
         result = client.generate(
             model="gemini-test",
-            messages=[UserMessage(content="Show me something")],
+            messages=[UserMessage(content=text_parts("Show me something"))],
         )
 
         self.assertEqual(result.messages[-1].thinking, "hidden reasoning")
@@ -453,7 +518,7 @@ class ClientBehaviorTests(unittest.TestCase):
         chunks = list(
             client.stream(
                 model="gemini-test",
-                messages=[UserMessage(content="Show me something")],
+                messages=[UserMessage(content=text_parts("Show me something"))],
             )
         )
 
@@ -494,7 +559,7 @@ class ClientBehaviorTests(unittest.TestCase):
 
         result = client.generate(
             model="gemini-test",
-            messages=[UserMessage(content="Answer in JSON")],
+            messages=[UserMessage(content=text_parts("Answer in JSON"))],
             response_format=JSONSchemaResponse(json_schema=AnswerSchema),
             use_tools_for_structured_output=True,
         )

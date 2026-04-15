@@ -24,6 +24,7 @@ from llmai.shared.messages import (
     SystemMessage,
     ToolResponseMessage,
     UserMessage,
+    content_from_text,
     normalize_content_parts,
 )
 from llmai.shared.response_formats import (
@@ -52,7 +53,7 @@ class AnthropicClient(BaseClient):
     def _get_system_prompt(self, messages: list[Message]) -> str | Omit:
         for message in messages:
             if isinstance(message, SystemMessage):
-                return message.content
+                return "".join(part.text for part in message.content)
         return Omit()
 
     def _parse_tool_arguments(self, arguments: str | None) -> dict:
@@ -88,7 +89,7 @@ class AnthropicClient(BaseClient):
 
     def _content_to_anthropic_blocks(
         self,
-        content: str | list[object] | None,
+        content: list[object] | None,
     ) -> list[TextBlockParam | ImageBlockParam]:
         blocks: list[TextBlockParam | ImageBlockParam] = []
 
@@ -134,14 +135,11 @@ class AnthropicClient(BaseClient):
                 continue
 
             if isinstance(message, UserMessage):
-                user_content: str | list[TextBlockParam | ImageBlockParam]
-                if isinstance(message.content, str):
-                    user_content = message.content
-                else:
-                    user_content = self._content_to_anthropic_blocks(message.content)
-
                 anthropic_messages.append(
-                    MessageParam(role="user", content=user_content)
+                    MessageParam(
+                        role="user",
+                        content=self._content_to_anthropic_blocks(message.content),
+                    )
                 )
             elif isinstance(message, AssistantMessage):
                 anthropic_messages.append(
@@ -155,7 +153,9 @@ class AnthropicClient(BaseClient):
                             ToolResultBlockParam(
                                 type="tool_result",
                                 tool_use_id=message.id,
-                                content=message.content or "",
+                                content="".join(
+                                    part.text for part in (message.content or [])
+                                ),
                                 is_error=False,
                             )
                         ],
@@ -266,7 +266,7 @@ class AnthropicClient(BaseClient):
                     user_tool_calls.append(tool_call)
 
         assistant_message = AssistantMessage(
-            content="".join(text_chunks) or None,
+            content=content_from_text("".join(text_chunks) or None),
             thinking="".join(thinking_chunks) or None,
             tool_calls=user_tool_calls,
         )
@@ -378,7 +378,7 @@ class AnthropicClient(BaseClient):
                     active_tool_name = None
 
         assistant_message = AssistantMessage(
-            content="".join(text_chunks) or None,
+            content=content_from_text("".join(text_chunks) or None),
             thinking="".join(thinking_chunks) or None,
             tool_calls=user_tool_calls,
         )

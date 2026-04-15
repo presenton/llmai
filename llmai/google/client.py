@@ -56,7 +56,7 @@ class GoogleClient(BaseClient):
     def _get_system_prompt(self, messages: list[Message]) -> str | None:
         for message in messages:
             if isinstance(message, SystemMessage):
-                return message.content
+                return "".join(part.text for part in message.content)
         return None
 
     def _parse_tool_arguments(self, arguments: str | None) -> dict:
@@ -129,7 +129,7 @@ class GoogleClient(BaseClient):
 
     def _content_to_google_parts(
         self,
-        content: str | list[object] | None,
+        content: list[object] | None,
     ) -> list[GooglePart]:
         parts: list[GooglePart] = []
 
@@ -195,7 +195,11 @@ class GoogleClient(BaseClient):
                         parts=[
                             GooglePart.from_function_response(
                                 name=message.id,
-                                response={"result": message.content},
+                                response={
+                                    "result": "".join(
+                                        part.text for part in (message.content or [])
+                                    )
+                                },
                             )
                         ],
                     )
@@ -285,7 +289,7 @@ class GoogleClient(BaseClient):
 
     def _final_content(
         self,
-        content: str | list[TextContentPart | ImageContentPart] | None,
+        content: list[TextContentPart | ImageContentPart] | None,
         response_schema_content: dict | None,
         user_tool_calls: list[AssistantToolCall],
         response_format: ResponseFormat | None,
@@ -294,16 +298,18 @@ class GoogleClient(BaseClient):
         if response_schema_content is not None:
             return response_schema_content
 
+        text_content = "".join(
+            part.text for part in (content or []) if isinstance(part, TextContentPart)
+        )
         if (
-            isinstance(content, str)
-            and content
+            text_content
             and not use_tools_for_structured_output
             and isinstance(response_format, (JSONSchemaResponse, JSONObjectResponse))
         ):
-            return json.loads(content)
+            return json.loads(text_content)
 
         if content is None and not user_tool_calls:
-            return ""
+            return None
 
         return content
 

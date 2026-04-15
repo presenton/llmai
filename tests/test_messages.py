@@ -14,11 +14,11 @@ from llmai.shared import (
 class AssistantMessageTests(unittest.TestCase):
     def test_supports_optional_thinking_field(self):
         message = AssistantMessage(
-            content="final answer",
+            content=[TextContentPart(text="final answer")],
             thinking="hidden chain summary",
         )
 
-        self.assertEqual(message.content, "final answer")
+        self.assertEqual(message.content[0].text, "final answer")
         self.assertEqual(message.thinking, "hidden chain summary")
         self.assertEqual(message.model_dump()["thinking"], "hidden chain summary")
 
@@ -33,7 +33,7 @@ class AssistantMessageTests(unittest.TestCase):
         self.assertEqual(message.content[0].text, "Describe this image.")
         self.assertEqual(message.content[1].url, "https://example.com/cat.png")
 
-    def test_collapse_content_parts_returns_string_for_text_only_parts(self):
+    def test_collapse_content_parts_keeps_text_only_parts_as_a_list(self):
         content = collapse_content_parts(
             [
                 TextContentPart(text="Hello"),
@@ -41,7 +41,7 @@ class AssistantMessageTests(unittest.TestCase):
             ]
         )
 
-        self.assertEqual(content, "Hello world")
+        self.assertEqual([part.text for part in content], ["Hello", " world"])
 
     def test_rejects_image_parts_without_exactly_one_source(self):
         with self.assertRaises(ValidationError):
