@@ -47,6 +47,8 @@ result = client.generate(
 )
 
 print(result.content)
+print(result.usage)
+print(result.duration_seconds)
 ```
 
 If you want to swap providers, the overall call shape stays the same. In most cases you only need to change the client class, credentials, and model name.
@@ -203,3 +205,4 @@ The shared layer includes the main primitives you will use across providers:
 - `Tool`, `ToolResponseMessage`
 - `JSONSchemaResponse`, `JSONObjectResponse`, `TextResponse`
 - `ResponseContent`, `ResponseStreamContentChunk`, `ResponseStreamCompletionChunk`
+- `ResponseUsage`

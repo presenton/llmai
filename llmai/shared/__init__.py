@@ -32,6 +32,7 @@ from llmai.shared.responses import (
     ResponseStreamChunk,
     ResponseStreamCompletionChunk,
     ResponseStreamContentChunk,
+    ResponseUsage,
 )
 from llmai.shared.schema import SchemaLike, get_schema_as_dict
 from llmai.shared.tools import Tool, ToolChoice
@@ -56,6 +57,7 @@ __all__ = [
     "ResponseStreamChunk",
     "ResponseStreamCompletionChunk",
     "ResponseStreamContentChunk",
+    "ResponseUsage",
     "SchemaLike",
     "SystemMessage",
     "TextContentPart",

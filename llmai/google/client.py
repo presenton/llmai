@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from logging import Logger
+from time import perf_counter
 
 from google import genai
 from google.genai.types import (
@@ -38,6 +39,7 @@ from llmai.shared.responses import (
     ResponseContent,
     ResponseStreamCompletionChunk,
     ResponseStreamContentChunk,
+    ResponseUsage,
 )
 from llmai.shared.schema import get_schema_as_dict
 from llmai.shared.tools import Tool, ToolChoice, resolve_tools
@@ -313,6 +315,42 @@ class GoogleClient(BaseClient):
 
         return content
 
+    def _response_usage(self, usage_metadata: object | None) -> ResponseUsage | None:
+        raw_usage = self._dump_model(usage_metadata)
+        if not raw_usage:
+            return None
+
+        prompt_token_count = raw_usage.get("prompt_token_count")
+        tool_use_prompt_token_count = raw_usage.get("tool_use_prompt_token_count") or 0
+        input_tokens = None
+        if prompt_token_count is not None or tool_use_prompt_token_count:
+            input_tokens = (prompt_token_count or 0) + tool_use_prompt_token_count
+
+        output_token_count = raw_usage.get("response_token_count")
+        if output_token_count is None:
+            output_token_count = raw_usage.get("candidates_token_count")
+        thoughts_token_count = raw_usage.get("thoughts_token_count") or 0
+        output_tokens = None
+        if output_token_count is not None or thoughts_token_count:
+            output_tokens = (output_token_count or 0) + thoughts_token_count
+
+        total_tokens = raw_usage.get("total_token_count")
+        if total_tokens is None and (input_tokens is not None or output_tokens is not None):
+            total_tokens = (input_tokens or 0) + (output_tokens or 0)
+
+        details = dict(raw_usage)
+        details.pop("prompt_token_count", None)
+        details.pop("response_token_count", None)
+        details.pop("candidates_token_count", None)
+        details.pop("total_token_count", None)
+
+        return ResponseUsage(
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            total_tokens=total_tokens,
+            details=details,
+        )
+
     def generate(
         self,
         *,
@@ -350,11 +388,13 @@ class GoogleClient(BaseClient):
             temperature=temperature,
         )
 
+        start_time = perf_counter()
         response = self._client.models.generate_content(
             model=model,
             contents=self._messages_to_google_messages(messages),
             config=config,
         )
+        duration_seconds = perf_counter() - start_time
 
         if not (
             response.candidates
@@ -391,6 +431,8 @@ class GoogleClient(BaseClient):
             ),
             messages=new_messages,
             tool_calls=user_tool_calls,
+            usage=self._response_usage(getattr(response, "usage_metadata", None)),
+            duration_seconds=duration_seconds,
         )
 
     def stream(
@@ -438,12 +480,18 @@ class GoogleClient(BaseClient):
         tool_call_order: list[str] = []
         last_emitted_chunks: dict[str, str] = {}
         seen_images: set[tuple[str, str, bytes | str]] = set()
+        usage: ResponseUsage | None = None
+        start_time = perf_counter()
 
         for event in self._client.models.generate_content_stream(
             model=model,
             contents=self._messages_to_google_messages(messages),
             config=config,
         ):
+            event_usage = self._response_usage(getattr(event, "usage_metadata", None))
+            if event_usage is not None:
+                usage = event_usage
+
             if not (
                 event.candidates
                 and event.candidates[0].content
@@ -550,6 +598,7 @@ class GoogleClient(BaseClient):
             tool_calls=user_tool_calls,
         )
         new_messages = [*messages, assistant_message]
+        duration_seconds = perf_counter() - start_time
 
         yield ResponseStreamCompletionChunk(
             id=stream_id,
@@ -562,4 +611,6 @@ class GoogleClient(BaseClient):
             ),
             messages=new_messages,
             tool_calls=user_tool_calls,
+            usage=usage,
+            duration_seconds=duration_seconds,
         )
