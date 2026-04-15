@@ -24,8 +24,7 @@ from llmai.shared.responses import (
     ResponseStreamContentChunk,
 )
 from llmai.shared.schema import SchemaLike, get_schema_as_dict
-from llmai.shared.tooling import ToolHandler, ToolsManager
-from llmai.shared.tools import Tool, ToolChoice, ToolChoices, ToolsChoice
+from llmai.shared.tools import Tool, ToolChoice
 
 __all__ = [
     "AssistantMessage",
@@ -48,12 +47,8 @@ __all__ = [
     "TextResponse",
     "Tool",
     "ToolChoice",
-    "ToolChoices",
     "ToolError",
-    "ToolHandler",
     "ToolResponseMessage",
-    "ToolsChoice",
-    "ToolsManager",
     "UserMessage",
     "get_response_schema",
     "get_schema_as_dict",

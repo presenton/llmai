@@ -6,7 +6,7 @@ from llmai.shared.logs import LogLevel
 from llmai.shared.messages import Message
 from llmai.shared.response_formats import ResponseFormat
 from llmai.shared.responses import ResponseContent, ResponseStreamChunk
-from llmai.shared.tools import ToolChoices
+from llmai.shared.tools import Tool, ToolChoice
 
 
 class BaseClient(ABC):
@@ -32,12 +32,12 @@ class BaseClient(ABC):
         model: str,
         messages: list[Message],
         temperature: float | None = None,
-        tools: ToolChoices | None = None,
+        tools: list[Tool] | None = None,
+        tool_choice: ToolChoice | None = None,
         response_format: ResponseFormat | None = None,
         max_tokens: int | None = None,
         extra_body: dict | None = None,
         use_tools_for_structured_output: bool | None = None,
-        depth: int = 0,
     ) -> ResponseContent:
         raise NotImplementedError
 
@@ -48,11 +48,11 @@ class BaseClient(ABC):
         model: str,
         messages: list[Message],
         temperature: float | None = None,
-        tools: ToolChoices | None = None,
+        tools: list[Tool] | None = None,
+        tool_choice: ToolChoice | None = None,
         response_format: ResponseFormat | None = None,
         max_tokens: int | None = None,
         extra_body: dict | None = None,
         use_tools_for_structured_output: bool | None = None,
-        depth: int = 0,
     ) -> Generator[ResponseStreamChunk, None, None]:
         raise NotImplementedError

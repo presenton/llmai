@@ -86,49 +86,49 @@ Use `JSONSchemaResponse`, `JSONObjectResponse`, or `TextResponse` to request dif
 from pydantic import BaseModel
 
 from llmai import OpenAIClient
-from llmai.shared import ToolChoices, ToolHandler, ToolsChoice, ToolsManager, UserMessage
+from llmai.shared import Tool, ToolChoice, ToolResponseMessage, UserMessage
 
 
 class WeatherArgs(BaseModel):
     city: str
 
 
-class WeatherTool(ToolHandler):
-    def __init__(self):
-        super().__init__(
-            name="get_weather",
-            description="Look up the weather for a city.",
-            schema=WeatherArgs,
-        )
-
-    def execute(self, arguments: dict | None) -> str:
-        city = (arguments or {}).get("city", "unknown")
-        return f"It is sunny in {city}."
-
-
-weather_tool = WeatherTool()
-tools_manager = ToolsManager()
-tools_manager.add("get_weather", weather_tool)
-
-client = OpenAIClient(
-    api_key="OPENAI_API_KEY",
-    tools_manager=tools_manager,
+weather_tool = Tool(
+    name="get_weather",
+    description="Look up the weather for a city.",
+    schema=WeatherArgs,
 )
 
-result = client.generate(
+client = OpenAIClient(api_key="OPENAI_API_KEY")
+
+first = client.generate(
     model="your-openai-model",
     messages=[
         UserMessage(content="What is the weather in Kathmandu?"),
     ],
-    tools=ToolChoices(
-        choices=[
-            ToolsChoice(optional=[weather_tool.tool]),
-        ],
-    ),
+    tools=[weather_tool],
+    tool_choice=ToolChoice(optional=["get_weather"]),
 )
 
-print(result.content)
+for tool_call in first.tool_calls:
+    if tool_call.name != "get_weather":
+        continue
+
+    follow_up = client.generate(
+        model="your-openai-model",
+        messages=[
+            *first.messages,
+            ToolResponseMessage(
+                id=tool_call.id,
+                content="It is sunny in Kathmandu.",
+            ),
+        ],
+        tools=[weather_tool],
+    )
+    print(follow_up.content)
 ```
+
+`llmai` returns tool calls in `first.tool_calls` and leaves execution to the caller.
 
 ## Streaming
 
@@ -162,6 +162,6 @@ for chunk in client.stream(
 The shared layer includes the main primitives you will use across providers:
 
 - `UserMessage`, `SystemMessage`, `AssistantMessage`
-- `Tool`, `ToolHandler`, `ToolsManager`, `ToolChoices`
+- `Tool`, `ToolChoice`, `ToolResponseMessage`
 - `JSONSchemaResponse`, `JSONObjectResponse`, `TextResponse`
 - `ResponseContent`, `ResponseStreamContentChunk`, `ResponseStreamCompletionChunk`

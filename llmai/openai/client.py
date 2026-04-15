@@ -1,17 +1,15 @@
-import json
+from __future__ import annotations
+
 from logging import Logger
 
 from openai import Omit, OpenAI
 from openai.types.chat import (
-    ChatCompletionAllowedToolChoiceParam,
-    ChatCompletionAllowedToolsParam,
     ChatCompletionAssistantMessageParam,
     ChatCompletionFunctionToolParam,
     ChatCompletionMessage,
     ChatCompletionMessageFunctionToolCallParam,
     ChatCompletionMessageParam,
     ChatCompletionSystemMessageParam,
-    ChatCompletionToolChoiceOptionParam,
     ChatCompletionUserMessageParam,
 )
 from openai.types.chat.chat_completion_message_tool_call import Function
@@ -53,8 +51,7 @@ from llmai.shared.responses import (
     ResponseStreamContentChunk,
 )
 from llmai.shared.schema import get_schema_as_dict
-from llmai.shared.tooling import ToolsManager
-from llmai.shared.tools import Tool, ToolChoices
+from llmai.shared.tools import Tool, ToolChoice, resolve_tools
 
 
 class OpenAIClient(BaseClient):
@@ -63,12 +60,10 @@ class OpenAIClient(BaseClient):
         *,
         base_url: str | None = None,
         api_key: str | None = None,
-        tools_manager: ToolsManager | None = None,
         logger: Logger | None = None,
     ):
         super().__init__(logger=logger)
         self._client = OpenAI(base_url=base_url, api_key=api_key)
-        self._tools_manager = tools_manager
 
         if self._logger:
             self._logger.info("OpenAI client created")
@@ -191,83 +186,50 @@ class OpenAIClient(BaseClient):
 
     def _get_openai_tools_and_tool_choice_or_omit(
         self,
-        tools: ToolChoices | None,
-        depth: int,
-    ) -> tuple[
-        list[ChatCompletionFunctionToolParam] | Omit,
-        ChatCompletionToolChoiceOptionParam | Omit,
-    ]:
-        if not tools:
+        tools: list[Tool] | None,
+        tool_choice: ToolChoice | None,
+    ) -> tuple[list[ChatCompletionFunctionToolParam] | Omit, dict[str, object] | Omit]:
+        resolved = resolve_tools(tools, tool_choice)
+        openai_tools = self._llm_tools_to_openai_tools(resolved.tools)
+        if not openai_tools:
             return Omit(), Omit()
 
-        required_tools = self._llm_tools_to_openai_tools(
-            tools.required_for_depth(depth)
-        )
-        optional_tools = self._llm_tools_to_openai_tools(
-            tools.optional_for_depth(depth)
-        )
-        all_tools = [*required_tools, *optional_tools]
+        if not resolved.required_names and not resolved.optional_names:
+            return openai_tools, Omit()
 
-        if not all_tools:
-            return Omit(), Omit()
-
-        allowed_tools = []
-        if required_tools:
+        allowed_tools: list[dict[str, object]] = []
+        if resolved.required_names:
             allowed_tools.append(
-                ChatCompletionAllowedToolsParam(
-                    mode="required",
-                    tools=[
+                {
+                    "mode": "required",
+                    "tools": [
                         {
                             "type": "function",
-                            "function": {"name": each_tool.function.name},
+                            "function": {"name": name},
                         }
-                        for each_tool in required_tools
+                        for name in resolved.required_names
                     ],
-                )
+                }
             )
 
-        if optional_tools:
+        if resolved.optional_names:
             allowed_tools.append(
-                ChatCompletionAllowedToolsParam(
-                    mode="auto",
-                    tools=[
+                {
+                    "mode": "auto",
+                    "tools": [
                         {
                             "type": "function",
-                            "function": {"name": each_tool.function.name},
+                            "function": {"name": name},
                         }
-                        for each_tool in optional_tools
+                        for name in resolved.optional_names
                     ],
-                )
+                }
             )
 
-        return all_tools, ChatCompletionAllowedToolChoiceParam(
-            type="allowed_tools",
-            allowed_tools=allowed_tools,
-        )
-
-    def _handle_tool_calls(
-        self,
-        calls: list[AssistantToolCall],
-    ) -> list[ToolResponseMessage]:
-        tool_responses: list[ToolResponseMessage] = []
-
-        for each in calls:
-            arguments = None
-            if each.arguments:
-                try:
-                    arguments = json.loads(each.arguments)
-                except Exception:
-                    arguments = None
-
-            response = self._tools_manager.execute(each.name, arguments)
-            tool_responses.append(
-                ToolResponseMessage(
-                    id=each.id,
-                    content=response,
-                )
-            )
-
-        return tool_responses
+        return openai_tools, {
+            "type": "allowed_tools",
+            "allowed_tools": allowed_tools,
+        }
 
     def generate(
         self,
@@ -275,18 +237,17 @@ class OpenAIClient(BaseClient):
         model: str,
         messages: list[Message],
         temperature: float | None = None,
-        tools: ToolChoices | None = None,
+        tools: list[Tool] | None = None,
+        tool_choice: ToolChoice | None = None,
         response_format: ResponseFormat | None = None,
         max_tokens: int | None = None,
         extra_body: dict | None = None,
         use_tools_for_structured_output: bool | None = None,
-        depth: int = 0,
     ) -> ResponseContent:
         del use_tools_for_structured_output
 
-        openai_tools, tool_choice = self._get_openai_tools_and_tool_choice_or_omit(
-            tools,
-            depth,
+        openai_tools, openai_tool_choice = (
+            self._get_openai_tools_and_tool_choice_or_omit(tools, tool_choice)
         )
 
         response = self._client.chat.completions.create(
@@ -295,7 +256,7 @@ class OpenAIClient(BaseClient):
             temperature=temperature,
             response_format=self._get_openai_response_format_or_omit(response_format),
             tools=openai_tools,
-            tool_choice=tool_choice,
+            tool_choice=openai_tool_choice,
             max_completion_tokens=max_tokens,
             extra_body=extra_body,
         )
@@ -308,37 +269,10 @@ class OpenAIClient(BaseClient):
         )
         new_messages = [*messages, assistant_message]
 
-        if assistant_message.tool_calls:
-            for each in assistant_message.tool_calls:
-                if tools and tools.stop_on and each.name in tools.stop_on:
-                    return ResponseContent(
-                        content=each.arguments,
-                        messages=new_messages,
-                    )
-
-            if not self._tools_manager:
-                raise LLMError(
-                    400,
-                    "Model requested tool calls but no tools manager is configured",
-                )
-
-            tool_responses = self._handle_tool_calls(assistant_message.tool_calls)
-            new_messages = [*new_messages, *tool_responses]
-
-            return self.generate(
-                model=model,
-                messages=new_messages,
-                temperature=temperature,
-                tools=tools,
-                response_format=response_format,
-                max_tokens=max_tokens,
-                extra_body=extra_body,
-                depth=depth + 1,
-            )
-
         return ResponseContent(
             content=assistant_message.content,
             messages=new_messages,
+            tool_calls=assistant_message.tool_calls,
         )
 
     def stream(
@@ -347,18 +281,17 @@ class OpenAIClient(BaseClient):
         model: str,
         messages: list[Message],
         temperature: float | None = None,
-        tools: ToolChoices | None = None,
+        tools: list[Tool] | None = None,
+        tool_choice: ToolChoice | None = None,
         response_format: ResponseFormat | None = None,
         max_tokens: int | None = None,
         extra_body: dict | None = None,
         use_tools_for_structured_output: bool | None = None,
-        depth: int = 0,
     ):
         del use_tools_for_structured_output
 
-        openai_tools, tool_choice = self._get_openai_tools_and_tool_choice_or_omit(
-            tools,
-            depth,
+        openai_tools, openai_tool_choice = (
+            self._get_openai_tools_and_tool_choice_or_omit(tools, tool_choice)
         )
 
         response = self._client.chat.completions.create(
@@ -367,21 +300,16 @@ class OpenAIClient(BaseClient):
             temperature=temperature,
             response_format=self._get_openai_response_format_or_omit(response_format),
             tools=openai_tools,
-            tool_choice=tool_choice,
+            tool_choice=openai_tool_choice,
             max_completion_tokens=max_tokens,
             extra_body=extra_body,
             stream=True,
         )
 
+        stream_id = "0"
         content = ""
-        yielded_tool_name: str | None = None
-
-        tool_calls: list[AssistantToolCall] = []
-        current_index = -1
-        current_id: str | None = None
-        current_name: str | None = None
-        current_arguments: str | None = None
-        has_stop_on_tool_call = False
+        partial_tool_calls: dict[int, dict[str, str | None]] = {}
+        tool_order: list[int] = []
 
         for event in response:
             delta = event.choices[0].delta
@@ -389,67 +317,54 @@ class OpenAIClient(BaseClient):
             if delta.content:
                 content += delta.content
                 yield ResponseStreamContentChunk(
-                    id=str(depth),
+                    id=stream_id,
                     source="direct",
                     chunk=delta.content,
                 )
 
-            if delta.tool_calls:
-                tool_call_delta = delta.tool_calls[0]
-                tool_index = tool_call_delta.index
-                tool_id = tool_call_delta.id
-                tool_name = (
-                    tool_call_delta.function.name
-                    if tool_call_delta.function
-                    else None
-                )
+            if not delta.tool_calls:
+                continue
+
+            for tool_call_delta in delta.tool_calls:
+                current = partial_tool_calls.get(tool_call_delta.index)
+                if current is None:
+                    current = {"id": None, "name": None, "arguments": None}
+                    partial_tool_calls[tool_call_delta.index] = current
+                    tool_order.append(tool_call_delta.index)
+
+                if tool_call_delta.id:
+                    current["id"] = tool_call_delta.id
+
+                if tool_call_delta.function and tool_call_delta.function.name:
+                    current["name"] = tool_call_delta.function.name
+
                 tool_arguments = (
                     tool_call_delta.function.arguments
                     if tool_call_delta.function
                     else None
                 )
+                if current["arguments"] is None:
+                    current["arguments"] = tool_arguments
+                elif tool_arguments:
+                    current["arguments"] += tool_arguments
 
-                if current_index != tool_index:
-                    if current_id is not None and current_name is not None:
-                        tool_calls.append(
-                            AssistantToolCall(
-                                id=current_id,
-                                name=current_name,
-                                arguments=current_arguments,
-                            )
-                        )
+                if tool_arguments:
+                    yield ResponseStreamContentChunk(
+                        id=stream_id,
+                        source="tool",
+                        tool=current["name"],
+                        chunk=tool_arguments,
+                    )
 
-                    current_index = tool_index
-                    current_id = tool_id
-                    current_name = tool_name
-                    current_arguments = tool_arguments
-                else:
-                    current_id = tool_id or current_id
-                    current_name = tool_name or current_name
-                    if current_arguments is None:
-                        current_arguments = tool_arguments
-                    elif tool_arguments:
-                        current_arguments += tool_arguments
-
-                if tools and tools.stop_on and current_name in tools.stop_on:
-                    if tool_arguments:
-                        yielded_tool_name = yielded_tool_name or current_name
-                        has_stop_on_tool_call = True
-                        yield ResponseStreamContentChunk(
-                            id=str(depth),
-                            source="tool",
-                            tool=current_name,
-                            chunk=tool_arguments,
-                        )
-
-        if current_id is not None and current_name is not None:
-            tool_calls.append(
-                AssistantToolCall(
-                    id=current_id,
-                    name=current_name,
-                    arguments=current_arguments,
-                )
+        tool_calls = [
+            AssistantToolCall(
+                id=(partial_tool_calls[index]["id"] or partial_tool_calls[index]["name"] or ""),
+                name=partial_tool_calls[index]["name"] or "",
+                arguments=partial_tool_calls[index]["arguments"],
             )
+            for index in tool_order
+            if partial_tool_calls[index]["name"]
+        ]
 
         assistant_message = AssistantMessage(
             content=content or None,
@@ -457,37 +372,9 @@ class OpenAIClient(BaseClient):
         )
         new_messages = [*messages, assistant_message]
 
-        if tool_calls and not has_stop_on_tool_call:
-            if not self._tools_manager:
-                raise LLMError(
-                    400,
-                    "Model requested tool calls but no tools manager is configured",
-                )
-
-            tool_responses = self._handle_tool_calls(tool_calls)
-            new_messages = [*new_messages, *tool_responses]
-
-            for chunk in self.stream(
-                model=model,
-                messages=new_messages,
-                temperature=temperature,
-                tools=tools,
-                response_format=response_format,
-                max_tokens=max_tokens,
-                extra_body=extra_body,
-                depth=depth + 1,
-            ):
-                yield chunk
-            return
-
-        if yielded_tool_name:
-            for each in assistant_message.tool_calls:
-                if each.name == yielded_tool_name:
-                    content = each.arguments or content
-                    break
-
         yield ResponseStreamCompletionChunk(
-            id=str(depth),
-            content=content,
+            id=stream_id,
+            content=assistant_message.content,
             messages=new_messages,
+            tool_calls=tool_calls,
         )

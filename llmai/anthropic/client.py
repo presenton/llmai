@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 from logging import Logger
 
@@ -12,7 +14,6 @@ from anthropic.types import (
 )
 
 from llmai.shared.base import BaseClient
-from llmai.shared.errors import LLMError
 from llmai.shared.messages import (
     AssistantMessage,
     AssistantToolCall,
@@ -25,10 +26,13 @@ from llmai.shared.response_formats import (
     ResponseFormat,
     get_response_schema,
 )
-from llmai.shared.responses import ResponseContent, ResponseStreamContentChunk
+from llmai.shared.responses import (
+    ResponseContent,
+    ResponseStreamCompletionChunk,
+    ResponseStreamContentChunk,
+)
 from llmai.shared.schema import get_schema_as_dict
-from llmai.shared.tooling import ToolsManager
-from llmai.shared.tools import Tool, ToolChoices
+from llmai.shared.tools import Tool, ToolChoice, resolve_tools
 
 
 class AnthropicClient(BaseClient):
@@ -36,12 +40,10 @@ class AnthropicClient(BaseClient):
         self,
         *,
         api_key: str | None = None,
-        tools_manager: ToolsManager | None = None,
         logger: Logger | None = None,
     ):
         super().__init__(logger=logger)
         self._client = Anthropic(api_key=api_key)
-        self._tools_manager = tools_manager
 
     def _get_system_prompt(self, messages: list[Message]) -> str | Omit:
         for message in messages:
@@ -132,51 +134,41 @@ class AnthropicClient(BaseClient):
             for tool in tools
         ]
 
-    def _response_schema_tool(self, response_schema: dict) -> dict:
+    def _response_schema_tool(self, response_schema: dict) -> dict[str, object]:
         return {
             "name": "ResponseSchema",
             "description": "Provide the final response to the user",
             "input_schema": response_schema,
         }
 
-    def _get_anthropic_tools(
+    def _get_anthropic_tools_and_tool_choice_or_omit(
         self,
-        tools: ToolChoices | None,
+        tools: list[Tool] | None,
+        tool_choice: ToolChoice | None,
         response_format: ResponseFormat | None,
         use_tools_for_structured_output: bool | None,
-        depth: int,
-    ) -> list[dict] | Omit:
-        anthropic_tools = (
-            self._llm_tools_to_anthropic_tools(tools.all_for_depth(depth))
-            if tools
-            else []
+    ) -> tuple[list[dict[str, object]] | Omit, dict[str, object] | Omit]:
+        resolved = resolve_tools(tools, tool_choice)
+        selected_tools = resolved.required_tools or resolved.tools
+        anthropic_tools: list[dict[str, object]] = list(
+            self._llm_tools_to_anthropic_tools(selected_tools)
         )
 
         response_schema = get_response_schema(response_format)
         if response_schema and use_tools_for_structured_output is not False:
             anthropic_tools.append(self._response_schema_tool(response_schema))
 
-        return anthropic_tools or Omit()
+        anthropic_tool_choice: dict[str, object] | Omit = Omit()
+        if resolved.required_names:
+            if len(resolved.required_names) == 1:
+                anthropic_tool_choice = {
+                    "type": "tool",
+                    "name": resolved.required_names[0],
+                }
+            else:
+                anthropic_tool_choice = {"type": "any"}
 
-    def _handle_tool_calls(
-        self,
-        calls: list[AssistantToolCall],
-    ) -> list[ToolResponseMessage]:
-        tool_responses: list[ToolResponseMessage] = []
-
-        for each in calls:
-            response = self._tools_manager.execute(
-                each.name,
-                self._parse_tool_arguments(each.arguments),
-            )
-            tool_responses.append(
-                ToolResponseMessage(
-                    id=each.id,
-                    content=response,
-                )
-            )
-
-        return tool_responses
+        return anthropic_tools or Omit(), anthropic_tool_choice
 
     def generate(
         self,
@@ -184,86 +176,68 @@ class AnthropicClient(BaseClient):
         model: str,
         messages: list[Message],
         temperature: float | None = None,
-        tools: ToolChoices | None = None,
+        tools: list[Tool] | None = None,
+        tool_choice: ToolChoice | None = None,
         response_format: ResponseFormat | None = None,
         max_tokens: int | None = None,
         extra_body: dict | None = None,
         use_tools_for_structured_output: bool | None = None,
-        depth: int = 0,
     ) -> ResponseContent:
+        anthropic_tools, anthropic_tool_choice = (
+            self._get_anthropic_tools_and_tool_choice_or_omit(
+                tools,
+                tool_choice,
+                response_format,
+                use_tools_for_structured_output,
+            )
+        )
+
         response: AnthropicMessage = self._client.messages.create(
             model=model,
             system=self._get_system_prompt(messages),
             messages=self._messages_to_anthropic_messages(messages),
-            tools=self._get_anthropic_tools(
-                tools,
-                response_format,
-                use_tools_for_structured_output,
-                depth,
-            ),
+            tools=anthropic_tools,
+            tool_choice=anthropic_tool_choice,
             max_tokens=max_tokens or 8000,
             temperature=temperature or Omit(),
             extra_body=extra_body,
         )
 
-        text_content = None
-        tool_calls: list[AssistantToolCall] = []
+        text_chunks: list[str] = []
+        response_schema_content: dict | None = None
+        user_tool_calls: list[AssistantToolCall] = []
         for content in response.content:
             if content.type == "text":
-                text_content = content.text
+                text_chunks.append(content.text)
             elif content.type == "tool_use":
-                tool_calls.append(
-                    AssistantToolCall(
-                        id=content.id,
-                        name=content.name,
-                        arguments=json.dumps(content.input),
-                    )
+                tool_call = AssistantToolCall(
+                    id=content.id,
+                    name=content.name,
+                    arguments=json.dumps(content.input),
                 )
+                if tool_call.name == "ResponseSchema":
+                    response_schema_content = self._parse_tool_arguments(
+                        tool_call.arguments
+                    )
+                else:
+                    user_tool_calls.append(tool_call)
 
         assistant_message = AssistantMessage(
-            content=text_content,
-            tool_calls=tool_calls,
+            content="".join(text_chunks) or None,
+            tool_calls=user_tool_calls,
         )
         new_messages = [*messages, assistant_message]
 
-        if tool_calls:
-            for each in tool_calls:
-                if each.name == "ResponseSchema":
-                    return ResponseContent(
-                        content=self._parse_tool_arguments(each.arguments),
-                        messages=new_messages,
-                    )
-
-                if tools and tools.stop_on and each.name in tools.stop_on:
-                    return ResponseContent(
-                        content=each.arguments,
-                        messages=new_messages,
-                    )
-
-            if not self._tools_manager:
-                raise LLMError(
-                    400,
-                    "Model requested tool calls but no tools manager is configured",
-                )
-
-            tool_responses = self._handle_tool_calls(tool_calls)
-            new_messages = [*new_messages, *tool_responses]
-
-            return self.generate(
-                model=model,
-                messages=new_messages,
-                temperature=temperature,
-                tools=tools,
-                response_format=response_format,
-                max_tokens=max_tokens,
-                extra_body=extra_body,
-                use_tools_for_structured_output=use_tools_for_structured_output,
-                depth=depth + 1,
-            )
+        final_content: object = response_schema_content
+        if final_content is None:
+            final_content = assistant_message.content
+        if final_content is None and not user_tool_calls:
+            final_content = ""
 
         return ResponseContent(
-            content=text_content or "",
+            content=final_content,
             messages=new_messages,
+            tool_calls=user_tool_calls,
         )
 
     def stream(
@@ -272,27 +246,34 @@ class AnthropicClient(BaseClient):
         model: str,
         messages: list[Message],
         temperature: float | None = None,
-        tools: ToolChoices | None = None,
+        tools: list[Tool] | None = None,
+        tool_choice: ToolChoice | None = None,
         response_format: ResponseFormat | None = None,
         max_tokens: int | None = None,
         extra_body: dict | None = None,
         use_tools_for_structured_output: bool | None = None,
-        depth: int = 0,
     ):
-        tool_calls: list[AssistantToolCall] = []
-        has_response_schema_tool_call = False
-        is_response_schema_tool_call_started = False
+        anthropic_tools, anthropic_tool_choice = (
+            self._get_anthropic_tools_and_tool_choice_or_omit(
+                tools,
+                tool_choice,
+                response_format,
+                use_tools_for_structured_output,
+            )
+        )
+
+        stream_id = "0"
+        text_chunks: list[str] = []
+        response_schema_content: dict | None = None
+        user_tool_calls: list[AssistantToolCall] = []
+        active_tool_name: str | None = None
 
         with self._client.messages.stream(
             model=model,
             system=self._get_system_prompt(messages),
             messages=self._messages_to_anthropic_messages(messages),
-            tools=self._get_anthropic_tools(
-                tools,
-                response_format,
-                use_tools_for_structured_output,
-                depth,
-            ),
+            tools=anthropic_tools,
+            tool_choice=anthropic_tool_choice,
             max_tokens=max_tokens or 8000,
             temperature=temperature or Omit(),
             extra_body=extra_body,
@@ -301,75 +282,69 @@ class AnthropicClient(BaseClient):
                 event = event  # Helps static readers; Anthropic yields union events.
                 event = event if isinstance(event, MessageStreamEvent) else event
 
-                if (
-                    event.type == "content_block_delta"
-                    and event.delta.type == "text_delta"
-                    and not use_tools_for_structured_output
-                ):
-                    yield ResponseStreamContentChunk(
-                        id=str(depth),
-                        source="direct",
-                        chunk=event.delta.text,
-                    )
+                if event.type == "content_block_start":
+                    if event.content_block.type == "tool_use":
+                        active_tool_name = event.content_block.name
+                    continue
 
-                if (
-                    event.type == "content_block_start"
-                    and event.content_block.type == "tool_use"
-                    and event.content_block.name == "ResponseSchema"
-                ):
-                    has_response_schema_tool_call = True
-                    is_response_schema_tool_call_started = True
-
-                if (
-                    event.type == "content_block_delta"
-                    and event.delta.type == "input_json_delta"
-                    and is_response_schema_tool_call_started
-                ):
-                    yield ResponseStreamContentChunk(
-                        id=str(depth),
-                        source="tool",
-                        tool="ResponseSchema",
-                        chunk=event.delta.partial_json,
-                    )
+                if event.type == "content_block_delta":
+                    if event.delta.type == "text_delta":
+                        text_chunks.append(event.delta.text)
+                        if not use_tools_for_structured_output:
+                            yield ResponseStreamContentChunk(
+                                id=stream_id,
+                                source="direct",
+                                chunk=event.delta.text,
+                            )
+                    elif event.delta.type == "input_json_delta" and active_tool_name:
+                        chunk = event.delta.partial_json
+                        if active_tool_name == "ResponseSchema":
+                            yield ResponseStreamContentChunk(
+                                id=stream_id,
+                                source="direct",
+                                chunk=chunk,
+                            )
+                        else:
+                            yield ResponseStreamContentChunk(
+                                id=stream_id,
+                                source="tool",
+                                tool=active_tool_name,
+                                chunk=chunk,
+                            )
+                    continue
 
                 if (
                     event.type == "content_block_stop"
                     and event.content_block.type == "tool_use"
                 ):
-                    tool_calls.append(
-                        AssistantToolCall(
-                            id=event.content_block.id,
-                            name=event.content_block.name,
-                            arguments=json.dumps(event.content_block.input),
-                        )
+                    tool_call = AssistantToolCall(
+                        id=event.content_block.id,
+                        name=event.content_block.name,
+                        arguments=json.dumps(event.content_block.input),
                     )
-                    if is_response_schema_tool_call_started:
-                        is_response_schema_tool_call_started = False
+                    if tool_call.name == "ResponseSchema":
+                        response_schema_content = self._parse_tool_arguments(
+                            tool_call.arguments
+                        )
+                    else:
+                        user_tool_calls.append(tool_call)
+                    active_tool_name = None
 
-        if tool_calls and not has_response_schema_tool_call:
-            new_messages = [
-                *messages,
-                AssistantMessage(content=None, tool_calls=tool_calls),
-            ]
+        assistant_message = AssistantMessage(
+            content="".join(text_chunks) or None,
+            tool_calls=user_tool_calls,
+        )
+        new_messages = [*messages, assistant_message]
 
-            if not self._tools_manager:
-                raise LLMError(
-                    400,
-                    "Model requested tool calls but no tools manager is configured",
-                )
+        final_content: object = response_schema_content
+        if final_content is None:
+            final_content = assistant_message.content
+        if final_content is None and not user_tool_calls:
+            final_content = ""
 
-            tool_responses = self._handle_tool_calls(tool_calls)
-            new_messages = [*new_messages, *tool_responses]
-
-            for chunk in self.stream(
-                model=model,
-                messages=new_messages,
-                temperature=temperature,
-                tools=tools,
-                response_format=response_format,
-                max_tokens=max_tokens,
-                extra_body=extra_body,
-                use_tools_for_structured_output=use_tools_for_structured_output,
-                depth=depth + 1,
-            ):
-                yield chunk
+        yield ResponseStreamCompletionChunk(
+            id=stream_id,
+            content=final_content,
+            messages=new_messages,
+            tool_calls=user_tool_calls,
+        )
