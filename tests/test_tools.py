@@ -1,6 +1,6 @@
 import unittest
 
-from llmai.shared import Tool, ToolChoice
+from llmai.shared import Tool
 from llmai.shared.errors import ToolError
 from llmai.shared.tools import resolve_tools
 
@@ -24,7 +24,7 @@ class ResolveToolsTests(unittest.TestCase):
 
         resolved = resolve_tools(
             tools,
-            ToolChoice(required=["weather"], optional=["time"]),
+            {"required": ["weather"], "optional": ["time"]},
         )
 
         self.assertEqual([tool.name for tool in resolved.tools], ["weather", "time"])
@@ -35,7 +35,7 @@ class ResolveToolsTests(unittest.TestCase):
         tools = [make_tool("weather")]
 
         with self.assertRaises(ToolError) as context:
-            resolve_tools(tools, ToolChoice(required=["time"]))
+            resolve_tools(tools, {"required": ["time"]})
 
         self.assertIn("Unknown tool names", str(context.exception))
 
@@ -45,7 +45,7 @@ class ResolveToolsTests(unittest.TestCase):
         with self.assertRaises(ToolError) as context:
             resolve_tools(
                 tools,
-                ToolChoice(required=["weather"], optional=["weather"]),
+                {"required": ["weather"], "optional": ["weather"]},
             )
 
         self.assertIn("both required and optional", str(context.exception))

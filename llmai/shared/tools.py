@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -21,9 +22,9 @@ class Tool(BaseModel):
     )
 
 
-class ToolChoice(BaseModel):
-    required: list[str] | None = None
-    optional: list[str] | None = None
+class ToolChoice(TypedDict, total=False):
+    required: list[str]
+    optional: list[str]
 
 
 @dataclass(frozen=True)
@@ -55,8 +56,8 @@ def resolve_tools(
             optional_tools=[],
         )
 
-    required_names = _unique_names(tool_choice.required)
-    optional_names = _unique_names(tool_choice.optional)
+    required_names = _unique_names(tool_choice.get("required"))
+    optional_names = _unique_names(tool_choice.get("optional"))
     overlapping_names = set(required_names) & set(optional_names)
     if overlapping_names:
         names = ", ".join(sorted(overlapping_names))

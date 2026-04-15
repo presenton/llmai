@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from logging import Logger
 
 from openai import Omit, OpenAI
@@ -31,12 +32,17 @@ from openai.types.shared_params.response_format_text import ResponseFormatText
 from llmai.shared.base import BaseClient
 from llmai.shared.errors import LLMError
 from llmai.shared.messages import (
+    AssistantContent,
     AssistantMessage,
     AssistantToolCall,
+    ImageContentPart,
     Message,
+    MessageContent,
     SystemMessage,
     ToolResponseMessage,
     UserMessage,
+    content_has_images,
+    normalize_content_parts,
 )
 from llmai.shared.response_formats import (
     JSONSchemaResponse,
@@ -103,9 +109,65 @@ class OpenAIClient(BaseClient):
 
         return ChatCompletionAssistantMessageParam(
             role="assistant",
-            content=message.content,
+            content=self._assistant_content_to_openai_content(message.content),
             tool_calls=tool_calls or None,
         )
+
+    def _assistant_content_to_openai_content(
+        self,
+        content: AssistantContent,
+    ) -> str | None:
+        if content is None:
+            return None
+
+        if isinstance(content, str):
+            return content
+
+        if content_has_images(content):
+            raise LLMError(
+                400,
+                "OpenAI chat completions does not support assistant message image content in conversation history",
+            )
+
+        return "".join(part.text for part in normalize_content_parts(content))
+
+    def _image_content_part_to_openai_image_url(
+        self,
+        part: ImageContentPart,
+    ) -> str:
+        if part.url is not None:
+            return part.url
+
+        encoded = base64.b64encode(part.data or b"").decode("ascii")
+        return f"data:{part.mime_type};base64,{encoded}"
+
+    def _user_content_to_openai_content(
+        self,
+        content: MessageContent,
+    ) -> str | list[dict[str, object]]:
+        if isinstance(content, str):
+            return content
+
+        openai_content: list[dict[str, object]] = []
+        for part in normalize_content_parts(content):
+            if isinstance(part, ImageContentPart):
+                openai_content.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": self._image_content_part_to_openai_image_url(part),
+                        },
+                    }
+                )
+            else:
+                openai_content.append(
+                    {
+                        "type": "text",
+                        "text": part.text,
+                    }
+                )
+
+        return openai_content
 
     def _messages_to_openai_messages(
         self,
@@ -125,7 +187,7 @@ class OpenAIClient(BaseClient):
                 openai_messages.append(
                     ChatCompletionUserMessageParam(
                         role="user",
-                        content=message.content,
+                        content=self._user_content_to_openai_content(message.content),
                     )
                 )
             elif isinstance(message, AssistantMessage):
@@ -188,48 +250,22 @@ class OpenAIClient(BaseClient):
         self,
         tools: list[Tool] | None,
         tool_choice: ToolChoice | None,
-    ) -> tuple[list[ChatCompletionFunctionToolParam] | Omit, dict[str, object] | Omit]:
+    ) -> tuple[list[ChatCompletionFunctionToolParam] | Omit, object | Omit]:
         resolved = resolve_tools(tools, tool_choice)
         openai_tools = self._llm_tools_to_openai_tools(resolved.tools)
         if not openai_tools:
             return Omit(), Omit()
 
-        if not resolved.required_names and not resolved.optional_names:
+        if not resolved.required_names:
             return openai_tools, Omit()
 
-        allowed_tools: list[dict[str, object]] = []
-        if resolved.required_names:
-            allowed_tools.append(
-                {
-                    "mode": "required",
-                    "tools": [
-                        {
-                            "type": "function",
-                            "function": {"name": name},
-                        }
-                        for name in resolved.required_names
-                    ],
-                }
-            )
+        if len(resolved.required_names) == 1 and not resolved.optional_names:
+            return openai_tools, {
+                "type": "function",
+                "function": {"name": resolved.required_names[0]},
+            }
 
-        if resolved.optional_names:
-            allowed_tools.append(
-                {
-                    "mode": "auto",
-                    "tools": [
-                        {
-                            "type": "function",
-                            "function": {"name": name},
-                        }
-                        for name in resolved.optional_names
-                    ],
-                }
-            )
-
-        return openai_tools, {
-            "type": "allowed_tools",
-            "allowed_tools": allowed_tools,
-        }
+        return openai_tools, "required"
 
     def generate(
         self,

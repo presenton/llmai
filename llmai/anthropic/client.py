@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import base64
 import json
 from logging import Logger
 
 from anthropic import Anthropic, MessageStreamEvent, Omit
 from anthropic.types import (
+    ImageBlockParam,
     Message as AnthropicMessage,
     MessageParam,
     TextBlockParam,
@@ -17,10 +19,12 @@ from llmai.shared.base import BaseClient
 from llmai.shared.messages import (
     AssistantMessage,
     AssistantToolCall,
+    ImageContentPart,
     Message,
     SystemMessage,
     ToolResponseMessage,
     UserMessage,
+    normalize_content_parts,
 )
 from llmai.shared.response_formats import (
     ResponseFormat,
@@ -66,15 +70,9 @@ class AnthropicClient(BaseClient):
         self,
         message: AssistantMessage,
     ) -> MessageParam:
-        content_blocks: list[TextBlockParam | ToolUseBlockParam] = []
-
-        if message.content:
-            content_blocks.append(
-                TextBlockParam(
-                    type="text",
-                    text=message.content,
-                )
-            )
+        content_blocks: list[TextBlockParam | ImageBlockParam | ToolUseBlockParam] = (
+            self._content_to_anthropic_blocks(message.content)
+        )
 
         for each in message.tool_calls:
             content_blocks.append(
@@ -88,6 +86,43 @@ class AnthropicClient(BaseClient):
 
         return MessageParam(role="assistant", content=content_blocks)
 
+    def _content_to_anthropic_blocks(
+        self,
+        content: str | list[object] | None,
+    ) -> list[TextBlockParam | ImageBlockParam]:
+        blocks: list[TextBlockParam | ImageBlockParam] = []
+
+        for part in normalize_content_parts(content):
+            if isinstance(part, ImageContentPart):
+                if part.url is not None:
+                    source: dict[str, object] = {
+                        "type": "url",
+                        "url": part.url,
+                    }
+                else:
+                    encoded = base64.b64encode(part.data or b"").decode("ascii")
+                    source = {
+                        "type": "base64",
+                        "data": encoded,
+                        "media_type": part.mime_type,
+                    }
+
+                blocks.append(
+                    ImageBlockParam(
+                        type="image",
+                        source=source,
+                    )
+                )
+            else:
+                blocks.append(
+                    TextBlockParam(
+                        type="text",
+                        text=part.text,
+                    )
+                )
+
+        return blocks
+
     def _messages_to_anthropic_messages(
         self,
         messages: list[Message],
@@ -99,8 +134,14 @@ class AnthropicClient(BaseClient):
                 continue
 
             if isinstance(message, UserMessage):
+                user_content: str | list[TextBlockParam | ImageBlockParam]
+                if isinstance(message.content, str):
+                    user_content = message.content
+                else:
+                    user_content = self._content_to_anthropic_blocks(message.content)
+
                 anthropic_messages.append(
-                    MessageParam(role="user", content=message.content)
+                    MessageParam(role="user", content=user_content)
                 )
             elif isinstance(message, AssistantMessage):
                 anthropic_messages.append(
@@ -149,9 +190,8 @@ class AnthropicClient(BaseClient):
         use_tools_for_structured_output: bool | None,
     ) -> tuple[list[dict[str, object]] | Omit, dict[str, object] | Omit]:
         resolved = resolve_tools(tools, tool_choice)
-        selected_tools = resolved.required_tools or resolved.tools
         anthropic_tools: list[dict[str, object]] = list(
-            self._llm_tools_to_anthropic_tools(selected_tools)
+            self._llm_tools_to_anthropic_tools(resolved.tools)
         )
 
         response_schema = get_response_schema(response_format)
@@ -160,7 +200,7 @@ class AnthropicClient(BaseClient):
 
         anthropic_tool_choice: dict[str, object] | Omit = Omit()
         if resolved.required_names:
-            if len(resolved.required_names) == 1:
+            if len(resolved.required_names) == 1 and not resolved.optional_names:
                 anthropic_tool_choice = {
                     "type": "tool",
                     "name": resolved.required_names[0],
@@ -204,11 +244,14 @@ class AnthropicClient(BaseClient):
         )
 
         text_chunks: list[str] = []
+        thinking_chunks: list[str] = []
         response_schema_content: dict | None = None
         user_tool_calls: list[AssistantToolCall] = []
         for content in response.content:
             if content.type == "text":
                 text_chunks.append(content.text)
+            elif content.type == "thinking":
+                thinking_chunks.append(content.thinking)
             elif content.type == "tool_use":
                 tool_call = AssistantToolCall(
                     id=content.id,
@@ -224,6 +267,7 @@ class AnthropicClient(BaseClient):
 
         assistant_message = AssistantMessage(
             content="".join(text_chunks) or None,
+            thinking="".join(thinking_chunks) or None,
             tool_calls=user_tool_calls,
         )
         new_messages = [*messages, assistant_message]
@@ -264,6 +308,7 @@ class AnthropicClient(BaseClient):
 
         stream_id = "0"
         text_chunks: list[str] = []
+        thinking_chunks: list[str] = []
         response_schema_content: dict | None = None
         user_tool_calls: list[AssistantToolCall] = []
         active_tool_name: str | None = None
@@ -296,6 +341,8 @@ class AnthropicClient(BaseClient):
                                 source="direct",
                                 chunk=event.delta.text,
                             )
+                    elif event.delta.type == "thinking_delta":
+                        thinking_chunks.append(event.delta.thinking)
                     elif event.delta.type == "input_json_delta" and active_tool_name:
                         chunk = event.delta.partial_json
                         if active_tool_name == "ResponseSchema":
@@ -332,6 +379,7 @@ class AnthropicClient(BaseClient):
 
         assistant_message = AssistantMessage(
             content="".join(text_chunks) or None,
+            thinking="".join(thinking_chunks) or None,
             tool_calls=user_tool_calls,
         )
         new_messages = [*messages, assistant_message]

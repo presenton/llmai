@@ -80,13 +80,40 @@ print(result.content)
 
 Use `JSONSchemaResponse`, `JSONObjectResponse`, or `TextResponse` to request different response shapes.
 
+## Multimodal Content
+
+```python
+from llmai import GoogleClient
+from llmai.shared import ImageContentPart, TextContentPart, UserMessage
+
+
+client = GoogleClient(api_key="GOOGLE_API_KEY")
+
+result = client.generate(
+    model="your-google-model",
+    messages=[
+        UserMessage(
+            content=[
+                TextContentPart(text="Describe this image."),
+                ImageContentPart(url="https://example.com/cat.png"),
+            ]
+        ),
+    ],
+)
+
+print(result.content)
+print(result.messages[-1].thinking)
+```
+
+Request messages can mix text and image parts. Response image parts are returned as `list[TextContentPart | ImageContentPart]` when the provider supports normal multimodal completions; text-only responses still come back as plain strings.
+
 ## Tool Calling
 
 ```python
 from pydantic import BaseModel
 
 from llmai import OpenAIClient
-from llmai.shared import Tool, ToolChoice, ToolResponseMessage, UserMessage
+from llmai.shared import Tool, ToolResponseMessage, UserMessage
 
 
 class WeatherArgs(BaseModel):
@@ -107,7 +134,7 @@ first = client.generate(
         UserMessage(content="What is the weather in Kathmandu?"),
     ],
     tools=[weather_tool],
-    tool_choice=ToolChoice(optional=["get_weather"]),
+    tool_choice={"optional": ["get_weather"]},
 )
 
 for tool_call in first.tool_calls:
@@ -162,6 +189,7 @@ for chunk in client.stream(
 The shared layer includes the main primitives you will use across providers:
 
 - `UserMessage`, `SystemMessage`, `AssistantMessage`
-- `Tool`, `ToolChoice`, `ToolResponseMessage`
+- `TextContentPart`, `ImageContentPart`
+- `Tool`, `ToolResponseMessage`
 - `JSONSchemaResponse`, `JSONObjectResponse`, `TextResponse`
 - `ResponseContent`, `ResponseStreamContentChunk`, `ResponseStreamCompletionChunk`
