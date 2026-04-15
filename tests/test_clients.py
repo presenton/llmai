@@ -1,9 +1,11 @@
+import os
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from pydantic import BaseModel
 
-from llmai import AnthropicClient, GoogleClient, OpenAIClient
+from llmai import AnthropicClient, BedrockClient, GoogleClient, OpenAIClient
 from llmai.shared import (
     AssistantMessage,
     ImageContentPart,
@@ -83,11 +85,52 @@ class FakeGoogleModels:
         return self.stream_response
 
 
+class FakeBedrockRuntimeClient:
+    def __init__(self, response=None, stream_response=None):
+        self.response = response
+        self.stream_response = stream_response
+        self.calls = []
+        self.stream_calls = []
+
+    def converse(self, **kwargs):
+        self.calls.append(kwargs)
+        return self.response
+
+    def converse_stream(self, **kwargs):
+        self.stream_calls.append(kwargs)
+        return self.stream_response
+
+
+class FakeBoto3Session:
+    def __init__(self, runtime_client, *, kwargs):
+        self.runtime_client = runtime_client
+        self.kwargs = kwargs
+        self.client_calls = []
+
+    def client(self, service_name, **kwargs):
+        self.client_calls.append((service_name, kwargs))
+        return self.runtime_client
+
+
 class AnswerSchema(BaseModel):
     answer: str
 
 
 class ClientBehaviorTests(unittest.TestCase):
+    def make_bedrock_client(self, runtime_client, **client_kwargs):
+        captured_sessions = []
+
+        def fake_session_factory(**kwargs):
+            session = FakeBoto3Session(runtime_client, kwargs=kwargs)
+            captured_sessions.append(session)
+            return session
+
+        patcher = patch("llmai.bedrock.client.boto3.Session", side_effect=fake_session_factory)
+        mocked = patcher.start()
+        self.addCleanup(patcher.stop)
+        client = BedrockClient(**client_kwargs)
+        return client, captured_sessions, mocked
+
     def test_openai_required_tool_choice_uses_standard_function_selector(self):
         client = OpenAIClient(api_key="test")
 
@@ -742,6 +785,284 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(result.content, {"answer": "done"})
         self.assertEqual(result.tool_calls, [])
         self.assertEqual(result.messages[-1].tool_calls, [])
+
+    def test_bedrock_init_supports_api_key_auth(self):
+        fake_runtime = FakeBedrockRuntimeClient(response={})
+
+        with patch.dict(os.environ, {}, clear=False):
+            client, sessions, _ = self.make_bedrock_client(
+                fake_runtime,
+                api_key="bedrock-api-key",
+                region_name="us-east-1",
+            )
+            self.assertEqual(os.environ["AWS_BEARER_TOKEN_BEDROCK"], "bedrock-api-key")
+
+        self.assertIsNotNone(client)
+        self.assertEqual(len(sessions), 1)
+        self.assertEqual(sessions[0].kwargs["region_name"], "us-east-1")
+        self.assertEqual(
+            sessions[0].client_calls,
+            [("bedrock-runtime", {"region_name": "us-east-1"})],
+        )
+
+    def test_bedrock_init_supports_aws_credentials(self):
+        fake_runtime = FakeBedrockRuntimeClient(response={})
+        client, sessions, _ = self.make_bedrock_client(
+            fake_runtime,
+            region_name="us-west-2",
+            aws_access_key_id="aws-id",
+            aws_secret_access_key="aws-secret",
+            aws_session_token="aws-session",
+        )
+
+        self.assertIsNotNone(client)
+        self.assertEqual(len(sessions), 1)
+        self.assertEqual(sessions[0].kwargs["aws_access_key_id"], "aws-id")
+        self.assertEqual(sessions[0].kwargs["aws_secret_access_key"], "aws-secret")
+        self.assertEqual(sessions[0].kwargs["aws_session_token"], "aws-session")
+        self.assertEqual(sessions[0].kwargs["region_name"], "us-west-2")
+
+    def test_bedrock_generate_returns_usage_and_duration(self):
+        fake_runtime = FakeBedrockRuntimeClient(
+            response={
+                "output": {
+                    "message": {
+                        "role": "assistant",
+                        "content": [{"text": "hello from bedrock"}],
+                    }
+                },
+                "usage": {
+                    "inputTokens": 12,
+                    "outputTokens": 5,
+                    "totalTokens": 17,
+                    "cacheReadInputTokens": 2,
+                },
+            }
+        )
+        client, _, _ = self.make_bedrock_client(
+            fake_runtime,
+            region_name="us-east-1",
+            aws_access_key_id="aws-id",
+            aws_secret_access_key="aws-secret",
+        )
+
+        result = client.generate(
+            model="anthropic.claude-3-5-haiku",
+            messages=[UserMessage(content=text_parts("Hello"))],
+            temperature=0.2,
+            max_tokens=123,
+        )
+
+        self.assertEqual(result.content[0].text, "hello from bedrock")
+        self.assertEqual(result.usage.input_tokens, 12)
+        self.assertEqual(result.usage.output_tokens, 5)
+        self.assertEqual(result.usage.total_tokens, 17)
+        self.assertEqual(result.usage.details["cacheReadInputTokens"], 2)
+        self.assertIsNotNone(result.duration_seconds)
+        self.assertGreaterEqual(result.duration_seconds, 0)
+        self.assertEqual(fake_runtime.calls[0]["modelId"], "anthropic.claude-3-5-haiku")
+        self.assertEqual(fake_runtime.calls[0]["inferenceConfig"]["temperature"], 0.2)
+        self.assertEqual(fake_runtime.calls[0]["inferenceConfig"]["maxTokens"], 123)
+
+    def test_bedrock_generate_uses_native_structured_output(self):
+        fake_runtime = FakeBedrockRuntimeClient(
+            response={
+                "output": {
+                    "message": {
+                        "role": "assistant",
+                        "content": [{"text": '{"answer":"pong"}'}],
+                    }
+                }
+            }
+        )
+        client, _, _ = self.make_bedrock_client(
+            fake_runtime,
+            region_name="us-east-1",
+            aws_access_key_id="aws-id",
+            aws_secret_access_key="aws-secret",
+        )
+
+        result = client.generate(
+            model="anthropic.claude-3-5-haiku",
+            messages=[UserMessage(content=text_parts("Answer in JSON"))],
+            response_format=JSONSchemaResponse(json_schema=AnswerSchema),
+        )
+
+        self.assertEqual(result.content, {"answer": "pong"})
+        self.assertEqual(
+            fake_runtime.calls[0]["outputConfig"]["textFormat"]["type"],
+            "json_schema",
+        )
+        self.assertIn(
+            '"type": "object"',
+            fake_runtime.calls[0]["outputConfig"]["textFormat"]["structure"]["jsonSchema"]["schema"],
+        )
+
+    def test_bedrock_generate_returns_tool_calls(self):
+        fake_runtime = FakeBedrockRuntimeClient(
+            response={
+                "output": {
+                    "message": {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "toolUse": {
+                                    "toolUseId": "call_1",
+                                    "name": "get_weather",
+                                    "input": {"city": "Kathmandu"},
+                                }
+                            }
+                        ],
+                    }
+                }
+            }
+        )
+        client, _, _ = self.make_bedrock_client(
+            fake_runtime,
+            region_name="us-east-1",
+            aws_access_key_id="aws-id",
+            aws_secret_access_key="aws-secret",
+        )
+
+        result = client.generate(
+            model="anthropic.claude-3-5-haiku",
+            messages=[UserMessage(content=text_parts("Weather?"))],
+            tools=[make_tool("get_weather"), make_tool("time")],
+            tool_choice={"required": ["get_weather"]},
+        )
+
+        self.assertEqual(result.tool_calls[0].name, "get_weather")
+        self.assertEqual(result.tool_calls[0].arguments, '{"city": "Kathmandu"}')
+        self.assertEqual(
+            fake_runtime.calls[0]["toolConfig"]["toolChoice"],
+            {"tool": {"name": "get_weather"}},
+        )
+
+    def test_bedrock_serializes_user_images_and_rejects_assistant_image_history(self):
+        fake_runtime = FakeBedrockRuntimeClient(
+            response={
+                "output": {
+                    "message": {
+                        "role": "assistant",
+                        "content": [{"text": "done"}],
+                    }
+                }
+            }
+        )
+        client, _, _ = self.make_bedrock_client(
+            fake_runtime,
+            region_name="us-east-1",
+            aws_access_key_id="aws-id",
+            aws_secret_access_key="aws-secret",
+        )
+
+        client.generate(
+            model="anthropic.claude-3-5-haiku",
+            messages=[
+                UserMessage(
+                    content=[
+                        TextContentPart(text="Describe this"),
+                        ImageContentPart(data=b"png-bytes", mime_type="image/png"),
+                    ]
+                )
+            ],
+        )
+
+        image_block = fake_runtime.calls[0]["messages"][0]["content"][1]["image"]
+        self.assertEqual(image_block["format"], "png")
+        self.assertEqual(image_block["source"]["bytes"], b"png-bytes")
+
+        with self.assertRaises(LLMError):
+            client.generate(
+                model="anthropic.claude-3-5-haiku",
+                messages=[
+                    AssistantMessage(
+                        content=[ImageContentPart(data=b"png-bytes", mime_type="image/png")]
+                    )
+                ],
+            )
+
+    def test_bedrock_stream_emits_tool_chunks_and_completion_usage(self):
+        fake_runtime = FakeBedrockRuntimeClient(
+            stream_response={
+                "stream": iter(
+                    [
+                        {
+                            "contentBlockDelta": {
+                                "contentBlockIndex": 0,
+                                "delta": {"text": "Hello"},
+                            }
+                        },
+                        {
+                            "contentBlockStart": {
+                                "contentBlockIndex": 1,
+                                "start": {
+                                    "toolUse": {
+                                        "toolUseId": "call_1",
+                                        "name": "get_weather",
+                                        "type": "server_tool_use",
+                                    }
+                                },
+                            }
+                        },
+                        {
+                            "contentBlockDelta": {
+                                "contentBlockIndex": 1,
+                                "delta": {
+                                    "toolUse": {"input": '{"city":"Kath'}
+                                },
+                            }
+                        },
+                        {
+                            "contentBlockDelta": {
+                                "contentBlockIndex": 1,
+                                "delta": {
+                                    "toolUse": {"input": 'mandu"}'}
+                                },
+                            }
+                        },
+                        {
+                            "metadata": {
+                                "usage": {
+                                    "inputTokens": 10,
+                                    "outputTokens": 4,
+                                    "totalTokens": 14,
+                                }
+                            }
+                        },
+                    ]
+                )
+            }
+        )
+        client, _, _ = self.make_bedrock_client(
+            fake_runtime,
+            region_name="us-east-1",
+            aws_access_key_id="aws-id",
+            aws_secret_access_key="aws-secret",
+        )
+
+        chunks = list(
+            client.stream(
+                model="anthropic.claude-3-5-haiku",
+                messages=[UserMessage(content=text_parts("Weather?"))],
+                tools=[make_tool("get_weather")],
+            )
+        )
+
+        self.assertEqual(chunks[0].type, "stream_content")
+        self.assertEqual(chunks[0].chunk, "Hello")
+        self.assertEqual(chunks[1].source, "tool")
+        self.assertEqual(chunks[2].source, "tool")
+        self.assertEqual(chunks[-1].tool_calls[0].name, "get_weather")
+        self.assertEqual(
+            chunks[-1].tool_calls[0].arguments,
+            '{"city":"Kathmandu"}',
+        )
+        self.assertEqual(chunks[-1].usage.input_tokens, 10)
+        self.assertEqual(chunks[-1].usage.output_tokens, 4)
+        self.assertEqual(chunks[-1].usage.total_tokens, 14)
+        self.assertIsNotNone(chunks[-1].duration_seconds)
+        self.assertGreaterEqual(chunks[-1].duration_seconds, 0)
 
 
 if __name__ == "__main__":

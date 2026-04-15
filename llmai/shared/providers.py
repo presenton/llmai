@@ -5,3 +5,4 @@ class LLMProvider(Enum):
     OPENAI = "openai"
     GOOGLE = "google"
     ANTHROPIC = "anthropic"
+    BEDROCK = "bedrock"

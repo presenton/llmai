@@ -7,6 +7,7 @@ Today the repository includes adapters for:
 - OpenAI
 - Anthropic
 - Google Gemini
+- Amazon Bedrock
 
 Each provider client exposes the same core entrypoints:
 
@@ -52,6 +53,32 @@ print(result.duration_seconds)
 ```
 
 If you want to swap providers, the overall call shape stays the same. In most cases you only need to change the client class, credentials, and model name.
+
+## Amazon Bedrock
+
+```python
+from llmai import BedrockClient
+from llmai.shared import TextContentPart, UserMessage
+
+
+client = BedrockClient(
+    region_name="us-east-1",
+    aws_access_key_id="AWS_ACCESS_KEY_ID",
+    aws_secret_access_key="AWS_SECRET_ACCESS_KEY",
+)
+
+# Or use Bedrock API-key auth:
+# client = BedrockClient(region_name="us-east-1", api_key="BEDROCK_API_KEY")
+
+result = client.generate(
+    model="us.anthropic.claude-3-5-haiku-20241022-v1:0",
+    messages=[
+        UserMessage(content=[TextContentPart(text="Say hello.")]),
+    ],
+)
+
+print(result.content)
+```
 
 ## Structured Output
 
@@ -194,6 +221,7 @@ for chunk in client.stream(
 - `llmai/openai`: OpenAI adapter
 - `llmai/anthropic`: Anthropic adapter
 - `llmai/google`: Google Gemini adapter
+- `llmai/bedrock`: Amazon Bedrock adapter
 - `llmai/shared`: common message, tool, schema, and response models
 
 ## Core Types
