@@ -16,7 +16,7 @@ from google.genai.types import (
 )
 
 from llmai.shared.base import BaseClient
-from llmai.shared.errors import LLMError
+from llmai.shared.errors import LLMError, raise_llm_error
 from llmai.shared.messages import (
     AssistantMessage,
     AssistantToolCall,
@@ -53,7 +53,10 @@ class GoogleClient(BaseClient):
         logger: Logger | None = None,
     ):
         super().__init__(logger=logger)
-        self._client = genai.Client(api_key=api_key)
+        try:
+            self._client = genai.Client(api_key=api_key)
+        except Exception as exc:
+            raise_llm_error(exc, provider="google")
 
     def _get_system_prompt(self, messages: list[Message]) -> str | None:
         for message in messages:
@@ -388,52 +391,55 @@ class GoogleClient(BaseClient):
             temperature=temperature,
         )
 
-        start_time = perf_counter()
-        response = self._client.models.generate_content(
-            model=model,
-            contents=self._messages_to_google_messages(messages),
-            config=config,
-        )
-        duration_seconds = perf_counter() - start_time
+        try:
+            start_time = perf_counter()
+            response = self._client.models.generate_content(
+                model=model,
+                contents=self._messages_to_google_messages(messages),
+                config=config,
+            )
+            duration_seconds = perf_counter() - start_time
 
-        if not (
-            response.candidates
-            and response.candidates[0].content
-            and response.candidates[0].content.parts
-        ):
-            raise LLMError(400, "No content returned from LLM")
+            if not (
+                response.candidates
+                and response.candidates[0].content
+                and response.candidates[0].content.parts
+            ):
+                raise LLMError(400, "No content returned from LLM")
 
-        raw_assistant_message = self._content_to_assistant_message(
-            response.candidates[0].content
-        )
-        response_schema_content: dict | None = None
-        user_tool_calls: list[AssistantToolCall] = []
-        for each in raw_assistant_message.tool_calls:
-            if each.name == "ResponseSchema":
-                response_schema_content = self._parse_tool_arguments(each.arguments)
-            else:
-                user_tool_calls.append(each)
+            raw_assistant_message = self._content_to_assistant_message(
+                response.candidates[0].content
+            )
+            response_schema_content: dict | None = None
+            user_tool_calls: list[AssistantToolCall] = []
+            for each in raw_assistant_message.tool_calls:
+                if each.name == "ResponseSchema":
+                    response_schema_content = self._parse_tool_arguments(each.arguments)
+                else:
+                    user_tool_calls.append(each)
 
-        assistant_message = AssistantMessage(
-            content=raw_assistant_message.content,
-            thinking=raw_assistant_message.thinking,
-            tool_calls=user_tool_calls,
-        )
-        new_messages = [*messages, assistant_message]
+            assistant_message = AssistantMessage(
+                content=raw_assistant_message.content,
+                thinking=raw_assistant_message.thinking,
+                tool_calls=user_tool_calls,
+            )
+            new_messages = [*messages, assistant_message]
 
-        return ResponseContent(
-            content=self._final_content(
-                assistant_message.content,
-                response_schema_content,
-                user_tool_calls,
-                response_format,
-                use_tools_for_structured_output,
-            ),
-            messages=new_messages,
-            tool_calls=user_tool_calls,
-            usage=self._response_usage(getattr(response, "usage_metadata", None)),
-            duration_seconds=duration_seconds,
-        )
+            return ResponseContent(
+                content=self._final_content(
+                    assistant_message.content,
+                    response_schema_content,
+                    user_tool_calls,
+                    response_format,
+                    use_tools_for_structured_output,
+                ),
+                messages=new_messages,
+                tool_calls=user_tool_calls,
+                usage=self._response_usage(getattr(response, "usage_metadata", None)),
+                duration_seconds=duration_seconds,
+            )
+        except Exception as exc:
+            raise_llm_error(exc, provider="google")
 
     def stream(
         self,
@@ -472,145 +478,148 @@ class GoogleClient(BaseClient):
             temperature=temperature,
         )
 
-        stream_id = "0"
-        content_parts: list[TextContentPart | ImageContentPart] = []
-        thinking_chunks: list[str] = []
-        response_schema_content: dict | None = None
-        tool_calls_by_id: dict[str, AssistantToolCall] = {}
-        tool_call_order: list[str] = []
-        last_emitted_chunks: dict[str, str] = {}
-        seen_images: set[tuple[str, str, bytes | str]] = set()
-        usage: ResponseUsage | None = None
-        start_time = perf_counter()
+        try:
+            stream_id = "0"
+            content_parts: list[TextContentPart | ImageContentPart] = []
+            thinking_chunks: list[str] = []
+            response_schema_content: dict | None = None
+            tool_calls_by_id: dict[str, AssistantToolCall] = {}
+            tool_call_order: list[str] = []
+            last_emitted_chunks: dict[str, str] = {}
+            seen_images: set[tuple[str, str, bytes | str]] = set()
+            usage: ResponseUsage | None = None
+            start_time = perf_counter()
 
-        for event in self._client.models.generate_content_stream(
-            model=model,
-            contents=self._messages_to_google_messages(messages),
-            config=config,
-        ):
-            event_usage = self._response_usage(getattr(event, "usage_metadata", None))
-            if event_usage is not None:
-                usage = event_usage
-
-            if not (
-                event.candidates
-                and event.candidates[0].content
-                and event.candidates[0].content.parts
+            for event in self._client.models.generate_content_stream(
+                model=model,
+                contents=self._messages_to_google_messages(messages),
+                config=config,
             ):
-                continue
+                event_usage = self._response_usage(getattr(event, "usage_metadata", None))
+                if event_usage is not None:
+                    usage = event_usage
 
-            for each_part in event.candidates[0].content.parts:
-                text = getattr(each_part, "text", None)
-                if text:
-                    if getattr(each_part, "thought", False):
-                        thinking_chunks.append(text)
-                    else:
-                        content_parts.append(TextContentPart(text=text))
-                        if not use_tools_for_structured_output:
+                if not (
+                    event.candidates
+                    and event.candidates[0].content
+                    and event.candidates[0].content.parts
+                ):
+                    continue
+
+                for each_part in event.candidates[0].content.parts:
+                    text = getattr(each_part, "text", None)
+                    if text:
+                        if getattr(each_part, "thought", False):
+                            thinking_chunks.append(text)
+                        else:
+                            content_parts.append(TextContentPart(text=text))
+                            if not use_tools_for_structured_output:
+                                yield ResponseStreamContentChunk(
+                                    id=stream_id,
+                                    source="direct",
+                                    chunk=text,
+                                )
+
+                    inline_data = getattr(each_part, "inline_data", None)
+                    if (
+                        inline_data
+                        and inline_data.data is not None
+                        and inline_data.mime_type
+                        and inline_data.mime_type.startswith("image/")
+                    ):
+                        image_key = (
+                            "inline",
+                            inline_data.mime_type,
+                            inline_data.data,
+                        )
+                        if image_key not in seen_images:
+                            seen_images.add(image_key)
+                            content_parts.append(
+                                ImageContentPart(
+                                    data=inline_data.data,
+                                    mime_type=inline_data.mime_type,
+                                )
+                            )
+
+                    file_data = getattr(each_part, "file_data", None)
+                    if (
+                        file_data
+                        and file_data.file_uri
+                        and file_data.mime_type
+                        and file_data.mime_type.startswith("image/")
+                    ):
+                        image_key = (
+                            "file",
+                            file_data.mime_type,
+                            file_data.file_uri,
+                        )
+                        if image_key not in seen_images:
+                            seen_images.add(image_key)
+                            content_parts.append(
+                                ImageContentPart(
+                                    url=file_data.file_uri,
+                                    mime_type=file_data.mime_type,
+                                )
+                            )
+
+                    function_call = getattr(each_part, "function_call", None)
+                    if not function_call:
+                        continue
+
+                    tool_id = function_call.id or function_call.name
+                    tool_name = function_call.name
+                    arguments = json.dumps(function_call.args or {})
+
+                    if tool_name == "ResponseSchema":
+                        response_schema_content = self._parse_tool_arguments(arguments)
+                        if last_emitted_chunks.get(tool_id) != arguments:
+                            last_emitted_chunks[tool_id] = arguments
                             yield ResponseStreamContentChunk(
                                 id=stream_id,
                                 source="direct",
-                                chunk=text,
+                                chunk=arguments,
                             )
+                        continue
 
-                inline_data = getattr(each_part, "inline_data", None)
-                if (
-                    inline_data
-                    and inline_data.data is not None
-                    and inline_data.mime_type
-                    and inline_data.mime_type.startswith("image/")
-                ):
-                    image_key = (
-                        "inline",
-                        inline_data.mime_type,
-                        inline_data.data,
+                    tool_calls_by_id[tool_id] = AssistantToolCall(
+                        id=tool_id,
+                        name=tool_name,
+                        arguments=arguments,
                     )
-                    if image_key not in seen_images:
-                        seen_images.add(image_key)
-                        content_parts.append(
-                            ImageContentPart(
-                                data=inline_data.data,
-                                mime_type=inline_data.mime_type,
-                            )
-                        )
+                    if tool_id not in tool_call_order:
+                        tool_call_order.append(tool_id)
 
-                file_data = getattr(each_part, "file_data", None)
-                if (
-                    file_data
-                    and file_data.file_uri
-                    and file_data.mime_type
-                    and file_data.mime_type.startswith("image/")
-                ):
-                    image_key = (
-                        "file",
-                        file_data.mime_type,
-                        file_data.file_uri,
-                    )
-                    if image_key not in seen_images:
-                        seen_images.add(image_key)
-                        content_parts.append(
-                            ImageContentPart(
-                                url=file_data.file_uri,
-                                mime_type=file_data.mime_type,
-                            )
-                        )
-
-                function_call = getattr(each_part, "function_call", None)
-                if not function_call:
-                    continue
-
-                tool_id = function_call.id or function_call.name
-                tool_name = function_call.name
-                arguments = json.dumps(function_call.args or {})
-
-                if tool_name == "ResponseSchema":
-                    response_schema_content = self._parse_tool_arguments(arguments)
                     if last_emitted_chunks.get(tool_id) != arguments:
                         last_emitted_chunks[tool_id] = arguments
                         yield ResponseStreamContentChunk(
                             id=stream_id,
-                            source="direct",
+                            source="tool",
+                            tool=tool_name,
                             chunk=arguments,
                         )
-                    continue
 
-                tool_calls_by_id[tool_id] = AssistantToolCall(
-                    id=tool_id,
-                    name=tool_name,
-                    arguments=arguments,
-                )
-                if tool_id not in tool_call_order:
-                    tool_call_order.append(tool_id)
+            user_tool_calls = [tool_calls_by_id[tool_id] for tool_id in tool_call_order]
+            assistant_message = AssistantMessage(
+                content=collapse_content_parts(content_parts),
+                thinking="".join(thinking_chunks) or None,
+                tool_calls=user_tool_calls,
+            )
+            new_messages = [*messages, assistant_message]
+            duration_seconds = perf_counter() - start_time
 
-                if last_emitted_chunks.get(tool_id) != arguments:
-                    last_emitted_chunks[tool_id] = arguments
-                    yield ResponseStreamContentChunk(
-                        id=stream_id,
-                        source="tool",
-                        tool=tool_name,
-                        chunk=arguments,
-                    )
-
-        user_tool_calls = [tool_calls_by_id[tool_id] for tool_id in tool_call_order]
-        assistant_message = AssistantMessage(
-            content=collapse_content_parts(content_parts),
-            thinking="".join(thinking_chunks) or None,
-            tool_calls=user_tool_calls,
-        )
-        new_messages = [*messages, assistant_message]
-        duration_seconds = perf_counter() - start_time
-
-        yield ResponseStreamCompletionChunk(
-            id=stream_id,
-            content=self._final_content(
-                assistant_message.content,
-                response_schema_content,
-                user_tool_calls,
-                response_format,
-                use_tools_for_structured_output,
-            ),
-            messages=new_messages,
-            tool_calls=user_tool_calls,
-            usage=usage,
-            duration_seconds=duration_seconds,
-        )
+            yield ResponseStreamCompletionChunk(
+                id=stream_id,
+                content=self._final_content(
+                    assistant_message.content,
+                    response_schema_content,
+                    user_tool_calls,
+                    response_format,
+                    use_tools_for_structured_output,
+                ),
+                messages=new_messages,
+                tool_calls=user_tool_calls,
+                usage=usage,
+                duration_seconds=duration_seconds,
+            )
+        except Exception as exc:
+            raise_llm_error(exc, provider="google")

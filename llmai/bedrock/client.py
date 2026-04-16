@@ -9,7 +9,7 @@ from typing import Any
 import boto3
 
 from llmai.shared.base import BaseClient
-from llmai.shared.errors import LLMError
+from llmai.shared.errors import LLMError, configuration_error, raise_llm_error
 from llmai.shared.messages import (
     AssistantMessage,
     AssistantToolCall,
@@ -64,27 +64,32 @@ class BedrockClient(BaseClient):
             )
         )
         if api_key and explicit_aws_auth:
-            raise ValueError(
-                "Provide either api_key or AWS credentials/profile, not both"
+            raise configuration_error(
+                "Provide either api_key or AWS credentials/profile, not both",
+                provider="bedrock",
             )
 
         if (aws_access_key_id is None) != (aws_secret_access_key is None):
-            raise ValueError(
-                "aws_access_key_id and aws_secret_access_key must be provided together"
+            raise configuration_error(
+                "aws_access_key_id and aws_secret_access_key must be provided together",
+                provider="bedrock",
             )
 
-        if api_key is not None:
-            # Amazon Bedrock's Boto3 API key flow relies on the bearer token env var.
-            os.environ["AWS_BEARER_TOKEN_BEDROCK"] = api_key
+        try:
+            if api_key is not None:
+                # Amazon Bedrock's Boto3 API key flow relies on the bearer token env var.
+                os.environ["AWS_BEARER_TOKEN_BEDROCK"] = api_key
 
-        session = boto3.Session(
-            aws_access_key_id=aws_access_key_id,
-            aws_secret_access_key=aws_secret_access_key,
-            aws_session_token=aws_session_token,
-            region_name=region_name,
-            profile_name=profile_name,
-        )
-        self._client = session.client("bedrock-runtime", region_name=region_name)
+            session = boto3.Session(
+                aws_access_key_id=aws_access_key_id,
+                aws_secret_access_key=aws_secret_access_key,
+                aws_session_token=aws_session_token,
+                region_name=region_name,
+                profile_name=profile_name,
+            )
+            self._client = session.client("bedrock-runtime", region_name=region_name)
+        except Exception as exc:
+            raise_llm_error(exc, provider="bedrock")
 
     def _parse_tool_arguments(self, arguments: str | None) -> dict:
         if not arguments:
@@ -540,41 +545,44 @@ class BedrockClient(BaseClient):
         extra_body: dict | None = None,
         use_tools_for_structured_output: bool | None = None,
     ) -> ResponseContent:
-        start_time = perf_counter()
-        response = self._client.converse(
-            **self._converse_kwargs(
-                model=model,
-                messages=messages,
-                temperature=temperature,
-                tools=tools,
-                tool_choice=tool_choice,
-                response_format=response_format,
-                max_tokens=max_tokens,
-                extra_body=extra_body,
-                use_tools_for_structured_output=use_tools_for_structured_output,
+        try:
+            start_time = perf_counter()
+            response = self._client.converse(
+                **self._converse_kwargs(
+                    model=model,
+                    messages=messages,
+                    temperature=temperature,
+                    tools=tools,
+                    tool_choice=tool_choice,
+                    response_format=response_format,
+                    max_tokens=max_tokens,
+                    extra_body=extra_body,
+                    use_tools_for_structured_output=use_tools_for_structured_output,
+                )
             )
-        )
-        duration_seconds = perf_counter() - start_time
+            duration_seconds = perf_counter() - start_time
 
-        response_message = ((response.get("output") or {}).get("message")) or {}
-        assistant_message, response_schema_content, user_tool_calls = (
-            self._response_message_to_assistant_message(response_message)
-        )
-        new_messages = [*messages, assistant_message]
+            response_message = ((response.get("output") or {}).get("message")) or {}
+            assistant_message, response_schema_content, user_tool_calls = (
+                self._response_message_to_assistant_message(response_message)
+            )
+            new_messages = [*messages, assistant_message]
 
-        return ResponseContent(
-            content=self._final_content(
-                assistant_message.content,
-                response_schema_content,
-                user_tool_calls,
-                response_format,
-                use_tools_for_structured_output,
-            ),
-            messages=new_messages,
-            tool_calls=user_tool_calls,
-            usage=self._response_usage(response.get("usage")),
-            duration_seconds=duration_seconds,
-        )
+            return ResponseContent(
+                content=self._final_content(
+                    assistant_message.content,
+                    response_schema_content,
+                    user_tool_calls,
+                    response_format,
+                    use_tools_for_structured_output,
+                ),
+                messages=new_messages,
+                tool_calls=user_tool_calls,
+                usage=self._response_usage(response.get("usage")),
+                duration_seconds=duration_seconds,
+            )
+        except Exception as exc:
+            raise_llm_error(exc, provider="bedrock")
 
     def stream(
         self,
@@ -589,175 +597,177 @@ class BedrockClient(BaseClient):
         extra_body: dict | None = None,
         use_tools_for_structured_output: bool | None = None,
     ):
-        start_time = perf_counter()
-        response = self._client.converse_stream(
-            **self._converse_kwargs(
-                model=model,
-                messages=messages,
-                temperature=temperature,
-                tools=tools,
-                tool_choice=tool_choice,
-                response_format=response_format,
-                max_tokens=max_tokens,
-                extra_body=extra_body,
-                use_tools_for_structured_output=use_tools_for_structured_output,
+        try:
+            start_time = perf_counter()
+            response = self._client.converse_stream(
+                **self._converse_kwargs(
+                    model=model,
+                    messages=messages,
+                    temperature=temperature,
+                    tools=tools,
+                    tool_choice=tool_choice,
+                    response_format=response_format,
+                    max_tokens=max_tokens,
+                    extra_body=extra_body,
+                    use_tools_for_structured_output=use_tools_for_structured_output,
+                )
             )
-        )
+            stream_id = "0"
+            usage: ResponseUsage | None = None
+            content_blocks: dict[int, dict[str, Any]] = {}
+            thinking_chunks: list[str] = []
 
-        stream_id = "0"
-        usage: ResponseUsage | None = None
-        content_blocks: dict[int, dict[str, Any]] = {}
-        thinking_chunks: list[str] = []
-
-        for event in response.get("stream") or []:
-            if not isinstance(event, dict):
-                continue
-
-            self._raise_for_stream_error(event)
-
-            metadata = event.get("metadata")
-            if isinstance(metadata, dict):
-                event_usage = self._response_usage(metadata.get("usage"))
-                if event_usage is not None:
-                    usage = event_usage
-                continue
-
-            content_block_start = event.get("contentBlockStart")
-            if isinstance(content_block_start, dict):
-                index = content_block_start.get("contentBlockIndex")
-                start = content_block_start.get("start") or {}
-                if not isinstance(index, int) or not isinstance(start, dict):
+            for event in response.get("stream") or []:
+                if not isinstance(event, dict):
                     continue
 
-                tool_use = start.get("toolUse")
-                if isinstance(tool_use, dict):
-                    content_blocks[index] = {
-                        "toolUse": {
-                            "toolUseId": tool_use.get("toolUseId"),
-                            "name": tool_use.get("name"),
-                            "input": "",
-                        }
-                    }
+                self._raise_for_stream_error(event)
+
+                metadata = event.get("metadata")
+                if isinstance(metadata, dict):
+                    event_usage = self._response_usage(metadata.get("usage"))
+                    if event_usage is not None:
+                        usage = event_usage
                     continue
 
-                image = start.get("image")
-                if isinstance(image, dict):
-                    content_blocks[index] = {
-                        "image": {
-                            "format": image.get("format"),
-                            "source": {},
+                content_block_start = event.get("contentBlockStart")
+                if isinstance(content_block_start, dict):
+                    index = content_block_start.get("contentBlockIndex")
+                    start = content_block_start.get("start") or {}
+                    if not isinstance(index, int) or not isinstance(start, dict):
+                        continue
+
+                    tool_use = start.get("toolUse")
+                    if isinstance(tool_use, dict):
+                        content_blocks[index] = {
+                            "toolUse": {
+                                "toolUseId": tool_use.get("toolUseId"),
+                                "name": tool_use.get("name"),
+                                "input": "",
+                            }
                         }
-                    }
-                continue
+                        continue
 
-            content_block_delta = event.get("contentBlockDelta")
-            if not isinstance(content_block_delta, dict):
-                continue
-
-            index = content_block_delta.get("contentBlockIndex")
-            delta = content_block_delta.get("delta") or {}
-            if not isinstance(index, int) or not isinstance(delta, dict):
-                continue
-
-            if delta.get("text"):
-                current = content_blocks.setdefault(index, {"text": ""})
-                current["text"] = f"{current.get('text', '')}{delta['text']}"
-                yield ResponseStreamContentChunk(
-                    id=stream_id,
-                    source="direct",
-                    chunk=delta["text"],
-                )
-
-            reasoning_content = delta.get("reasoningContent") or {}
-            if isinstance(reasoning_content, dict) and reasoning_content.get("text"):
-                thinking_chunks.append(reasoning_content["text"])
-
-            tool_use_delta = delta.get("toolUse") or {}
-            if isinstance(tool_use_delta, dict) and tool_use_delta.get("input") is not None:
-                current = content_blocks.setdefault(
-                    index,
-                    {
-                        "toolUse": {
-                            "toolUseId": None,
-                            "name": None,
-                            "input": "",
+                    image = start.get("image")
+                    if isinstance(image, dict):
+                        content_blocks[index] = {
+                            "image": {
+                                "format": image.get("format"),
+                                "source": {},
+                            }
                         }
-                    },
-                )
-                current_tool_use = current.setdefault("toolUse", {})
-                current_tool_use["input"] = (
-                    f"{current_tool_use.get('input', '')}{tool_use_delta['input']}"
-                )
+                    continue
 
-                tool_name = current_tool_use.get("name")
-                if tool_name == "ResponseSchema":
+                content_block_delta = event.get("contentBlockDelta")
+                if not isinstance(content_block_delta, dict):
+                    continue
+
+                index = content_block_delta.get("contentBlockIndex")
+                delta = content_block_delta.get("delta") or {}
+                if not isinstance(index, int) or not isinstance(delta, dict):
+                    continue
+
+                if delta.get("text"):
+                    current = content_blocks.setdefault(index, {"text": ""})
+                    current["text"] = f"{current.get('text', '')}{delta['text']}"
                     yield ResponseStreamContentChunk(
                         id=stream_id,
                         source="direct",
-                        chunk=tool_use_delta["input"],
-                    )
-                else:
-                    yield ResponseStreamContentChunk(
-                        id=stream_id,
-                        source="tool",
-                        tool=tool_name,
-                        chunk=tool_use_delta["input"],
+                        chunk=delta["text"],
                     )
 
-            image_delta = delta.get("image") or {}
-            if isinstance(image_delta, dict):
-                current = content_blocks.setdefault(
-                    index,
-                    {
-                        "image": {
-                            "format": None,
-                            "source": {},
-                        }
-                    },
+                reasoning_content = delta.get("reasoningContent") or {}
+                if isinstance(reasoning_content, dict) and reasoning_content.get("text"):
+                    thinking_chunks.append(reasoning_content["text"])
+
+                tool_use_delta = delta.get("toolUse") or {}
+                if isinstance(tool_use_delta, dict) and tool_use_delta.get("input") is not None:
+                    current = content_blocks.setdefault(
+                        index,
+                        {
+                            "toolUse": {
+                                "toolUseId": None,
+                                "name": None,
+                                "input": "",
+                            }
+                        },
+                    )
+                    current_tool_use = current.setdefault("toolUse", {})
+                    current_tool_use["input"] = (
+                        f"{current_tool_use.get('input', '')}{tool_use_delta['input']}"
+                    )
+
+                    tool_name = current_tool_use.get("name")
+                    if tool_name == "ResponseSchema":
+                        yield ResponseStreamContentChunk(
+                            id=stream_id,
+                            source="direct",
+                            chunk=tool_use_delta["input"],
+                        )
+                    else:
+                        yield ResponseStreamContentChunk(
+                            id=stream_id,
+                            source="tool",
+                            tool=tool_name,
+                            chunk=tool_use_delta["input"],
+                        )
+
+                image_delta = delta.get("image") or {}
+                if isinstance(image_delta, dict):
+                    current = content_blocks.setdefault(
+                        index,
+                        {
+                            "image": {
+                                "format": None,
+                                "source": {},
+                            }
+                        },
+                    )
+                    image_block = current.setdefault("image", {})
+                    source = image_block.setdefault("source", {})
+                    delta_source = image_delta.get("source") or {}
+                    if isinstance(delta_source, dict):
+                        if delta_source.get("bytes") is not None:
+                            source["bytes"] = delta_source["bytes"]
+                        if isinstance(delta_source.get("s3Location"), dict):
+                            source["s3Location"] = delta_source["s3Location"]
+
+            content_parts: list[TextContentPart | ImageContentPart] = []
+            response_schema_content: dict | None = None
+            user_tool_calls: list[AssistantToolCall] = []
+            response_schema_holder: list[dict | None] = [None]
+            for index in sorted(content_blocks):
+                block = content_blocks[index]
+                self._append_generated_content_block(
+                    block,
+                    content_parts=content_parts,
+                    thinking_chunks=thinking_chunks,
+                    user_tool_calls=user_tool_calls,
+                    response_schema_holder=response_schema_holder,
                 )
-                image_block = current.setdefault("image", {})
-                source = image_block.setdefault("source", {})
-                delta_source = image_delta.get("source") or {}
-                if isinstance(delta_source, dict):
-                    if delta_source.get("bytes") is not None:
-                        source["bytes"] = delta_source["bytes"]
-                    if isinstance(delta_source.get("s3Location"), dict):
-                        source["s3Location"] = delta_source["s3Location"]
 
-        content_parts: list[TextContentPart | ImageContentPart] = []
-        response_schema_content: dict | None = None
-        user_tool_calls: list[AssistantToolCall] = []
-        response_schema_holder: list[dict | None] = [None]
-        for index in sorted(content_blocks):
-            block = content_blocks[index]
-            self._append_generated_content_block(
-                block,
-                content_parts=content_parts,
-                thinking_chunks=thinking_chunks,
-                user_tool_calls=user_tool_calls,
-                response_schema_holder=response_schema_holder,
+            response_schema_content = response_schema_holder[0]
+            assistant_message = AssistantMessage(
+                content=collapse_content_parts(content_parts),
+                thinking="".join(thinking_chunks) or None,
+                tool_calls=user_tool_calls,
             )
+            new_messages = [*messages, assistant_message]
+            duration_seconds = perf_counter() - start_time
 
-        response_schema_content = response_schema_holder[0]
-        assistant_message = AssistantMessage(
-            content=collapse_content_parts(content_parts),
-            thinking="".join(thinking_chunks) or None,
-            tool_calls=user_tool_calls,
-        )
-        new_messages = [*messages, assistant_message]
-        duration_seconds = perf_counter() - start_time
-
-        yield ResponseStreamCompletionChunk(
-            id=stream_id,
-            content=self._final_content(
-                assistant_message.content,
-                response_schema_content,
-                user_tool_calls,
-                response_format,
-                use_tools_for_structured_output,
-            ),
-            messages=new_messages,
-            tool_calls=user_tool_calls,
-            usage=usage,
-            duration_seconds=duration_seconds,
-        )
+            yield ResponseStreamCompletionChunk(
+                id=stream_id,
+                content=self._final_content(
+                    assistant_message.content,
+                    response_schema_content,
+                    user_tool_calls,
+                    response_format,
+                    use_tools_for_structured_output,
+                ),
+                messages=new_messages,
+                tool_calls=user_tool_calls,
+                usage=usage,
+                duration_seconds=duration_seconds,
+            )
+        except Exception as exc:
+            raise_llm_error(exc, provider="bedrock")

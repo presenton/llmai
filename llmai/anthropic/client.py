@@ -17,6 +17,7 @@ from anthropic.types import (
 )
 
 from llmai.shared.base import BaseClient
+from llmai.shared.errors import raise_llm_error
 from llmai.shared.messages import (
     AssistantMessage,
     AssistantToolCall,
@@ -50,7 +51,10 @@ class AnthropicClient(BaseClient):
         logger: Logger | None = None,
     ):
         super().__init__(logger=logger)
-        self._client = Anthropic(api_key=api_key)
+        try:
+            self._client = Anthropic(api_key=api_key)
+        except Exception as exc:
+            raise_llm_error(exc, provider="anthropic")
 
     def _get_system_prompt(self, messages: list[Message]) -> str | Omit:
         for message in messages:
@@ -271,61 +275,64 @@ class AnthropicClient(BaseClient):
             )
         )
 
-        start_time = perf_counter()
-        response: AnthropicMessage = self._client.messages.create(
-            model=model,
-            system=self._get_system_prompt(messages),
-            messages=self._messages_to_anthropic_messages(messages),
-            tools=anthropic_tools,
-            tool_choice=anthropic_tool_choice,
-            max_tokens=max_tokens or 8000,
-            temperature=temperature or Omit(),
-            extra_body=extra_body,
-        )
-        duration_seconds = perf_counter() - start_time
+        try:
+            start_time = perf_counter()
+            response: AnthropicMessage = self._client.messages.create(
+                model=model,
+                system=self._get_system_prompt(messages),
+                messages=self._messages_to_anthropic_messages(messages),
+                tools=anthropic_tools,
+                tool_choice=anthropic_tool_choice,
+                max_tokens=max_tokens or 8000,
+                temperature=temperature or Omit(),
+                extra_body=extra_body,
+            )
+            duration_seconds = perf_counter() - start_time
 
-        text_chunks: list[str] = []
-        thinking_chunks: list[str] = []
-        response_schema_content: dict | None = None
-        user_tool_calls: list[AssistantToolCall] = []
-        for content in response.content:
-            if content.type == "text":
-                text_chunks.append(content.text)
-            elif content.type == "thinking":
-                thinking_chunks.append(content.thinking)
-            elif content.type == "tool_use":
-                tool_call = AssistantToolCall(
-                    id=content.id,
-                    name=content.name,
-                    arguments=json.dumps(content.input),
-                )
-                if tool_call.name == "ResponseSchema":
-                    response_schema_content = self._parse_tool_arguments(
-                        tool_call.arguments
+            text_chunks: list[str] = []
+            thinking_chunks: list[str] = []
+            response_schema_content: dict | None = None
+            user_tool_calls: list[AssistantToolCall] = []
+            for content in response.content:
+                if content.type == "text":
+                    text_chunks.append(content.text)
+                elif content.type == "thinking":
+                    thinking_chunks.append(content.thinking)
+                elif content.type == "tool_use":
+                    tool_call = AssistantToolCall(
+                        id=content.id,
+                        name=content.name,
+                        arguments=json.dumps(content.input),
                     )
-                else:
-                    user_tool_calls.append(tool_call)
+                    if tool_call.name == "ResponseSchema":
+                        response_schema_content = self._parse_tool_arguments(
+                            tool_call.arguments
+                        )
+                    else:
+                        user_tool_calls.append(tool_call)
 
-        assistant_message = AssistantMessage(
-            content=content_from_text("".join(text_chunks) or None),
-            thinking="".join(thinking_chunks) or None,
-            tool_calls=user_tool_calls,
-        )
-        new_messages = [*messages, assistant_message]
+            assistant_message = AssistantMessage(
+                content=content_from_text("".join(text_chunks) or None),
+                thinking="".join(thinking_chunks) or None,
+                tool_calls=user_tool_calls,
+            )
+            new_messages = [*messages, assistant_message]
 
-        final_content: object = response_schema_content
-        if final_content is None:
-            final_content = assistant_message.content
-        if final_content is None and not user_tool_calls:
-            final_content = ""
+            final_content: object = response_schema_content
+            if final_content is None:
+                final_content = assistant_message.content
+            if final_content is None and not user_tool_calls:
+                final_content = ""
 
-        return ResponseContent(
-            content=final_content,
-            messages=new_messages,
-            tool_calls=user_tool_calls,
-            usage=self._response_usage(getattr(response, "usage", None)),
-            duration_seconds=duration_seconds,
-        )
+            return ResponseContent(
+                content=final_content,
+                messages=new_messages,
+                tool_calls=user_tool_calls,
+                usage=self._response_usage(getattr(response, "usage", None)),
+                duration_seconds=duration_seconds,
+            )
+        except Exception as exc:
+            raise_llm_error(exc, provider="anthropic")
 
     def stream(
         self,
@@ -358,90 +365,93 @@ class AnthropicClient(BaseClient):
         start_time = perf_counter()
         usage: ResponseUsage | None = None
 
-        with self._client.messages.stream(
-            model=model,
-            system=self._get_system_prompt(messages),
-            messages=self._messages_to_anthropic_messages(messages),
-            tools=anthropic_tools,
-            tool_choice=anthropic_tool_choice,
-            max_tokens=max_tokens or 8000,
-            temperature=temperature or Omit(),
-            extra_body=extra_body,
-        ) as stream:
-            for event in stream:
-                if event.type == "content_block_start":
-                    if event.content_block.type == "tool_use":
-                        active_tool_name = event.content_block.name
-                    continue
+        try:
+            with self._client.messages.stream(
+                model=model,
+                system=self._get_system_prompt(messages),
+                messages=self._messages_to_anthropic_messages(messages),
+                tools=anthropic_tools,
+                tool_choice=anthropic_tool_choice,
+                max_tokens=max_tokens or 8000,
+                temperature=temperature or Omit(),
+                extra_body=extra_body,
+            ) as stream:
+                for event in stream:
+                    if event.type == "content_block_start":
+                        if event.content_block.type == "tool_use":
+                            active_tool_name = event.content_block.name
+                        continue
 
-                if event.type == "content_block_delta":
-                    if event.delta.type == "text_delta":
-                        text_chunks.append(event.delta.text)
-                        if not use_tools_for_structured_output:
-                            yield ResponseStreamContentChunk(
-                                id=stream_id,
-                                source="direct",
-                                chunk=event.delta.text,
-                            )
-                    elif event.delta.type == "thinking_delta":
-                        thinking_chunks.append(event.delta.thinking)
-                    elif event.delta.type == "input_json_delta" and active_tool_name:
-                        chunk = event.delta.partial_json
-                        if active_tool_name == "ResponseSchema":
-                            yield ResponseStreamContentChunk(
-                                id=stream_id,
-                                source="direct",
-                                chunk=chunk,
+                    if event.type == "content_block_delta":
+                        if event.delta.type == "text_delta":
+                            text_chunks.append(event.delta.text)
+                            if not use_tools_for_structured_output:
+                                yield ResponseStreamContentChunk(
+                                    id=stream_id,
+                                    source="direct",
+                                    chunk=event.delta.text,
+                                )
+                        elif event.delta.type == "thinking_delta":
+                            thinking_chunks.append(event.delta.thinking)
+                        elif event.delta.type == "input_json_delta" and active_tool_name:
+                            chunk = event.delta.partial_json
+                            if active_tool_name == "ResponseSchema":
+                                yield ResponseStreamContentChunk(
+                                    id=stream_id,
+                                    source="direct",
+                                    chunk=chunk,
+                                )
+                            else:
+                                yield ResponseStreamContentChunk(
+                                    id=stream_id,
+                                    source="tool",
+                                    tool=active_tool_name,
+                                    chunk=chunk,
+                                )
+                        continue
+
+                    if (
+                        event.type == "content_block_stop"
+                        and event.content_block.type == "tool_use"
+                    ):
+                        tool_call = AssistantToolCall(
+                            id=event.content_block.id,
+                            name=event.content_block.name,
+                            arguments=json.dumps(event.content_block.input),
+                        )
+                        if tool_call.name == "ResponseSchema":
+                            response_schema_content = self._parse_tool_arguments(
+                                tool_call.arguments
                             )
                         else:
-                            yield ResponseStreamContentChunk(
-                                id=stream_id,
-                                source="tool",
-                                tool=active_tool_name,
-                                chunk=chunk,
-                            )
-                    continue
+                            user_tool_calls.append(tool_call)
+                        active_tool_name = None
 
-                if (
-                    event.type == "content_block_stop"
-                    and event.content_block.type == "tool_use"
-                ):
-                    tool_call = AssistantToolCall(
-                        id=event.content_block.id,
-                        name=event.content_block.name,
-                        arguments=json.dumps(event.content_block.input),
-                    )
-                    if tool_call.name == "ResponseSchema":
-                        response_schema_content = self._parse_tool_arguments(
-                            tool_call.arguments
-                        )
-                    else:
-                        user_tool_calls.append(tool_call)
-                    active_tool_name = None
+                if hasattr(stream, "get_final_message"):
+                    final_message = stream.get_final_message()
+                    usage = self._response_usage(getattr(final_message, "usage", None))
 
-            if hasattr(stream, "get_final_message"):
-                final_message = stream.get_final_message()
-                usage = self._response_usage(getattr(final_message, "usage", None))
+            assistant_message = AssistantMessage(
+                content=content_from_text("".join(text_chunks) or None),
+                thinking="".join(thinking_chunks) or None,
+                tool_calls=user_tool_calls,
+            )
+            new_messages = [*messages, assistant_message]
 
-        assistant_message = AssistantMessage(
-            content=content_from_text("".join(text_chunks) or None),
-            thinking="".join(thinking_chunks) or None,
-            tool_calls=user_tool_calls,
-        )
-        new_messages = [*messages, assistant_message]
+            final_content: object = response_schema_content
+            if final_content is None:
+                final_content = assistant_message.content
+            if final_content is None and not user_tool_calls:
+                final_content = ""
+            duration_seconds = perf_counter() - start_time
 
-        final_content: object = response_schema_content
-        if final_content is None:
-            final_content = assistant_message.content
-        if final_content is None and not user_tool_calls:
-            final_content = ""
-        duration_seconds = perf_counter() - start_time
-
-        yield ResponseStreamCompletionChunk(
-            id=stream_id,
-            content=final_content,
-            messages=new_messages,
-            tool_calls=user_tool_calls,
-            usage=usage,
-            duration_seconds=duration_seconds,
-        )
+            yield ResponseStreamCompletionChunk(
+                id=stream_id,
+                content=final_content,
+                messages=new_messages,
+                tool_calls=user_tool_calls,
+                usage=usage,
+                duration_seconds=duration_seconds,
+            )
+        except Exception as exc:
+            raise_llm_error(exc, provider="anthropic")

@@ -3,14 +3,22 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import anthropic
+import httpx
+import openai
+from botocore import exceptions as botocore_exceptions
+from google.genai import errors as google_errors
 from pydantic import BaseModel
 
 from llmai import AnthropicClient, BedrockClient, GoogleClient, OpenAIClient
 from llmai.shared import (
     AssistantMessage,
     ImageContentPart,
+    LLMAuthenticationError,
+    LLMConfigurationError,
     JSONSchemaResponse,
     LLMError,
+    LLMRateLimitError,
     TextContentPart,
     Tool,
     UserMessage,
@@ -32,6 +40,8 @@ class FakeOpenAICompletions:
 
     def create(self, **kwargs):
         self.calls.append(kwargs)
+        if isinstance(self.response, Exception):
+            raise self.response
         return self.response
 
 
@@ -44,10 +54,14 @@ class FakeAnthropicMessages:
 
     def create(self, **kwargs):
         self.calls.append(kwargs)
+        if isinstance(self.response, Exception):
+            raise self.response
         return self.response
 
     def stream(self, **kwargs):
         self.stream_calls.append(kwargs)
+        if isinstance(self.stream_response, Exception):
+            raise self.stream_response
         return self.stream_response
 
 
@@ -78,10 +92,14 @@ class FakeGoogleModels:
 
     def generate_content(self, **kwargs):
         self.calls.append(kwargs)
+        if isinstance(self.response, Exception):
+            raise self.response
         return self.response
 
     def generate_content_stream(self, **kwargs):
         self.stream_calls.append(kwargs)
+        if isinstance(self.stream_response, Exception):
+            raise self.stream_response
         return self.stream_response
 
 
@@ -94,10 +112,14 @@ class FakeBedrockRuntimeClient:
 
     def converse(self, **kwargs):
         self.calls.append(kwargs)
+        if isinstance(self.response, Exception):
+            raise self.response
         return self.response
 
     def converse_stream(self, **kwargs):
         self.stream_calls.append(kwargs)
+        if isinstance(self.stream_response, Exception):
+            raise self.stream_response
         return self.stream_response
 
 
@@ -229,6 +251,31 @@ class ClientBehaviorTests(unittest.TestCase):
         )
         self.assertIsNotNone(result.duration_seconds)
         self.assertGreaterEqual(result.duration_seconds, 0)
+
+    def test_openai_generate_wraps_provider_auth_errors(self):
+        request = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+        response = httpx.Response(401, request=request)
+        fake_completions = FakeOpenAICompletions(
+            openai.AuthenticationError(
+                "bad api key",
+                response=response,
+                body={},
+            )
+        )
+
+        client = OpenAIClient(api_key="test")
+        client._client = SimpleNamespace(
+            chat=SimpleNamespace(completions=fake_completions)
+        )
+
+        with self.assertRaises(LLMAuthenticationError) as context:
+            client.generate(
+                model="gpt-test",
+                messages=[UserMessage(content=text_parts("Hello"))],
+            )
+
+        self.assertEqual(context.exception.status_code, 401)
+        self.assertEqual(context.exception.provider, "openai")
 
     def test_openai_serializes_user_image_parts(self):
         client = OpenAIClient(api_key="test")
@@ -506,6 +553,29 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(result.usage.details["cache_read_input_tokens"], 3)
         self.assertIsNotNone(result.duration_seconds)
         self.assertGreaterEqual(result.duration_seconds, 0)
+
+    def test_anthropic_generate_wraps_provider_rate_limit_errors(self):
+        request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+        response = httpx.Response(429, request=request)
+        fake_messages = FakeAnthropicMessages(
+            anthropic.RateLimitError(
+                "slow down",
+                response=response,
+                body={},
+            )
+        )
+
+        client = AnthropicClient(api_key="test")
+        client._client = SimpleNamespace(messages=fake_messages)
+
+        with self.assertRaises(LLMRateLimitError) as context:
+            client.generate(
+                model="claude-test",
+                messages=[UserMessage(content=text_parts("Answer me"))],
+            )
+
+        self.assertEqual(context.exception.status_code, 429)
+        self.assertEqual(context.exception.provider, "anthropic")
 
     def test_anthropic_stream_returns_usage_and_duration(self):
         fake_stream = FakeAnthropicStream(
@@ -786,6 +856,26 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(result.tool_calls, [])
         self.assertEqual(result.messages[-1].tool_calls, [])
 
+    def test_google_generate_wraps_provider_auth_errors(self):
+        fake_models = FakeGoogleModels(
+            response=google_errors.ClientError(
+                401,
+                {"message": "bad api key", "status": "UNAUTHENTICATED"},
+            )
+        )
+
+        client = GoogleClient(api_key="test")
+        client._client = SimpleNamespace(models=fake_models)
+
+        with self.assertRaises(LLMAuthenticationError) as context:
+            client.generate(
+                model="gemini-test",
+                messages=[UserMessage(content=text_parts("Hello"))],
+            )
+
+        self.assertEqual(context.exception.status_code, 401)
+        self.assertEqual(context.exception.provider, "google")
+
     def test_bedrock_init_supports_api_key_auth(self):
         fake_runtime = FakeBedrockRuntimeClient(response={})
 
@@ -804,6 +894,21 @@ class ClientBehaviorTests(unittest.TestCase):
             sessions[0].client_calls,
             [("bedrock-runtime", {"region_name": "us-east-1"})],
         )
+
+    def test_bedrock_init_uses_unified_configuration_errors(self):
+        fake_runtime = FakeBedrockRuntimeClient(response={})
+
+        with self.assertRaises(LLMConfigurationError) as context:
+            self.make_bedrock_client(
+                fake_runtime,
+                api_key="bedrock-api-key",
+                region_name="us-east-1",
+                aws_access_key_id="aws-id",
+                aws_secret_access_key="aws-secret",
+            )
+
+        self.assertEqual(context.exception.status_code, 400)
+        self.assertEqual(context.exception.provider, "bedrock")
 
     def test_bedrock_init_supports_aws_credentials(self):
         fake_runtime = FakeBedrockRuntimeClient(response={})
@@ -1063,6 +1168,37 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(chunks[-1].usage.total_tokens, 14)
         self.assertIsNotNone(chunks[-1].duration_seconds)
         self.assertGreaterEqual(chunks[-1].duration_seconds, 0)
+
+    def test_bedrock_generate_wraps_provider_rate_limit_errors(self):
+        fake_runtime = FakeBedrockRuntimeClient(
+            response=botocore_exceptions.ClientError(
+                {
+                    "Error": {
+                        "Code": "ThrottlingException",
+                        "Message": "slow down",
+                    },
+                    "ResponseMetadata": {
+                        "HTTPStatusCode": 429,
+                    },
+                },
+                "Converse",
+            )
+        )
+        client, _, _ = self.make_bedrock_client(
+            fake_runtime,
+            region_name="us-east-1",
+            aws_access_key_id="aws-id",
+            aws_secret_access_key="aws-secret",
+        )
+
+        with self.assertRaises(LLMRateLimitError) as context:
+            client.generate(
+                model="anthropic.claude-3-5-haiku",
+                messages=[UserMessage(content=text_parts("Hello"))],
+            )
+
+        self.assertEqual(context.exception.status_code, 429)
+        self.assertEqual(context.exception.provider, "bedrock")
 
 
 if __name__ == "__main__":

@@ -1,5 +1,13 @@
 from llmai.shared.base import BaseClient
-from llmai.shared.errors import BaseError, LLMError, ToolError
+from llmai.shared.errors import (
+    BaseError,
+    LLMAuthenticationError,
+    LLMConfigurationError,
+    LLMConnectionError,
+    LLMError,
+    LLMRateLimitError,
+    ToolError,
+)
 from llmai.shared.logs import LogLevel
 from llmai.shared.messages import (
     AssistantContent,
@@ -46,8 +54,12 @@ __all__ = [
     "ContentPart",
     "ImageContentPart",
     "JSONSchemaResponse",
+    "LLMAuthenticationError",
+    "LLMConfigurationError",
+    "LLMConnectionError",
     "LLMError",
     "LLMProvider",
+    "LLMRateLimitError",
     "LogLevel",
     "Message",
     "MessageContent",

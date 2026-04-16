@@ -32,7 +32,7 @@ from openai.types.shared_params.response_format_json_schema import (
 from openai.types.shared_params.response_format_text import ResponseFormatText
 
 from llmai.shared.base import BaseClient
-from llmai.shared.errors import LLMError
+from llmai.shared.errors import LLMError, raise_llm_error
 from llmai.shared.messages import (
     AssistantContent,
     AssistantMessage,
@@ -73,7 +73,10 @@ class OpenAIClient(BaseClient):
         logger: Logger | None = None,
     ):
         super().__init__(logger=logger)
-        self._client = OpenAI(base_url=base_url, api_key=api_key)
+        try:
+            self._client = OpenAI(base_url=base_url, api_key=api_key)
+        except Exception as exc:
+            raise_llm_error(exc, provider="openai")
 
         if self._logger:
             self._logger.info("OpenAI client created")
@@ -334,37 +337,40 @@ class OpenAIClient(BaseClient):
             self._get_openai_tools_and_tool_choice_or_omit(tools, tool_choice)
         )
 
-        start_time = perf_counter()
-        response = self._client.chat.completions.create(
-            model=model,
-            messages=self._messages_to_openai_messages(messages),
-            temperature=temperature,
-            response_format=self._get_openai_response_format_or_omit(response_format),
-            tools=openai_tools,
-            tool_choice=openai_tool_choice,
-            max_completion_tokens=max_tokens,
-            extra_body=extra_body,
-        )
-        duration_seconds = perf_counter() - start_time
+        try:
+            start_time = perf_counter()
+            response = self._client.chat.completions.create(
+                model=model,
+                messages=self._messages_to_openai_messages(messages),
+                temperature=temperature,
+                response_format=self._get_openai_response_format_or_omit(response_format),
+                tools=openai_tools,
+                tool_choice=openai_tool_choice,
+                max_completion_tokens=max_tokens,
+                extra_body=extra_body,
+            )
+            duration_seconds = perf_counter() - start_time
 
-        if not response.choices:
-            raise LLMError(400, "No content returned from LLM")
+            if not response.choices:
+                raise LLMError(400, "No content returned from LLM")
 
-        assistant_message = self._chat_completion_message_to_assistant_message(
-            response.choices[0].message
-        )
-        new_messages = [*messages, assistant_message]
+            assistant_message = self._chat_completion_message_to_assistant_message(
+                response.choices[0].message
+            )
+            new_messages = [*messages, assistant_message]
 
-        return ResponseContent(
-            content=self._final_content(
-                assistant_message.content,
-                response_format,
-            ),
-            messages=new_messages,
-            tool_calls=assistant_message.tool_calls,
-            usage=self._response_usage(getattr(response, "usage", None)),
-            duration_seconds=duration_seconds,
-        )
+            return ResponseContent(
+                content=self._final_content(
+                    assistant_message.content,
+                    response_format,
+                ),
+                messages=new_messages,
+                tool_calls=assistant_message.tool_calls,
+                usage=self._response_usage(getattr(response, "usage", None)),
+                duration_seconds=duration_seconds,
+            )
+        except Exception as exc:
+            raise_llm_error(exc, provider="openai")
 
     def stream(
         self,
@@ -385,103 +391,106 @@ class OpenAIClient(BaseClient):
             self._get_openai_tools_and_tool_choice_or_omit(tools, tool_choice)
         )
 
-        start_time = perf_counter()
-        response = self._client.chat.completions.create(
-            model=model,
-            messages=self._messages_to_openai_messages(messages),
-            temperature=temperature,
-            response_format=self._get_openai_response_format_or_omit(response_format),
-            tools=openai_tools,
-            tool_choice=openai_tool_choice,
-            max_completion_tokens=max_tokens,
-            extra_body=extra_body,
-            stream=True,
-            stream_options={"include_usage": True},
-        )
+        try:
+            start_time = perf_counter()
+            response = self._client.chat.completions.create(
+                model=model,
+                messages=self._messages_to_openai_messages(messages),
+                temperature=temperature,
+                response_format=self._get_openai_response_format_or_omit(response_format),
+                tools=openai_tools,
+                tool_choice=openai_tool_choice,
+                max_completion_tokens=max_tokens,
+                extra_body=extra_body,
+                stream=True,
+                stream_options={"include_usage": True},
+            )
 
-        stream_id = "0"
-        content = ""
-        partial_tool_calls: dict[int, dict[str, str | None]] = {}
-        tool_order: list[int] = []
-        usage: ResponseUsage | None = None
+            stream_id = "0"
+            content = ""
+            partial_tool_calls: dict[int, dict[str, str | None]] = {}
+            tool_order: list[int] = []
+            usage: ResponseUsage | None = None
 
-        for event in response:
-            event_usage = self._response_usage(getattr(event, "usage", None))
-            if event_usage is not None:
-                usage = event_usage
+            for event in response:
+                event_usage = self._response_usage(getattr(event, "usage", None))
+                if event_usage is not None:
+                    usage = event_usage
 
-            if not getattr(event, "choices", None):
-                continue
+                if not getattr(event, "choices", None):
+                    continue
 
-            delta = event.choices[0].delta
+                delta = event.choices[0].delta
 
-            if delta.content:
-                content += delta.content
-                yield ResponseStreamContentChunk(
-                    id=stream_id,
-                    source="direct",
-                    chunk=delta.content,
-                )
-
-            if not delta.tool_calls:
-                continue
-
-            for tool_call_delta in delta.tool_calls:
-                current = partial_tool_calls.get(tool_call_delta.index)
-                if current is None:
-                    current = {"id": None, "name": None, "arguments": None}
-                    partial_tool_calls[tool_call_delta.index] = current
-                    tool_order.append(tool_call_delta.index)
-
-                if tool_call_delta.id:
-                    current["id"] = tool_call_delta.id
-
-                if tool_call_delta.function and tool_call_delta.function.name:
-                    current["name"] = tool_call_delta.function.name
-
-                tool_arguments = (
-                    tool_call_delta.function.arguments
-                    if tool_call_delta.function
-                    else None
-                )
-                if current["arguments"] is None:
-                    current["arguments"] = tool_arguments
-                elif tool_arguments:
-                    current["arguments"] += tool_arguments
-
-                if tool_arguments:
+                if delta.content:
+                    content += delta.content
                     yield ResponseStreamContentChunk(
                         id=stream_id,
-                        source="tool",
-                        tool=current["name"],
-                        chunk=tool_arguments,
+                        source="direct",
+                        chunk=delta.content,
                     )
 
-        tool_calls = [
-            AssistantToolCall(
-                id=(partial_tool_calls[index]["id"] or partial_tool_calls[index]["name"] or ""),
-                name=partial_tool_calls[index]["name"] or "",
-                arguments=partial_tool_calls[index]["arguments"],
+                if not delta.tool_calls:
+                    continue
+
+                for tool_call_delta in delta.tool_calls:
+                    current = partial_tool_calls.get(tool_call_delta.index)
+                    if current is None:
+                        current = {"id": None, "name": None, "arguments": None}
+                        partial_tool_calls[tool_call_delta.index] = current
+                        tool_order.append(tool_call_delta.index)
+
+                    if tool_call_delta.id:
+                        current["id"] = tool_call_delta.id
+
+                    if tool_call_delta.function and tool_call_delta.function.name:
+                        current["name"] = tool_call_delta.function.name
+
+                    tool_arguments = (
+                        tool_call_delta.function.arguments
+                        if tool_call_delta.function
+                        else None
+                    )
+                    if current["arguments"] is None:
+                        current["arguments"] = tool_arguments
+                    elif tool_arguments:
+                        current["arguments"] += tool_arguments
+
+                    if tool_arguments:
+                        yield ResponseStreamContentChunk(
+                            id=stream_id,
+                            source="tool",
+                            tool=current["name"],
+                            chunk=tool_arguments,
+                        )
+
+            tool_calls = [
+                AssistantToolCall(
+                    id=(partial_tool_calls[index]["id"] or partial_tool_calls[index]["name"] or ""),
+                    name=partial_tool_calls[index]["name"] or "",
+                    arguments=partial_tool_calls[index]["arguments"],
+                )
+                for index in tool_order
+                if partial_tool_calls[index]["name"]
+            ]
+
+            assistant_message = AssistantMessage(
+                content=content_from_text(content or None),
+                tool_calls=tool_calls,
             )
-            for index in tool_order
-            if partial_tool_calls[index]["name"]
-        ]
+            new_messages = [*messages, assistant_message]
+            duration_seconds = perf_counter() - start_time
 
-        assistant_message = AssistantMessage(
-            content=content_from_text(content or None),
-            tool_calls=tool_calls,
-        )
-        new_messages = [*messages, assistant_message]
-        duration_seconds = perf_counter() - start_time
-
-        yield ResponseStreamCompletionChunk(
-            id=stream_id,
-            content=self._final_content(
-                assistant_message.content,
-                response_format,
-            ),
-            messages=new_messages,
-            tool_calls=tool_calls,
-            usage=usage,
-            duration_seconds=duration_seconds,
-        )
+            yield ResponseStreamCompletionChunk(
+                id=stream_id,
+                content=self._final_content(
+                    assistant_message.content,
+                    response_format,
+                ),
+                messages=new_messages,
+                tool_calls=tool_calls,
+                usage=usage,
+                duration_seconds=duration_seconds,
+            )
+        except Exception as exc:
+            raise_llm_error(exc, provider="openai")
