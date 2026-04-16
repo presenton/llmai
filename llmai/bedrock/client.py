@@ -28,6 +28,8 @@ from llmai.shared.response_formats import (
     JSONSchemaResponse,
     JSONObjectResponse,
     ResponseFormat,
+    get_response_format_name,
+    get_response_format_strict,
     get_response_schema,
 )
 from llmai.shared.responses import (
@@ -280,20 +282,31 @@ class BedrockClient(BaseClient):
                 "toolSpec": {
                     "name": tool.name,
                     "description": tool.description,
-                    "inputSchema": {"json": get_schema_as_dict(tool.input_schema)},
+                    "inputSchema": {
+                        "json": get_schema_as_dict(
+                            tool.input_schema,
+                            supported_keys=None,
+                            supported_string_formats=None,
+                            strict=tool.strict,
+                        )
+                    },
                     "strict": tool.strict,
                 }
             }
             for tool in tools
         ]
 
-    def _response_schema_tool(self, response_schema: dict) -> dict[str, object]:
+    def _response_schema_tool(
+        self,
+        response_format: ResponseFormat | None,
+        response_schema: dict,
+    ) -> dict[str, object]:
         return {
             "toolSpec": {
-                "name": "ResponseSchema",
+                "name": get_response_format_name(response_format, default="response"),
                 "description": "Provide the final response to the user",
                 "inputSchema": {"json": response_schema},
-                "strict": True,
+                "strict": get_response_format_strict(response_format, default=True),
             }
         }
 
@@ -307,9 +320,16 @@ class BedrockClient(BaseClient):
         resolved = resolve_tools(tools, tool_choice)
         bedrock_tools = self._llm_tools_to_bedrock_tools(resolved.tools)
 
-        response_schema = get_response_schema(response_format)
+        response_schema = get_response_schema(
+            response_format,
+            supported_keys=None,
+            supported_string_formats=None,
+            strict=get_response_format_strict(response_format, default=False),
+        )
         if use_tools_for_structured_output and response_schema:
-            bedrock_tools.append(self._response_schema_tool(response_schema))
+            bedrock_tools.append(
+                self._response_schema_tool(response_format, response_schema)
+            )
 
         if not bedrock_tools:
             return None
@@ -336,7 +356,12 @@ class BedrockClient(BaseClient):
         if use_tools_for_structured_output:
             return None
 
-        response_schema = get_response_schema(response_format)
+        response_schema = get_response_schema(
+            response_format,
+            supported_keys=None,
+            supported_string_formats=None,
+            strict=get_response_format_strict(response_format, default=False),
+        )
         if not response_schema:
             return None
 
@@ -401,6 +426,7 @@ class BedrockClient(BaseClient):
         thinking_chunks: list[str],
         user_tool_calls: list[AssistantToolCall],
         response_schema_holder: list[dict | None],
+        response_schema_tool_name: str,
     ) -> None:
         text = block.get("text")
         if text:
@@ -434,7 +460,7 @@ class BedrockClient(BaseClient):
                 name=tool_use["name"],
                 arguments=arguments,
             )
-            if tool_call.name == "ResponseSchema":
+            if tool_call.name == response_schema_tool_name:
                 response_schema_holder[0] = self._parse_tool_arguments(
                     tool_call.arguments
                 )
@@ -444,10 +470,15 @@ class BedrockClient(BaseClient):
     def _response_message_to_assistant_message(
         self,
         message: dict[str, object] | None,
+        response_format: ResponseFormat | None,
     ) -> tuple[AssistantMessage, dict | None, list[AssistantToolCall]]:
         content_parts: list[TextContentPart | ImageContentPart] = []
         thinking_chunks: list[str] = []
         response_schema_holder: list[dict | None] = [None]
+        response_schema_tool_name = get_response_format_name(
+            response_format,
+            default="response",
+        )
         user_tool_calls: list[AssistantToolCall] = []
 
         for block in (message or {}).get("content") or []:
@@ -458,6 +489,7 @@ class BedrockClient(BaseClient):
                     thinking_chunks=thinking_chunks,
                     user_tool_calls=user_tool_calls,
                     response_schema_holder=response_schema_holder,
+                    response_schema_tool_name=response_schema_tool_name,
                 )
 
         assistant_message = AssistantMessage(
@@ -564,7 +596,10 @@ class BedrockClient(BaseClient):
 
             response_message = ((response.get("output") or {}).get("message")) or {}
             assistant_message, response_schema_content, user_tool_calls = (
-                self._response_message_to_assistant_message(response_message)
+                self._response_message_to_assistant_message(
+                    response_message,
+                    response_format,
+                )
             )
             new_messages = [*messages, assistant_message]
 
@@ -616,6 +651,10 @@ class BedrockClient(BaseClient):
             usage: ResponseUsage | None = None
             content_blocks: dict[int, dict[str, Any]] = {}
             thinking_chunks: list[str] = []
+            response_schema_tool_name = get_response_format_name(
+                response_format,
+                default="response",
+            )
 
             for event in response.get("stream") or []:
                 if not isinstance(event, dict):
@@ -698,7 +737,7 @@ class BedrockClient(BaseClient):
                     )
 
                     tool_name = current_tool_use.get("name")
-                    if tool_name == "ResponseSchema":
+                    if tool_name == response_schema_tool_name:
                         yield ResponseStreamContentChunk(
                             id=stream_id,
                             source="direct",
@@ -744,6 +783,7 @@ class BedrockClient(BaseClient):
                     thinking_chunks=thinking_chunks,
                     user_tool_calls=user_tool_calls,
                     response_schema_holder=response_schema_holder,
+                    response_schema_tool_name=response_schema_tool_name,
                 )
 
             response_schema_content = response_schema_holder[0]

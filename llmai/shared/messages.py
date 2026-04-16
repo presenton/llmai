@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List, Literal, TypeAlias
+from typing import List, Literal, Sequence, TypeAlias
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -31,13 +31,30 @@ class ImageContentPart(BaseModel):
 
 
 ContentPart: TypeAlias = TextContentPart | ImageContentPart
-MessageContent: TypeAlias = List[ContentPart]
-AssistantContent: TypeAlias = List[ContentPart] | None
-TextMessageContent: TypeAlias = List[TextContentPart]
+MessageContentPart: TypeAlias = ContentPart | str
+TextMessageContentPart: TypeAlias = TextContentPart | str
+MessageContent: TypeAlias = List[MessageContentPart] | str
+AssistantContent: TypeAlias = List[MessageContentPart] | None
+TextMessageContent: TypeAlias = List[TextMessageContentPart]
 
 
-def normalize_content_parts(content: MessageContent | None) -> list[ContentPart]:
-    return [] if content is None else list(content)
+def normalize_content_parts(
+    content: Sequence[MessageContentPart] | str | None,
+) -> list[ContentPart]:
+    if content is None:
+        return []
+
+    if isinstance(content, str):
+        return [TextContentPart(text=content)]
+
+    normalized: list[ContentPart] = []
+    for part in content:
+        if isinstance(part, str):
+            normalized.append(TextContentPart(text=part))
+            continue
+        normalized.append(part)
+
+    return normalized
 
 
 def collapse_content_parts(parts: list[ContentPart]) -> AssistantContent:

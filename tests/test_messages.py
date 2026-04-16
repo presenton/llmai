@@ -5,9 +5,11 @@ from pydantic import ValidationError
 from llmai.shared import (
     AssistantMessage,
     ImageContentPart,
+    SystemMessage,
     TextContentPart,
     UserMessage,
     collapse_content_parts,
+    normalize_content_parts,
 )
 
 
@@ -32,6 +34,49 @@ class AssistantMessageTests(unittest.TestCase):
 
         self.assertEqual(message.content[0].text, "Describe this image.")
         self.assertEqual(message.content[1].url, "https://example.com/cat.png")
+
+    def test_supports_top_level_string_user_content(self):
+        message = UserMessage(content="Describe this image.")
+
+        content = normalize_content_parts(message.content)
+
+        self.assertEqual(content[0].text, "Describe this image.")
+
+    def test_supports_string_entries_in_user_content_lists(self):
+        message = UserMessage(
+            content=[
+                "Describe this image.",
+                ImageContentPart(url="https://example.com/cat.png"),
+            ]
+        )
+
+        content = normalize_content_parts(message.content)
+
+        self.assertEqual(content[0].text, "Describe this image.")
+        self.assertEqual(content[1].url, "https://example.com/cat.png")
+
+    def test_normalize_content_parts_converts_strings_to_text_parts(self):
+        content = normalize_content_parts(
+            [
+                "Describe this image.",
+                ImageContentPart(url="https://example.com/cat.png"),
+            ]
+        )
+
+        self.assertEqual(content[0].text, "Describe this image.")
+        self.assertEqual(content[1].url, "https://example.com/cat.png")
+
+    def test_normalize_content_parts_converts_top_level_string_to_text_part(self):
+        content = normalize_content_parts("Describe this image.")
+
+        self.assertEqual(content[0].text, "Describe this image.")
+
+    def test_supports_string_entries_in_text_message_content_lists(self):
+        message = SystemMessage(content=["Be concise."])
+
+        content = normalize_content_parts(message.content)
+
+        self.assertEqual(content[0].text, "Be concise.")
 
     def test_collapse_content_parts_keeps_text_only_parts_as_a_list(self):
         content = collapse_content_parts(

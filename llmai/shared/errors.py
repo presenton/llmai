@@ -100,6 +100,8 @@ def normalize_llm_error(
     provider: str | None = None,
 ) -> BaseError:
     if isinstance(error, BaseError):
+        if provider is not None and error.provider is None:
+            error.provider = provider
         return error
 
     openai_status_error_types = (

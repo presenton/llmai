@@ -434,6 +434,291 @@ class ClientBehaviorTests(unittest.TestCase):
 
         self.assertEqual(result.content, {"answer": "pong"})
 
+    def test_openai_generate_accepts_dict_json_schema(self):
+        fake_message = SimpleNamespace(
+            content='{"answer":"pong"}',
+            tool_calls=None,
+        )
+        fake_response = SimpleNamespace(
+            choices=[SimpleNamespace(message=fake_message)]
+        )
+        fake_completions = FakeOpenAICompletions(fake_response)
+
+        client = OpenAIClient(api_key="test")
+        client._client = SimpleNamespace(
+            chat=SimpleNamespace(completions=fake_completions)
+        )
+
+        result = client.generate(
+            model="gpt-test",
+            messages=[UserMessage(content=text_parts("Answer in JSON"))],
+            response_format=JSONSchemaResponse(
+                json_schema={
+                    "type": "object",
+                    "properties": {"answer": {"type": "string"}},
+                    "required": ["answer"],
+                }
+            ),
+        )
+
+        self.assertEqual(result.content, {"answer": "pong"})
+        self.assertEqual(
+            fake_completions.calls[0]["response_format"]["json_schema"]["schema"]["type"],
+            "object",
+        )
+
+    def test_openai_generate_sanitizes_unsupported_json_schema_keywords(self):
+        fake_message = SimpleNamespace(
+            content='{"answer":"pong"}',
+            tool_calls=None,
+        )
+        fake_response = SimpleNamespace(
+            choices=[SimpleNamespace(message=fake_message)]
+        )
+        fake_completions = FakeOpenAICompletions(fake_response)
+        schema = {
+            "type": "object",
+            "properties": {
+                "title": {
+                    "type": "string",
+                    "minLength": 20,
+                    "maxLength": 100,
+                },
+                "email": {
+                    "type": "string",
+                    "format": "email",
+                },
+                "username": {
+                    "type": "string",
+                    "pattern": "^@[a-zA-Z0-9_]+$",
+                },
+                "url": {
+                    "type": "string",
+                    "format": "uri",
+                    "examples": ["https://example.com"],
+                },
+                "score": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1,
+                },
+                "bulletPoints": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "minItems": 1,
+                    "maxItems": 3,
+                },
+                "image": {
+                    "type": "object",
+                    "properties": {
+                        "prompt": {
+                            "type": "string",
+                            "minWords": 2,
+                            "maxWords": 5,
+                        }
+                    },
+                    "required": ["prompt"],
+                },
+            },
+            "required": [
+                "title",
+                "email",
+                "username",
+                "url",
+                "score",
+                "bulletPoints",
+                "image",
+            ],
+        }
+
+        client = OpenAIClient(api_key="test")
+        client._client = SimpleNamespace(
+            chat=SimpleNamespace(completions=fake_completions)
+        )
+
+        client.generate(
+            model="gpt-test",
+            messages=[UserMessage(content=text_parts("Answer in JSON"))],
+            response_format=JSONSchemaResponse(json_schema=schema),
+        )
+
+        sanitized_schema = fake_completions.calls[0]["response_format"]["json_schema"][
+            "schema"
+        ]
+        self.assertEqual(
+            sanitized_schema["properties"]["email"]["format"],
+            "email",
+        )
+        self.assertEqual(
+            sanitized_schema["properties"]["username"]["pattern"],
+            "^@[a-zA-Z0-9_]+$",
+        )
+        self.assertNotIn("format", sanitized_schema["properties"]["url"])
+        self.assertNotIn("examples", sanitized_schema["properties"]["url"])
+        self.assertEqual(sanitized_schema["properties"]["score"]["minimum"], 0)
+        self.assertEqual(sanitized_schema["properties"]["score"]["maximum"], 1)
+        self.assertEqual(sanitized_schema["properties"]["bulletPoints"]["minItems"], 1)
+        self.assertEqual(sanitized_schema["properties"]["bulletPoints"]["maxItems"], 3)
+        self.assertNotIn("minLength", sanitized_schema["properties"]["title"])
+        self.assertNotIn("maxLength", sanitized_schema["properties"]["title"])
+        self.assertNotIn(
+            "minWords",
+            sanitized_schema["properties"]["image"]["properties"]["prompt"],
+        )
+        self.assertNotIn(
+            "maxWords",
+            sanitized_schema["properties"]["image"]["properties"]["prompt"],
+        )
+        self.assertEqual(schema["properties"]["url"]["format"], "uri")
+        self.assertEqual(schema["properties"]["title"]["minLength"], 20)
+
+    def test_openai_tools_sanitize_unsupported_json_schema_keywords(self):
+        client = OpenAIClient(api_key="test")
+        schema = {
+            "type": "object",
+            "properties": {
+                "email": {
+                    "type": "string",
+                    "format": "email",
+                },
+                "url": {
+                    "type": "string",
+                    "format": "uri",
+                },
+                "title": {
+                    "type": "string",
+                    "minLength": 20,
+                },
+            },
+            "required": ["email", "url", "title"],
+        }
+
+        tools = client._llm_tools_to_openai_tools(
+            [
+                Tool(
+                    name="save_link",
+                    description="Save a link",
+                    schema=schema,
+                    strict=True,
+                )
+            ]
+        )
+
+        parameters = tools[0]["function"]["parameters"]
+        self.assertEqual(parameters["properties"]["email"]["format"], "email")
+        self.assertNotIn("format", parameters["properties"]["url"])
+        self.assertNotIn("minLength", parameters["properties"]["title"])
+        self.assertEqual(schema["properties"]["url"]["format"], "uri")
+        self.assertEqual(schema["properties"]["title"]["minLength"], 20)
+
+    def test_openai_generate_uses_custom_json_schema_name_and_strict(self):
+        fake_message = SimpleNamespace(
+            content='{"answer":"pong"}',
+            tool_calls=None,
+        )
+        fake_response = SimpleNamespace(
+            choices=[SimpleNamespace(message=fake_message)]
+        )
+        fake_completions = FakeOpenAICompletions(fake_response)
+
+        client = OpenAIClient(api_key="test")
+        client._client = SimpleNamespace(
+            chat=SimpleNamespace(completions=fake_completions)
+        )
+        schema = {
+            "type": "object",
+            "properties": {
+                "title": {
+                    "type": "string",
+                    "minLength": 20,
+                },
+                "url": {
+                    "type": "string",
+                    "format": "uri",
+                    "examples": ["https://example.com"],
+                },
+            },
+            "required": ["title", "url"],
+        }
+
+        result = client.generate(
+            model="gpt-test",
+            messages=[UserMessage(content=text_parts("Answer in JSON"))],
+            response_format=JSONSchemaResponse(
+                name="final_answer",
+                strict=False,
+                json_schema=schema,
+            ),
+        )
+
+        self.assertEqual(result.content, {"answer": "pong"})
+        self.assertEqual(
+            fake_completions.calls[0]["response_format"]["json_schema"]["name"],
+            "final_answer",
+        )
+        self.assertFalse(
+            fake_completions.calls[0]["response_format"]["json_schema"]["strict"]
+        )
+        sent_schema = fake_completions.calls[0]["response_format"]["json_schema"]["schema"]
+        self.assertEqual(sent_schema["properties"]["title"]["minLength"], 20)
+        self.assertEqual(sent_schema["properties"]["url"]["format"], "uri")
+        self.assertEqual(
+            sent_schema["properties"]["url"]["examples"],
+            ["https://example.com"],
+        )
+
+    def test_openai_tools_keep_non_strict_json_schema_keywords(self):
+        client = OpenAIClient(api_key="test")
+        schema = {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "format": "uri",
+                },
+                "title": {
+                    "type": "string",
+                    "minLength": 20,
+                },
+            },
+            "required": ["url", "title"],
+        }
+
+        tools = client._llm_tools_to_openai_tools(
+            [
+                Tool(
+                    name="save_link",
+                    description="Save a link",
+                    schema=schema,
+                    strict=False,
+                )
+            ]
+        )
+
+        parameters = tools[0]["function"]["parameters"]
+        self.assertEqual(parameters["properties"]["url"]["format"], "uri")
+        self.assertEqual(parameters["properties"]["title"]["minLength"], 20)
+
+    def test_openai_generate_raises_configuration_error_for_bare_basemodel_schema(self):
+        fake_completions = FakeOpenAICompletions(response=None)
+
+        client = OpenAIClient(api_key="test")
+        client._client = SimpleNamespace(
+            chat=SimpleNamespace(completions=fake_completions)
+        )
+
+        with self.assertRaises(LLMConfigurationError) as context:
+            client.generate(
+                model="gpt-test",
+                messages=[UserMessage(content=text_parts("Answer in JSON"))],
+                response_format=JSONSchemaResponse(json_schema=BaseModel),
+            )
+
+        self.assertEqual(context.exception.status_code, 400)
+        self.assertEqual(context.exception.provider, "openai")
+        self.assertIn("BaseModel subclass", context.exception.message)
+        self.assertEqual(fake_completions.calls, [])
+
     def test_openai_stream_parses_structured_output_in_final_completion(self):
         events = iter(
             [
@@ -619,7 +904,7 @@ class ClientBehaviorTests(unittest.TestCase):
                 SimpleNamespace(
                     type="tool_use",
                     id="schema_1",
-                    name="ResponseSchema",
+                    name="final_answer",
                     input={"answer": "done"},
                 )
             ]
@@ -632,12 +917,18 @@ class ClientBehaviorTests(unittest.TestCase):
         result = client.generate(
             model="claude-test",
             messages=[UserMessage(content=text_parts("Answer in JSON"))],
-            response_format=JSONSchemaResponse(json_schema=AnswerSchema),
+            response_format=JSONSchemaResponse(
+                name="final_answer",
+                strict=False,
+                json_schema=AnswerSchema,
+            ),
         )
 
         self.assertEqual(result.content, {"answer": "done"})
         self.assertEqual(result.tool_calls, [])
         self.assertEqual(result.messages[-1].tool_calls, [])
+        self.assertEqual(fake_messages.calls[0]["tools"][0]["name"], "final_answer")
+        self.assertFalse(fake_messages.calls[0]["tools"][0]["strict"])
 
     def test_google_required_tool_choice_uses_any_mode_with_allowed_names(self):
         client = GoogleClient(api_key="test")
@@ -831,7 +1122,7 @@ class ClientBehaviorTests(unittest.TestCase):
                                 file_data=None,
                                 function_call=SimpleNamespace(
                                     id="schema_1",
-                                    name="ResponseSchema",
+                                    name="final_answer",
                                     args={"answer": "done"},
                                 ),
                             )
@@ -848,13 +1139,21 @@ class ClientBehaviorTests(unittest.TestCase):
         result = client.generate(
             model="gemini-test",
             messages=[UserMessage(content=text_parts("Answer in JSON"))],
-            response_format=JSONSchemaResponse(json_schema=AnswerSchema),
+            response_format=JSONSchemaResponse(
+                name="final_answer",
+                strict=False,
+                json_schema=AnswerSchema,
+            ),
             use_tools_for_structured_output=True,
         )
 
         self.assertEqual(result.content, {"answer": "done"})
         self.assertEqual(result.tool_calls, [])
         self.assertEqual(result.messages[-1].tool_calls, [])
+        self.assertEqual(
+            fake_models.calls[0]["config"].tools[0].function_declarations[0].name,
+            "final_answer",
+        )
 
     def test_google_generate_wraps_provider_auth_errors(self):
         fake_models = FakeGoogleModels(
@@ -1002,6 +1301,29 @@ class ClientBehaviorTests(unittest.TestCase):
             '"type": "object"',
             fake_runtime.calls[0]["outputConfig"]["textFormat"]["structure"]["jsonSchema"]["schema"],
         )
+
+    def test_bedrock_tool_structured_output_uses_custom_name_and_strict(self):
+        fake_runtime = FakeBedrockRuntimeClient(response={})
+        client, _, _ = self.make_bedrock_client(
+            fake_runtime,
+            region_name="us-east-1",
+            aws_access_key_id="aws-id",
+            aws_secret_access_key="aws-secret",
+        )
+
+        tool_config = client._get_bedrock_tool_config(
+            None,
+            None,
+            JSONSchemaResponse(
+                name="final_answer",
+                strict=False,
+                json_schema=AnswerSchema,
+            ),
+            True,
+        )
+
+        self.assertEqual(tool_config["tools"][0]["toolSpec"]["name"], "final_answer")
+        self.assertFalse(tool_config["tools"][0]["toolSpec"]["strict"])
 
     def test_bedrock_generate_returns_tool_calls(self):
         fake_runtime = FakeBedrockRuntimeClient(

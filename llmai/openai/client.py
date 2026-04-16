@@ -52,6 +52,8 @@ from llmai.shared.response_formats import (
     JSONObjectResponse,
     ResponseFormat,
     TextResponse,
+    get_response_format_name,
+    get_response_format_strict,
     get_response_schema,
 )
 from llmai.shared.responses import (
@@ -62,6 +64,42 @@ from llmai.shared.responses import (
 )
 from llmai.shared.schema import get_schema_as_dict
 from llmai.shared.tools import Tool, ToolChoice, resolve_tools
+
+OPENAI_SUPPORTED_STRING_FORMATS = {
+    "date-time",
+    "time",
+    "date",
+    "duration",
+    "email",
+    "hostname",
+    "ipv4",
+    "ipv6",
+    "uuid",
+}
+OPENAI_SUPPORTED_SCHEMA_KEYS = {
+    "$defs",
+    "$ref",
+    "additionalProperties",
+    "allOf",
+    "anyOf",
+    "const",
+    "definitions",
+    "description",
+    "enum",
+    "exclusiveMaximum",
+    "exclusiveMinimum",
+    "format",
+    "items",
+    "maximum",
+    "maxItems",
+    "minimum",
+    "minItems",
+    "multipleOf",
+    "pattern",
+    "properties",
+    "required",
+    "type",
+}
 
 
 class OpenAIClient(BaseClient):
@@ -229,9 +267,18 @@ class OpenAIClient(BaseClient):
             return ResponseFormatJSONSchema(
                 type="json_schema",
                 json_schema={
-                    "name": "response",
-                    "schema": get_response_schema(response_format) or {},
-                    "strict": True,
+                    "name": get_response_format_name(response_format, default="response"),
+                    "schema": get_response_schema(
+                        response_format,
+                        supported_keys=OPENAI_SUPPORTED_SCHEMA_KEYS,
+                        supported_string_formats=OPENAI_SUPPORTED_STRING_FORMATS,
+                        strict=get_response_format_strict(
+                            response_format,
+                            default=False,
+                        ),
+                    )
+                    or {},
+                    "strict": get_response_format_strict(response_format, default=True),
                 },
             )
 
@@ -253,7 +300,12 @@ class OpenAIClient(BaseClient):
                 function=FunctionDefinition(
                     name=tool.name,
                     description=tool.description,
-                    parameters=get_schema_as_dict(tool.input_schema),
+                    parameters=get_schema_as_dict(
+                        tool.input_schema,
+                        supported_keys=OPENAI_SUPPORTED_SCHEMA_KEYS,
+                        supported_string_formats=OPENAI_SUPPORTED_STRING_FORMATS,
+                        strict=tool.strict,
+                    ),
                     strict=tool.strict,
                 ),
             )

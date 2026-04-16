@@ -33,6 +33,8 @@ from llmai.shared.response_formats import (
     JSONSchemaResponse,
     JSONObjectResponse,
     ResponseFormat,
+    get_response_format_name,
+    get_response_format_strict,
     get_response_schema,
 )
 from llmai.shared.responses import (
@@ -233,7 +235,12 @@ class GoogleClient(BaseClient):
         if use_tools_for_structured_output:
             return None
 
-        return get_response_schema(response_format)
+        return get_response_schema(
+            response_format,
+            supported_keys=None,
+            supported_string_formats=None,
+            strict=get_response_format_strict(response_format, default=False),
+        )
 
     def _llm_tools_to_google_tools(self, tools: list[Tool]) -> list[GoogleTool]:
         return [
@@ -242,18 +249,27 @@ class GoogleClient(BaseClient):
                     {
                         "name": tool.name,
                         "description": tool.description,
-                        "parameters": get_schema_as_dict(tool.input_schema),
+                        "parameters": get_schema_as_dict(
+                            tool.input_schema,
+                            supported_keys=None,
+                            supported_string_formats=None,
+                            strict=tool.strict,
+                        ),
                     }
                 ]
             )
             for tool in tools
         ]
 
-    def _response_schema_tool(self, response_schema: dict) -> GoogleTool:
+    def _response_schema_tool(
+        self,
+        response_format: ResponseFormat | None,
+        response_schema: dict,
+    ) -> GoogleTool:
         return GoogleTool(
             function_declarations=[
                 {
-                    "name": "ResponseSchema",
+                    "name": get_response_format_name(response_format, default="response"),
                     "description": "Provide the final response to the user",
                     "parameters": response_schema,
                 }
@@ -270,9 +286,16 @@ class GoogleClient(BaseClient):
         resolved = resolve_tools(tools, tool_choice)
         google_tools = self._llm_tools_to_google_tools(resolved.tools)
 
-        response_schema = get_response_schema(response_format)
+        response_schema = get_response_schema(
+            response_format,
+            supported_keys=None,
+            supported_string_formats=None,
+            strict=get_response_format_strict(response_format, default=False),
+        )
         if use_tools_for_structured_output and response_schema:
-            google_tools.append(self._response_schema_tool(response_schema))
+            google_tools.append(
+                self._response_schema_tool(response_format, response_schema)
+            )
 
         if not google_tools:
             return None, None
@@ -411,9 +434,13 @@ class GoogleClient(BaseClient):
                 response.candidates[0].content
             )
             response_schema_content: dict | None = None
+            response_schema_tool_name = get_response_format_name(
+                response_format,
+                default="response",
+            )
             user_tool_calls: list[AssistantToolCall] = []
             for each in raw_assistant_message.tool_calls:
-                if each.name == "ResponseSchema":
+                if each.name == response_schema_tool_name:
                     response_schema_content = self._parse_tool_arguments(each.arguments)
                 else:
                     user_tool_calls.append(each)
@@ -483,6 +510,10 @@ class GoogleClient(BaseClient):
             content_parts: list[TextContentPart | ImageContentPart] = []
             thinking_chunks: list[str] = []
             response_schema_content: dict | None = None
+            response_schema_tool_name = get_response_format_name(
+                response_format,
+                default="response",
+            )
             tool_calls_by_id: dict[str, AssistantToolCall] = {}
             tool_call_order: list[str] = []
             last_emitted_chunks: dict[str, str] = {}
@@ -570,7 +601,7 @@ class GoogleClient(BaseClient):
                     tool_name = function_call.name
                     arguments = json.dumps(function_call.args or {})
 
-                    if tool_name == "ResponseSchema":
+                    if tool_name == response_schema_tool_name:
                         response_schema_content = self._parse_tool_arguments(arguments)
                         if last_emitted_chunks.get(tool_id) != arguments:
                             last_emitted_chunks[tool_id] = arguments

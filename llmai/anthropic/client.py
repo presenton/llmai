@@ -31,6 +31,8 @@ from llmai.shared.messages import (
 )
 from llmai.shared.response_formats import (
     ResponseFormat,
+    get_response_format_name,
+    get_response_format_strict,
     get_response_schema,
 )
 from llmai.shared.responses import (
@@ -176,15 +178,25 @@ class AnthropicClient(BaseClient):
                 name=tool.name,
                 description=tool.description,
                 strict=tool.strict,
-                input_schema=get_schema_as_dict(tool.input_schema),
+                input_schema=get_schema_as_dict(
+                    tool.input_schema,
+                    supported_keys=None,
+                    supported_string_formats=None,
+                    strict=tool.strict,
+                ),
             )
             for tool in tools
         ]
 
-    def _response_schema_tool(self, response_schema: dict) -> dict[str, object]:
+    def _response_schema_tool(
+        self,
+        response_format: ResponseFormat | None,
+        response_schema: dict,
+    ) -> dict[str, object]:
         return {
-            "name": "ResponseSchema",
+            "name": get_response_format_name(response_format, default="response"),
             "description": "Provide the final response to the user",
+            "strict": get_response_format_strict(response_format, default=True),
             "input_schema": response_schema,
         }
 
@@ -200,9 +212,16 @@ class AnthropicClient(BaseClient):
             self._llm_tools_to_anthropic_tools(resolved.tools)
         )
 
-        response_schema = get_response_schema(response_format)
+        response_schema = get_response_schema(
+            response_format,
+            supported_keys=None,
+            supported_string_formats=None,
+            strict=get_response_format_strict(response_format, default=False),
+        )
         if response_schema and use_tools_for_structured_output is not False:
-            anthropic_tools.append(self._response_schema_tool(response_schema))
+            anthropic_tools.append(
+                self._response_schema_tool(response_format, response_schema)
+            )
 
         anthropic_tool_choice: dict[str, object] | Omit = Omit()
         if resolved.required_names:
@@ -292,6 +311,10 @@ class AnthropicClient(BaseClient):
             text_chunks: list[str] = []
             thinking_chunks: list[str] = []
             response_schema_content: dict | None = None
+            response_schema_tool_name = get_response_format_name(
+                response_format,
+                default="response",
+            )
             user_tool_calls: list[AssistantToolCall] = []
             for content in response.content:
                 if content.type == "text":
@@ -304,7 +327,7 @@ class AnthropicClient(BaseClient):
                         name=content.name,
                         arguments=json.dumps(content.input),
                     )
-                    if tool_call.name == "ResponseSchema":
+                    if tool_call.name == response_schema_tool_name:
                         response_schema_content = self._parse_tool_arguments(
                             tool_call.arguments
                         )
@@ -360,6 +383,10 @@ class AnthropicClient(BaseClient):
         text_chunks: list[str] = []
         thinking_chunks: list[str] = []
         response_schema_content: dict | None = None
+        response_schema_tool_name = get_response_format_name(
+            response_format,
+            default="response",
+        )
         user_tool_calls: list[AssistantToolCall] = []
         active_tool_name: str | None = None
         start_time = perf_counter()
@@ -395,7 +422,7 @@ class AnthropicClient(BaseClient):
                             thinking_chunks.append(event.delta.thinking)
                         elif event.delta.type == "input_json_delta" and active_tool_name:
                             chunk = event.delta.partial_json
-                            if active_tool_name == "ResponseSchema":
+                            if active_tool_name == response_schema_tool_name:
                                 yield ResponseStreamContentChunk(
                                     id=stream_id,
                                     source="direct",
@@ -419,7 +446,7 @@ class AnthropicClient(BaseClient):
                             name=event.content_block.name,
                             arguments=json.dumps(event.content_block.input),
                         )
-                        if tool_call.name == "ResponseSchema":
+                        if tool_call.name == response_schema_tool_name:
                             response_schema_content = self._parse_tool_arguments(
                                 tool_call.arguments
                             )
