@@ -9,10 +9,9 @@ Today the repository includes adapters for:
 - Google Gemini
 - Amazon Bedrock
 
-Each provider client exposes the same core entrypoints:
+Each provider client exposes the same core entrypoint:
 
-- `generate(...)`
-- `stream(...)`
+- `generate(..., stream=False)`
 
 ## Why This Exists
 
@@ -62,13 +61,13 @@ from llmai.shared import TextContentPart, UserMessage
 
 
 client = BedrockClient(
-    region_name="us-east-1",
+    region="us-east-1",
     aws_access_key_id="AWS_ACCESS_KEY_ID",
     aws_secret_access_key="AWS_SECRET_ACCESS_KEY",
 )
 
 # Or use Bedrock API-key auth:
-# client = BedrockClient(region_name="us-east-1", api_key="BEDROCK_API_KEY")
+# client = BedrockClient(region="us-east-1", api_key="BEDROCK_API_KEY")
 
 result = client.generate(
     model="us.anthropic.claude-3-5-haiku-20241022-v1:0",
@@ -202,19 +201,20 @@ from llmai.shared import TextContentPart, UserMessage
 
 client = AnthropicClient(api_key="ANTHROPIC_API_KEY")
 
-for chunk in client.stream(
+for chunk in client.generate(
     model="your-anthropic-model",
     messages=[
         UserMessage(
             content=[TextContentPart(text="Explain recursion in one paragraph.")]
         ),
     ],
+    stream=True,
 ):
-    if chunk.type == "stream_content":
+    if chunk.type == "content":
         print(chunk.chunk, end="")
 ```
 
-`stream(...)` yields incremental `ResponseStreamContentChunk` values while the model is responding. Some clients also emit a `ResponseStreamCompletionChunk` when the stream finishes.
+`generate(..., stream=True)` yields `ResponseStreamChunk` markers with `event="start"` and `event="end"` around each `content`, `thinking`, and `tool` section. `ResponseStreamCompletionChunk` is emitted bare at the end.
 
 ## Package Layout
 
@@ -232,5 +232,5 @@ The shared layer includes the main primitives you will use across providers:
 - `TextContentPart`, `ImageContentPart`
 - `Tool`, `ToolResponseMessage`
 - `JSONSchemaResponse`, `JSONObjectResponse`, `TextResponse`
-- `ResponseContent`, `ResponseStreamContentChunk`, `ResponseStreamCompletionChunk`
+- `ResponseContent`, `ResponseStreamChunk`, `ResponseStreamContentChunk`, `ResponseStreamThinkingChunk`, `ResponseStreamToolChunk`, `ResponseStreamCompletionChunk`
 - `ResponseUsage`

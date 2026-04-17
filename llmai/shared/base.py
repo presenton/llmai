@@ -1,11 +1,16 @@
 from abc import ABC, abstractmethod
 from logging import Logger
-from typing import Any, Generator
+from typing import Any
+from uuid import uuid4
 
 from llmai.shared.logs import LogLevel
 from llmai.shared.messages import Message
 from llmai.shared.response_formats import ResponseFormat
-from llmai.shared.responses import ResponseContent, ResponseStreamChunk
+from llmai.shared.responses import (
+    ResponseResult,
+    ResponseStreamChunk,
+    ResponseStreamChunkType,
+)
 from llmai.shared.tools import Tool, ToolChoice
 
 
@@ -55,6 +60,56 @@ class BaseClient(ABC):
         dumped = self._dump_value(value)
         return dumped if isinstance(dumped, dict) else {}
 
+    def _tool_call_id(self, tool_id: str | None = None) -> str:
+        if tool_id:
+            return tool_id
+        return f"call_{uuid4().hex}"
+
+    def _transition_stream_chunk(
+        self,
+        *,
+        current_chunk_type: ResponseStreamChunkType | None,
+        next_chunk_type: ResponseStreamChunkType,
+        current_tool: str | None = None,
+        next_tool: str | None = None,
+    ) -> tuple[ResponseStreamChunkType, str | None, list[ResponseStreamChunk]]:
+        if current_chunk_type == next_chunk_type and current_tool == next_tool:
+            return current_chunk_type, current_tool, []
+
+        chunks: list[ResponseStreamChunk] = []
+        if current_chunk_type is not None:
+            chunks.append(
+                ResponseStreamChunk(
+                    chunk_type=current_chunk_type,
+                    event="end",
+                    tool=current_tool if current_chunk_type == "tool" else None,
+                )
+            )
+
+        chunks.append(
+            ResponseStreamChunk(
+                chunk_type=next_chunk_type,
+                event="start",
+                tool=next_tool if next_chunk_type == "tool" else None,
+            )
+        )
+        return next_chunk_type, next_tool if next_chunk_type == "tool" else None, chunks
+
+    def _close_stream_chunk(
+        self,
+        *,
+        current_chunk_type: ResponseStreamChunkType | None,
+        current_tool: str | None = None,
+    ) -> ResponseStreamChunk | None:
+        if current_chunk_type is None:
+            return None
+
+        return ResponseStreamChunk(
+            chunk_type=current_chunk_type,
+            event="end",
+            tool=current_tool if current_chunk_type == "tool" else None,
+        )
+
     @abstractmethod
     def generate(
         self,
@@ -68,21 +123,6 @@ class BaseClient(ABC):
         max_tokens: int | None = None,
         extra_body: dict | None = None,
         use_tools_for_structured_output: bool | None = None,
-    ) -> ResponseContent:
-        raise NotImplementedError
-
-    @abstractmethod
-    def stream(
-        self,
-        *,
-        model: str,
-        messages: list[Message],
-        temperature: float | None = None,
-        tools: list[Tool] | None = None,
-        tool_choice: ToolChoice | None = None,
-        response_format: ResponseFormat | None = None,
-        max_tokens: int | None = None,
-        extra_body: dict | None = None,
-        use_tools_for_structured_output: bool | None = None,
-    ) -> Generator[ResponseStreamChunk, None, None]:
+        stream: bool = False,
+    ) -> ResponseResult:
         raise NotImplementedError

@@ -1,14 +1,14 @@
 from dev.shared import SLIDE_SCHEMA, TOOL_CHOICE, TOOL_DEFINITIONS
-from llmai.openai import OpenAIClient
+from llmai.bedrock import BedrockClient
 from llmai.shared.messages import UserMessage
 from llmai.shared.response_formats import JSONSchemaResponse
 
 
-MODEL = "gpt-5-mini"
+MODEL = "arn:aws:bedrock:eu-central-1:471112542209:inference-profile/eu.anthropic.claude-haiku-4-5-20251001-v1:0"
 
 
 def test_generate():
-    client = OpenAIClient()
+    client = BedrockClient()
 
     response = client.generate(
         model=MODEL,
@@ -16,13 +16,13 @@ def test_generate():
             UserMessage(content="What is presentation?"),
         ],
     )
-    print("OpenAI plain generation")
+    print("Bedrock plain generation")
     print(response)
     print("-" * 50)
 
 
 def test_generate_structured():
-    client = OpenAIClient()
+    client = BedrockClient()
 
     response = client.generate(
         model=MODEL,
@@ -35,13 +35,13 @@ def test_generate_structured():
             json_schema=SLIDE_SCHEMA,
         ),
     )
-    print("OpenAI structured generation")
+    print("Bedrock structured generation")
     print(response)
     print("-" * 50)
 
 
 def test_generate_tool_calls():
-    client = OpenAIClient()
+    client = BedrockClient()
 
     response = client.generate(
         model=MODEL,
@@ -51,15 +51,15 @@ def test_generate_tool_calls():
         tools=TOOL_DEFINITIONS,
         tool_choice=TOOL_CHOICE,
     )
-    print("OpenAI tool-call generation")
+    print("Bedrock tool-call generation")
     print(response)
     print("-" * 50)
 
 
 def test_stream():
-    client = OpenAIClient()
+    client = BedrockClient()
 
-    print("OpenAI plain stream")
+    print("Bedrock plain stream")
     for chunk in client.generate(
         model=MODEL,
         messages=[
@@ -72,9 +72,9 @@ def test_stream():
 
 
 def test_stream_structured():
-    client = OpenAIClient()
+    client = BedrockClient()
 
-    print("OpenAI structured stream")
+    print("Bedrock structured stream")
     for chunk in client.generate(
         model=MODEL,
         messages=[
@@ -90,9 +90,9 @@ def test_stream_structured():
 
 
 def test_stream_tool_calls():
-    client = OpenAIClient()
+    client = BedrockClient()
 
-    print("OpenAI tool-call stream")
+    print("Bedrock tool-call stream")
     for chunk in client.generate(
         model=MODEL,
         messages=[
@@ -108,7 +108,7 @@ def test_stream_tool_calls():
 
 # test_generate()
 # test_generate_structured()
-test_generate_tool_calls()
+# test_generate_tool_calls()
 # test_stream()
 # test_stream_structured()
 # test_stream_tool_calls()

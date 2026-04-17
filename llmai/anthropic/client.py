@@ -37,12 +37,28 @@ from llmai.shared.response_formats import (
 )
 from llmai.shared.responses import (
     ResponseContent,
+    ResponseResult,
     ResponseStreamCompletionChunk,
     ResponseStreamContentChunk,
+    ResponseStreamThinkingChunk,
+    ResponseStreamToolChunk,
     ResponseUsage,
 )
 from llmai.shared.schema import get_schema_as_dict
 from llmai.shared.tools import Tool, ToolChoice, resolve_tools
+
+ANTHROPIC_SUPPORTED_SCHEMA_KEYS = {
+    "$defs",
+    "$ref",
+    "additionalProperties",
+    "anyOf",
+    "description",
+    "enum",
+    "items",
+    "properties",
+    "required",
+    "type",
+}
 
 
 class AnthropicClient(BaseClient):
@@ -178,15 +194,26 @@ class AnthropicClient(BaseClient):
                 name=tool.name,
                 description=tool.description,
                 strict=tool.strict,
-                input_schema=get_schema_as_dict(
+                input_schema=self._anthropic_input_schema(
                     tool.input_schema,
-                    supported_keys=None,
-                    supported_string_formats=None,
                     strict=tool.strict,
                 ),
             )
             for tool in tools
         ]
+
+    def _anthropic_input_schema(
+        self,
+        schema: object,
+        *,
+        strict: bool,
+    ) -> dict:
+        return get_schema_as_dict(
+            schema,
+            supported_keys=ANTHROPIC_SUPPORTED_SCHEMA_KEYS,
+            supported_string_formats=None,
+            strict=strict,
+        )
 
     def _response_schema_tool(
         self,
@@ -214,11 +241,16 @@ class AnthropicClient(BaseClient):
 
         response_schema = get_response_schema(
             response_format,
-            supported_keys=None,
+            supported_keys=ANTHROPIC_SUPPORTED_SCHEMA_KEYS,
             supported_string_formats=None,
             strict=get_response_format_strict(response_format, default=False),
         )
+        response_schema_tool_name: str | None = None
         if response_schema and use_tools_for_structured_output is not False:
+            response_schema_tool_name = get_response_format_name(
+                response_format,
+                default="response",
+            )
             anthropic_tools.append(
                 self._response_schema_tool(response_format, response_schema)
             )
@@ -232,6 +264,14 @@ class AnthropicClient(BaseClient):
                 }
             else:
                 anthropic_tool_choice = {"type": "any"}
+        elif response_schema_tool_name:
+            if resolved.optional_names:
+                anthropic_tool_choice = {"type": "any"}
+            else:
+                anthropic_tool_choice = {
+                    "type": "tool",
+                    "name": response_schema_tool_name,
+                }
 
         return anthropic_tools or Omit(), anthropic_tool_choice
 
@@ -273,6 +313,45 @@ class AnthropicClient(BaseClient):
         )
 
     def generate(
+        self,
+        *,
+        model: str,
+        messages: list[Message],
+        temperature: float | None = None,
+        tools: list[Tool] | None = None,
+        tool_choice: ToolChoice | None = None,
+        response_format: ResponseFormat | None = None,
+        max_tokens: int | None = None,
+        extra_body: dict | None = None,
+        use_tools_for_structured_output: bool | None = None,
+        stream: bool = False,
+    ) -> ResponseResult:
+        if stream:
+            return self._generate_stream(
+                model=model,
+                messages=messages,
+                temperature=temperature,
+                tools=tools,
+                tool_choice=tool_choice,
+                response_format=response_format,
+                max_tokens=max_tokens,
+                extra_body=extra_body,
+                use_tools_for_structured_output=use_tools_for_structured_output,
+            )
+
+        return self._generate_once(
+            model=model,
+            messages=messages,
+            temperature=temperature,
+            tools=tools,
+            tool_choice=tool_choice,
+            response_format=response_format,
+            max_tokens=max_tokens,
+            extra_body=extra_body,
+            use_tools_for_structured_output=use_tools_for_structured_output,
+        )
+
+    def _generate_once(
         self,
         *,
         model: str,
@@ -357,7 +436,7 @@ class AnthropicClient(BaseClient):
         except Exception as exc:
             raise_llm_error(exc, provider="anthropic")
 
-    def stream(
+    def _generate_stream(
         self,
         *,
         model: str,
@@ -379,7 +458,8 @@ class AnthropicClient(BaseClient):
             )
         )
 
-        stream_id = "0"
+        current_chunk_type = None
+        current_tool = None
         text_chunks: list[str] = []
         thinking_chunks: list[str] = []
         response_schema_content: dict | None = None
@@ -389,6 +469,7 @@ class AnthropicClient(BaseClient):
         )
         user_tool_calls: list[AssistantToolCall] = []
         active_tool_name: str | None = None
+        active_tool_id: str | None = None
         start_time = perf_counter()
         usage: ResponseUsage | None = None
 
@@ -402,39 +483,63 @@ class AnthropicClient(BaseClient):
                 max_tokens=max_tokens or 8000,
                 temperature=temperature or Omit(),
                 extra_body=extra_body,
-            ) as stream:
-                for event in stream:
+            ) as stream_response:
+                for event in stream_response:
                     if event.type == "content_block_start":
                         if event.content_block.type == "tool_use":
                             active_tool_name = event.content_block.name
+                            active_tool_id = event.content_block.id
                         continue
 
                     if event.type == "content_block_delta":
                         if event.delta.type == "text_delta":
                             text_chunks.append(event.delta.text)
                             if not use_tools_for_structured_output:
+                                current_chunk_type, current_tool, stream_chunks = (
+                                    self._transition_stream_chunk(
+                                        current_chunk_type=current_chunk_type,
+                                        next_chunk_type="content",
+                                        current_tool=current_tool,
+                                    )
+                                )
+                                for stream_chunk in stream_chunks:
+                                    yield stream_chunk
                                 yield ResponseStreamContentChunk(
-                                    id=stream_id,
-                                    source="direct",
                                     chunk=event.delta.text,
                                 )
                         elif event.delta.type == "thinking_delta":
                             thinking_chunks.append(event.delta.thinking)
+                            current_chunk_type, current_tool, stream_chunks = (
+                                self._transition_stream_chunk(
+                                    current_chunk_type=current_chunk_type,
+                                    next_chunk_type="thinking",
+                                    current_tool=current_tool,
+                                )
+                            )
+                            for stream_chunk in stream_chunks:
+                                yield stream_chunk
+                            yield ResponseStreamThinkingChunk(
+                                chunk=event.delta.thinking,
+                            )
                         elif event.delta.type == "input_json_delta" and active_tool_name:
                             chunk = event.delta.partial_json
                             if active_tool_name == response_schema_tool_name:
-                                yield ResponseStreamContentChunk(
-                                    id=stream_id,
-                                    source="direct",
-                                    chunk=chunk,
+                                continue
+                            current_chunk_type, current_tool, stream_chunks = (
+                                self._transition_stream_chunk(
+                                    current_chunk_type=current_chunk_type,
+                                    next_chunk_type="tool",
+                                    current_tool=current_tool,
+                                    next_tool=active_tool_name,
                                 )
-                            else:
-                                yield ResponseStreamContentChunk(
-                                    id=stream_id,
-                                    source="tool",
-                                    tool=active_tool_name,
-                                    chunk=chunk,
-                                )
+                            )
+                            for stream_chunk in stream_chunks:
+                                yield stream_chunk
+                            yield ResponseStreamToolChunk(
+                                id=active_tool_id or active_tool_name or "",
+                                tool=active_tool_name,
+                                chunk=chunk,
+                            )
                         continue
 
                     if (
@@ -453,9 +558,10 @@ class AnthropicClient(BaseClient):
                         else:
                             user_tool_calls.append(tool_call)
                         active_tool_name = None
+                        active_tool_id = None
 
-                if hasattr(stream, "get_final_message"):
-                    final_message = stream.get_final_message()
+                if hasattr(stream_response, "get_final_message"):
+                    final_message = stream_response.get_final_message()
                     usage = self._response_usage(getattr(final_message, "usage", None))
 
             assistant_message = AssistantMessage(
@@ -472,8 +578,13 @@ class AnthropicClient(BaseClient):
                 final_content = ""
             duration_seconds = perf_counter() - start_time
 
+            stream_chunk = self._close_stream_chunk(
+                current_chunk_type=current_chunk_type,
+                current_tool=current_tool,
+            )
+            if stream_chunk is not None:
+                yield stream_chunk
             yield ResponseStreamCompletionChunk(
-                id=stream_id,
                 content=final_content,
                 messages=new_messages,
                 tool_calls=user_tool_calls,

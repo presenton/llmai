@@ -39,12 +39,63 @@ from llmai.shared.response_formats import (
 )
 from llmai.shared.responses import (
     ResponseContent,
+    ResponseResult,
     ResponseStreamCompletionChunk,
     ResponseStreamContentChunk,
+    ResponseStreamThinkingChunk,
+    ResponseStreamToolChunk,
     ResponseUsage,
 )
 from llmai.shared.schema import get_schema_as_dict
 from llmai.shared.tools import Tool, ToolChoice, resolve_tools
+
+GOOGLE_SUPPORTED_RESPONSE_SCHEMA_KEYS = {
+    "$anchor",
+    "$defs",
+    "$id",
+    "$ref",
+    "additionalProperties",
+    "anyOf",
+    "description",
+    "enum",
+    "format",
+    "items",
+    "maximum",
+    "maxItems",
+    "minimum",
+    "minItems",
+    "oneOf",
+    "prefixItems",
+    "properties",
+    "propertyOrdering",
+    "required",
+    "title",
+    "type",
+}
+GOOGLE_SUPPORTED_TOOL_SCHEMA_KEYS = {
+    "$defs",
+    "$ref",
+    "anyOf",
+    "description",
+    "enum",
+    "format",
+    "items",
+    "maximum",
+    "maxItems",
+    "maxLength",
+    "maxProperties",
+    "minimum",
+    "minItems",
+    "minLength",
+    "minProperties",
+    "nullable",
+    "pattern",
+    "properties",
+    "propertyOrdering",
+    "required",
+    "title",
+    "type",
+}
 
 
 class GoogleClient(BaseClient):
@@ -122,7 +173,7 @@ class GoogleClient(BaseClient):
             if function_call:
                 tool_calls.append(
                     AssistantToolCall(
-                        id=function_call.id or function_call.name,
+                        id=self._tool_call_id(function_call.id),
                         name=function_call.name,
                         arguments=json.dumps(function_call.args or {}),
                     )
@@ -237,7 +288,7 @@ class GoogleClient(BaseClient):
 
         return get_response_schema(
             response_format,
-            supported_keys=None,
+            supported_keys=GOOGLE_SUPPORTED_RESPONSE_SCHEMA_KEYS,
             supported_string_formats=None,
             strict=get_response_format_strict(response_format, default=False),
         )
@@ -251,7 +302,7 @@ class GoogleClient(BaseClient):
                         "description": tool.description,
                         "parameters": get_schema_as_dict(
                             tool.input_schema,
-                            supported_keys=None,
+                            supported_keys=GOOGLE_SUPPORTED_TOOL_SCHEMA_KEYS,
                             supported_string_formats=None,
                             strict=tool.strict,
                         ),
@@ -288,7 +339,11 @@ class GoogleClient(BaseClient):
 
         response_schema = get_response_schema(
             response_format,
-            supported_keys=None,
+            supported_keys=(
+                GOOGLE_SUPPORTED_TOOL_SCHEMA_KEYS
+                if use_tools_for_structured_output
+                else GOOGLE_SUPPORTED_RESPONSE_SCHEMA_KEYS
+            ),
             supported_string_formats=None,
             strict=get_response_format_strict(response_format, default=False),
         )
@@ -389,6 +444,45 @@ class GoogleClient(BaseClient):
         max_tokens: int | None = None,
         extra_body: dict | None = None,
         use_tools_for_structured_output: bool | None = None,
+        stream: bool = False,
+    ) -> ResponseResult:
+        if stream:
+            return self._generate_stream(
+                model=model,
+                messages=messages,
+                temperature=temperature,
+                tools=tools,
+                tool_choice=tool_choice,
+                response_format=response_format,
+                max_tokens=max_tokens,
+                extra_body=extra_body,
+                use_tools_for_structured_output=use_tools_for_structured_output,
+            )
+
+        return self._generate_once(
+            model=model,
+            messages=messages,
+            temperature=temperature,
+            tools=tools,
+            tool_choice=tool_choice,
+            response_format=response_format,
+            max_tokens=max_tokens,
+            extra_body=extra_body,
+            use_tools_for_structured_output=use_tools_for_structured_output,
+        )
+
+    def _generate_once(
+        self,
+        *,
+        model: str,
+        messages: list[Message],
+        temperature: float | None = None,
+        tools: list[Tool] | None = None,
+        tool_choice: ToolChoice | None = None,
+        response_format: ResponseFormat | None = None,
+        max_tokens: int | None = None,
+        extra_body: dict | None = None,
+        use_tools_for_structured_output: bool | None = None,
     ) -> ResponseContent:
         del extra_body
 
@@ -468,7 +562,7 @@ class GoogleClient(BaseClient):
         except Exception as exc:
             raise_llm_error(exc, provider="google")
 
-    def stream(
+    def _generate_stream(
         self,
         *,
         model: str,
@@ -506,7 +600,8 @@ class GoogleClient(BaseClient):
         )
 
         try:
-            stream_id = "0"
+            current_chunk_type = None
+            current_tool = None
             content_parts: list[TextContentPart | ImageContentPart] = []
             thinking_chunks: list[str] = []
             response_schema_content: dict | None = None
@@ -517,6 +612,7 @@ class GoogleClient(BaseClient):
             tool_calls_by_id: dict[str, AssistantToolCall] = {}
             tool_call_order: list[str] = []
             last_emitted_chunks: dict[str, str] = {}
+            generated_tool_ids_by_part_index: dict[int, str] = {}
             seen_images: set[tuple[str, str, bytes | str]] = set()
             usage: ResponseUsage | None = None
             start_time = perf_counter()
@@ -537,19 +633,34 @@ class GoogleClient(BaseClient):
                 ):
                     continue
 
-                for each_part in event.candidates[0].content.parts:
+                for part_index, each_part in enumerate(event.candidates[0].content.parts):
                     text = getattr(each_part, "text", None)
                     if text:
                         if getattr(each_part, "thought", False):
                             thinking_chunks.append(text)
+                            current_chunk_type, current_tool, stream_chunks = (
+                                self._transition_stream_chunk(
+                                    current_chunk_type=current_chunk_type,
+                                    next_chunk_type="thinking",
+                                    current_tool=current_tool,
+                                )
+                            )
+                            for stream_chunk in stream_chunks:
+                                yield stream_chunk
+                            yield ResponseStreamThinkingChunk(chunk=text)
                         else:
                             content_parts.append(TextContentPart(text=text))
                             if not use_tools_for_structured_output:
-                                yield ResponseStreamContentChunk(
-                                    id=stream_id,
-                                    source="direct",
-                                    chunk=text,
+                                current_chunk_type, current_tool, stream_chunks = (
+                                    self._transition_stream_chunk(
+                                        current_chunk_type=current_chunk_type,
+                                        next_chunk_type="content",
+                                        current_tool=current_tool,
+                                    )
                                 )
+                                for stream_chunk in stream_chunks:
+                                    yield stream_chunk
+                                yield ResponseStreamContentChunk(chunk=text)
 
                     inline_data = getattr(each_part, "inline_data", None)
                     if (
@@ -597,34 +708,38 @@ class GoogleClient(BaseClient):
                     if not function_call:
                         continue
 
-                    tool_id = function_call.id or function_call.name
                     tool_name = function_call.name
+                    tool_id = function_call.id or generated_tool_ids_by_part_index.setdefault(
+                        part_index,
+                        self._tool_call_id(),
+                    )
                     arguments = json.dumps(function_call.args or {})
 
                     if tool_name == response_schema_tool_name:
                         response_schema_content = self._parse_tool_arguments(arguments)
-                        if last_emitted_chunks.get(tool_id) != arguments:
-                            last_emitted_chunks[tool_id] = arguments
-                            yield ResponseStreamContentChunk(
-                                id=stream_id,
-                                source="direct",
-                                chunk=arguments,
-                            )
-                        continue
-
-                    tool_calls_by_id[tool_id] = AssistantToolCall(
-                        id=tool_id,
-                        name=tool_name,
-                        arguments=arguments,
-                    )
-                    if tool_id not in tool_call_order:
-                        tool_call_order.append(tool_id)
+                    else:
+                        tool_calls_by_id[tool_id] = AssistantToolCall(
+                            id=tool_id,
+                            name=tool_name,
+                            arguments=arguments,
+                        )
+                        if tool_id not in tool_call_order:
+                            tool_call_order.append(tool_id)
 
                     if last_emitted_chunks.get(tool_id) != arguments:
                         last_emitted_chunks[tool_id] = arguments
-                        yield ResponseStreamContentChunk(
-                            id=stream_id,
-                            source="tool",
+                        current_chunk_type, current_tool, stream_chunks = (
+                            self._transition_stream_chunk(
+                                current_chunk_type=current_chunk_type,
+                                next_chunk_type="tool",
+                                current_tool=current_tool,
+                                next_tool=tool_name,
+                            )
+                        )
+                        for stream_chunk in stream_chunks:
+                            yield stream_chunk
+                        yield ResponseStreamToolChunk(
+                            id=tool_id,
                             tool=tool_name,
                             chunk=arguments,
                         )
@@ -638,8 +753,13 @@ class GoogleClient(BaseClient):
             new_messages = [*messages, assistant_message]
             duration_seconds = perf_counter() - start_time
 
+            stream_chunk = self._close_stream_chunk(
+                current_chunk_type=current_chunk_type,
+                current_tool=current_tool,
+            )
+            if stream_chunk is not None:
+                yield stream_chunk
             yield ResponseStreamCompletionChunk(
-                id=stream_id,
                 content=self._final_content(
                     assistant_message.content,
                     response_schema_content,

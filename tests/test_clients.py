@@ -1,3 +1,4 @@
+import json
 import os
 import unittest
 from types import SimpleNamespace
@@ -31,6 +32,21 @@ def make_tool(name: str) -> Tool:
 
 def text_parts(text: str) -> list[TextContentPart]:
     return [TextContentPart(text=text)]
+
+
+def stream_marker_chunks(chunks):
+    return [chunk for chunk in chunks if chunk.type == "stream"]
+
+
+def stream_payload_chunks(chunks):
+    return [chunk for chunk in chunks if chunk.type != "stream"]
+
+
+def stream_marker_events(chunks):
+    return [
+        (chunk.event, chunk.chunk_type, chunk.tool)
+        for chunk in stream_marker_chunks(chunks)
+    ]
 
 
 class FakeOpenAICompletions:
@@ -171,6 +187,39 @@ class ClientBehaviorTests(unittest.TestCase):
                 "type": "function",
                 "function": {"name": "weather"},
             },
+        )
+
+    def test_openai_strict_tool_schemas_strip_unsupported_keywords(self):
+        client = OpenAIClient(api_key="test")
+
+        openai_tools = client._llm_tools_to_openai_tools(
+            [
+                Tool(
+                    name="weather",
+                    description="weather description",
+                    strict=True,
+                    schema={
+                        "type": "object",
+                        "properties": {
+                            "location": {
+                                "allOf": [
+                                    {"type": "string"},
+                                ],
+                                "description": "Resolved location",
+                            }
+                        },
+                        "required": ["location"],
+                    },
+                )
+            ]
+        )
+
+        parameters = openai_tools[0]["function"]["parameters"]
+        self.assertNotIn("allOf", parameters["properties"]["location"])
+        self.assertEqual(parameters["properties"]["location"]["type"], "string")
+        self.assertEqual(
+            parameters["properties"]["location"]["description"],
+            "Resolved location",
         )
 
     def test_openai_generate_filters_tools_without_custom_allowed_tools_wrapper(self):
@@ -380,32 +429,59 @@ class ClientBehaviorTests(unittest.TestCase):
         )
 
         chunks = list(
-            client.stream(
+            client.generate(
                 model="gpt-test",
                 messages=[UserMessage(content=text_parts("Weather?"))],
                 tools=[make_tool("get_weather")],
+                stream=True,
             )
         )
 
-        self.assertEqual(chunks[0].type, "stream_content")
-        self.assertEqual(chunks[0].source, "direct")
-        self.assertEqual(chunks[1].source, "tool")
-        self.assertEqual(chunks[2].source, "tool")
-        self.assertEqual(chunks[-1].type, "stream_completion")
-        self.assertEqual(chunks[-1].tool_calls[0].name, "get_weather")
+        marker_chunks = stream_marker_chunks(chunks)
+        payload_chunks = stream_payload_chunks(chunks)
+
         self.assertEqual(
-            chunks[-1].tool_calls[0].arguments,
+            [chunk.type for chunk in chunks],
+            [
+                "stream",
+                "content",
+                "stream",
+                "stream",
+                "tool",
+                "tool",
+                "stream",
+                "stream_completion",
+            ],
+        )
+        self.assertEqual(
+            stream_marker_events(chunks),
+            [
+                ("start", "content", None),
+                ("end", "content", None),
+                ("start", "tool", "get_weather"),
+                ("end", "tool", "get_weather"),
+            ],
+        )
+        self.assertEqual(payload_chunks[0].type, "content")
+        self.assertEqual(payload_chunks[1].type, "tool")
+        self.assertEqual(payload_chunks[2].type, "tool")
+        self.assertEqual(payload_chunks[1].tool, "get_weather")
+        self.assertEqual(payload_chunks[2].tool, "get_weather")
+        self.assertEqual(payload_chunks[-1].type, "stream_completion")
+        self.assertEqual(payload_chunks[-1].tool_calls[0].name, "get_weather")
+        self.assertEqual(
+            payload_chunks[-1].tool_calls[0].arguments,
             '{"city":"Kathmandu"}',
         )
-        self.assertEqual(chunks[-1].usage.input_tokens, 10)
-        self.assertEqual(chunks[-1].usage.output_tokens, 4)
-        self.assertEqual(chunks[-1].usage.total_tokens, 14)
+        self.assertEqual(payload_chunks[-1].usage.input_tokens, 10)
+        self.assertEqual(payload_chunks[-1].usage.output_tokens, 4)
+        self.assertEqual(payload_chunks[-1].usage.total_tokens, 14)
         self.assertEqual(
-            chunks[-1].usage.details["completion_tokens_details"]["reasoning_tokens"],
+            payload_chunks[-1].usage.details["completion_tokens_details"]["reasoning_tokens"],
             1,
         )
-        self.assertIsNotNone(chunks[-1].duration_seconds)
-        self.assertGreaterEqual(chunks[-1].duration_seconds, 0)
+        self.assertIsNotNone(payload_chunks[-1].duration_seconds)
+        self.assertGreaterEqual(payload_chunks[-1].duration_seconds, 0)
         self.assertEqual(
             fake_completions.calls[0]["stream_options"],
             {"include_usage": True},
@@ -746,16 +822,29 @@ class ClientBehaviorTests(unittest.TestCase):
         )
 
         chunks = list(
-            client.stream(
+            client.generate(
                 model="gpt-test",
                 messages=[UserMessage(content=text_parts("Answer in JSON"))],
                 response_format=JSONSchemaResponse(json_schema=AnswerSchema),
+                stream=True,
             )
         )
 
-        self.assertEqual(chunks[0].chunk, '{"answer":"')
-        self.assertEqual(chunks[1].chunk, 'pong"}')
-        self.assertEqual(chunks[-1].content, {"answer": "pong"})
+        marker_chunks = stream_marker_chunks(chunks)
+        payload_chunks = stream_payload_chunks(chunks)
+
+        self.assertEqual(
+            stream_marker_events(chunks),
+            [
+                ("start", "content", None),
+                ("end", "content", None),
+            ],
+        )
+        self.assertEqual(payload_chunks[0].type, "content")
+        self.assertEqual(payload_chunks[0].chunk, '{"answer":"')
+        self.assertEqual(payload_chunks[1].type, "content")
+        self.assertEqual(payload_chunks[1].chunk, 'pong"}')
+        self.assertEqual(payload_chunks[-1].content, {"answer": "pong"})
 
     def test_anthropic_required_tool_choice_keeps_optional_tools_visible(self):
         client = AnthropicClient(api_key="test")
@@ -771,6 +860,66 @@ class ClientBehaviorTests(unittest.TestCase):
 
         self.assertEqual([tool["name"] for tool in anthropic_tools], ["weather", "time"])
         self.assertEqual(tool_choice, {"type": "any"})
+
+    def test_anthropic_tool_schemas_strip_max_items(self):
+        client = AnthropicClient(api_key="test")
+
+        anthropic_tools, _ = client._get_anthropic_tools_and_tool_choice_or_omit(
+            [
+                Tool(
+                    name="weather",
+                    description="weather description",
+                    strict=True,
+                    schema={
+                        "type": "object",
+                        "properties": {
+                            "cities": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "maxItems": 3,
+                            }
+                        },
+                        "required": ["cities"],
+                    },
+                )
+            ],
+            None,
+            None,
+            None,
+        )
+
+        input_schema = anthropic_tools[0]["input_schema"]
+        self.assertNotIn("maxItems", input_schema["properties"]["cities"])
+
+    def test_anthropic_tool_schemas_keep_non_strict_keywords(self):
+        client = AnthropicClient(api_key="test")
+
+        anthropic_tools, _ = client._get_anthropic_tools_and_tool_choice_or_omit(
+            [
+                Tool(
+                    name="weather",
+                    description="weather description",
+                    strict=False,
+                    schema={
+                        "type": "object",
+                        "properties": {
+                            "cities": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "maxItems": 3,
+                            }
+                        },
+                        "required": ["cities"],
+                    },
+                )
+            ],
+            None,
+            None,
+            None,
+        )
+
+        input_schema = anthropic_tools[0]["input_schema"]
+        self.assertEqual(input_schema["properties"]["cities"]["maxItems"], 3)
 
     def test_anthropic_serializes_user_image_parts(self):
         client = AnthropicClient(api_key="test")
@@ -867,8 +1016,12 @@ class ClientBehaviorTests(unittest.TestCase):
             events=[
                 SimpleNamespace(
                     type="content_block_delta",
+                    delta=SimpleNamespace(type="thinking_delta", thinking="Plan"),
+                ),
+                SimpleNamespace(
+                    type="content_block_delta",
                     delta=SimpleNamespace(type="text_delta", text="Hello"),
-                )
+                ),
             ],
             final_message=SimpleNamespace(
                 usage=SimpleNamespace(
@@ -884,19 +1037,48 @@ class ClientBehaviorTests(unittest.TestCase):
         client._client = SimpleNamespace(messages=fake_messages)
 
         chunks = list(
-            client.stream(
+            client.generate(
                 model="claude-test",
                 messages=[UserMessage(content=text_parts("Stream please"))],
+                stream=True,
             )
         )
 
-        self.assertEqual(chunks[0].chunk, "Hello")
-        self.assertEqual(chunks[-1].usage.input_tokens, 9)
-        self.assertEqual(chunks[-1].usage.output_tokens, 2)
-        self.assertEqual(chunks[-1].usage.total_tokens, 11)
-        self.assertEqual(chunks[-1].usage.details["cache_creation_input_tokens"], 1)
-        self.assertIsNotNone(chunks[-1].duration_seconds)
-        self.assertGreaterEqual(chunks[-1].duration_seconds, 0)
+        marker_chunks = stream_marker_chunks(chunks)
+        payload_chunks = stream_payload_chunks(chunks)
+
+        self.assertEqual(
+            [chunk.type for chunk in chunks],
+            [
+                "stream",
+                "thinking",
+                "stream",
+                "stream",
+                "content",
+                "stream",
+                "stream_completion",
+            ],
+        )
+        self.assertEqual(
+            stream_marker_events(chunks),
+            [
+                ("start", "thinking", None),
+                ("end", "thinking", None),
+                ("start", "content", None),
+                ("end", "content", None),
+            ],
+        )
+        self.assertEqual(payload_chunks[0].type, "thinking")
+        self.assertEqual(payload_chunks[0].chunk, "Plan")
+        self.assertEqual(payload_chunks[1].type, "content")
+        self.assertEqual(payload_chunks[1].chunk, "Hello")
+        self.assertEqual(payload_chunks[-1].messages[-1].thinking, "Plan")
+        self.assertEqual(payload_chunks[-1].usage.input_tokens, 9)
+        self.assertEqual(payload_chunks[-1].usage.output_tokens, 2)
+        self.assertEqual(payload_chunks[-1].usage.total_tokens, 11)
+        self.assertEqual(payload_chunks[-1].usage.details["cache_creation_input_tokens"], 1)
+        self.assertIsNotNone(payload_chunks[-1].duration_seconds)
+        self.assertGreaterEqual(payload_chunks[-1].duration_seconds, 0)
 
     def test_anthropic_generate_hides_internal_response_schema_tool(self):
         fake_response = SimpleNamespace(
@@ -929,6 +1111,84 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(result.messages[-1].tool_calls, [])
         self.assertEqual(fake_messages.calls[0]["tools"][0]["name"], "final_answer")
         self.assertFalse(fake_messages.calls[0]["tools"][0]["strict"])
+        self.assertEqual(
+            fake_messages.calls[0]["tool_choice"],
+            {"type": "tool", "name": "final_answer"},
+        )
+
+    def test_anthropic_stream_hides_internal_response_schema_tool(self):
+        fake_stream = FakeAnthropicStream(
+            events=[
+                SimpleNamespace(
+                    type="content_block_start",
+                    content_block=SimpleNamespace(
+                        type="tool_use",
+                        id="schema_1",
+                        name="final_answer",
+                    ),
+                ),
+                SimpleNamespace(
+                    type="content_block_delta",
+                    delta=SimpleNamespace(
+                        type="input_json_delta",
+                        partial_json='{"answer": ',
+                    ),
+                ),
+                SimpleNamespace(
+                    type="content_block_delta",
+                    delta=SimpleNamespace(
+                        type="input_json_delta",
+                        partial_json='"done"}',
+                    ),
+                ),
+                SimpleNamespace(
+                    type="content_block_stop",
+                    content_block=SimpleNamespace(
+                        type="tool_use",
+                        id="schema_1",
+                        name="final_answer",
+                        input={"answer": "done"},
+                    ),
+                ),
+            ],
+            final_message=SimpleNamespace(
+                usage=SimpleNamespace(
+                    input_tokens=8,
+                    output_tokens=2,
+                )
+            ),
+        )
+        fake_messages = FakeAnthropicMessages(stream_response=fake_stream)
+
+        client = AnthropicClient(api_key="test")
+        client._client = SimpleNamespace(messages=fake_messages)
+
+        chunks = list(
+            client.generate(
+                model="claude-test",
+                messages=[UserMessage(content=text_parts("Answer in JSON"))],
+                response_format=JSONSchemaResponse(
+                    name="final_answer",
+                    strict=False,
+                    json_schema=AnswerSchema,
+                ),
+                stream=True,
+            )
+        )
+
+        marker_chunks = stream_marker_chunks(chunks)
+        payload_chunks = stream_payload_chunks(chunks)
+
+        self.assertEqual(marker_chunks, [])
+        self.assertEqual(len(payload_chunks), 1)
+        self.assertEqual(payload_chunks[0].type, "stream_completion")
+        self.assertEqual(payload_chunks[0].content, {"answer": "done"})
+        self.assertEqual(payload_chunks[0].tool_calls, [])
+        self.assertEqual(payload_chunks[0].messages[-1].tool_calls, [])
+        self.assertEqual(
+            fake_messages.stream_calls[0]["tool_choice"],
+            {"type": "tool", "name": "final_answer"},
+        )
 
     def test_google_required_tool_choice_uses_any_mode_with_allowed_names(self):
         client = GoogleClient(api_key="test")
@@ -946,6 +1206,135 @@ class ClientBehaviorTests(unittest.TestCase):
             tool_config.function_calling_config.allowed_function_names,
             ["weather"],
         )
+
+    def test_google_tool_schemas_strip_unsupported_keywords_when_strict(self):
+        client = GoogleClient(api_key="test")
+
+        google_tools, _ = client._get_google_tools_and_tool_config(
+            [
+                Tool(
+                    name="weather",
+                    description="weather description",
+                    strict=True,
+                    schema={
+                        "type": "object",
+                        "properties": {
+                            "location": {
+                                "type": "object",
+                                "properties": {
+                                    "city": {
+                                        "type": "string",
+                                        "example": "Kathmandu",
+                                    },
+                                },
+                                "required": ["city"],
+                            }
+                        },
+                        "required": ["location"],
+                    },
+                )
+            ],
+            None,
+            None,
+            None,
+        )
+
+        parameters = google_tools[0].function_declarations[0].parameters
+        payload = parameters.model_dump(exclude_none=True, by_alias=True)
+        self.assertNotIn("example", payload["properties"]["location"]["properties"]["city"])
+        self.assertNotIn("additionalProperties", payload)
+        self.assertNotIn("additional_properties", payload)
+
+    def test_google_tool_schemas_keep_non_strict_keywords(self):
+        client = GoogleClient(api_key="test")
+
+        google_tools, _ = client._get_google_tools_and_tool_config(
+            [
+                Tool(
+                    name="weather",
+                    description="weather description",
+                    strict=False,
+                    schema={
+                        "type": "object",
+                        "properties": {
+                            "location": {
+                                "type": "object",
+                                "properties": {
+                                    "city": {
+                                        "type": "string",
+                                        "example": "Kathmandu",
+                                    },
+                                },
+                                "required": ["city"],
+                            }
+                        },
+                        "required": ["location"],
+                    },
+                )
+            ],
+            None,
+            None,
+            None,
+        )
+
+        parameters = google_tools[0].function_declarations[0].parameters
+        payload = parameters.model_dump(exclude_none=True, by_alias=True)
+        self.assertEqual(
+            payload["properties"]["location"]["properties"]["city"]["example"],
+            "Kathmandu",
+        )
+
+    def test_google_stream_generates_tool_id_when_missing(self):
+        fake_models = FakeGoogleModels(
+            stream_response=iter(
+                [
+                    SimpleNamespace(
+                        candidates=[
+                            SimpleNamespace(
+                                content=SimpleNamespace(
+                                    parts=[
+                                        SimpleNamespace(
+                                            text=None,
+                                            thought=False,
+                                            inline_data=None,
+                                            file_data=None,
+                                            function_call=SimpleNamespace(
+                                                id=None,
+                                                name="get_weather",
+                                                args={"city": "Kathmandu"},
+                                            ),
+                                        )
+                                    ]
+                                )
+                            )
+                        ]
+                    )
+                ]
+            )
+        )
+
+        client = GoogleClient(api_key="test")
+        client._client = SimpleNamespace(models=fake_models)
+
+        chunks = list(
+            client.generate(
+                model="gemini-test",
+                messages=[UserMessage(content=text_parts("Weather?"))],
+                tools=[make_tool("get_weather")],
+                stream=True,
+            )
+        )
+
+        payload_chunks = stream_payload_chunks(chunks)
+        tool_chunk = payload_chunks[0]
+        completion_chunk = payload_chunks[-1]
+
+        self.assertEqual(tool_chunk.type, "tool")
+        self.assertEqual(tool_chunk.tool, "get_weather")
+        self.assertTrue(tool_chunk.id.startswith("call_"))
+        self.assertNotEqual(tool_chunk.id, "get_weather")
+        self.assertEqual(completion_chunk.tool_calls[0].id, tool_chunk.id)
+        self.assertEqual(completion_chunk.messages[-1].tool_calls[0].id, tool_chunk.id)
 
     def test_google_serializes_user_images(self):
         client = GoogleClient(api_key="test")
@@ -1043,6 +1432,13 @@ class ClientBehaviorTests(unittest.TestCase):
                                 content=SimpleNamespace(
                                     parts=[
                                         SimpleNamespace(
+                                            text="Plan",
+                                            thought=True,
+                                            inline_data=None,
+                                            file_data=None,
+                                            function_call=None,
+                                        ),
+                                        SimpleNamespace(
                                             text="Hello",
                                             thought=False,
                                             inline_data=None,
@@ -1090,24 +1486,51 @@ class ClientBehaviorTests(unittest.TestCase):
         client._client = SimpleNamespace(models=fake_models)
 
         chunks = list(
-            client.stream(
+            client.generate(
                 model="gemini-test",
                 messages=[UserMessage(content=text_parts("Show me something"))],
+                stream=True,
             )
         )
 
-        self.assertEqual(len(chunks), 2)
-        self.assertEqual(chunks[0].type, "stream_content")
-        self.assertEqual(chunks[0].chunk, "Hello")
-        self.assertEqual(chunks[-1].type, "stream_completion")
-        self.assertIsInstance(chunks[-1].content, list)
-        self.assertEqual(chunks[-1].content[0].text, "Hello")
-        self.assertEqual(chunks[-1].content[1].mime_type, "image/png")
-        self.assertEqual(chunks[-1].usage.input_tokens, 6)
-        self.assertEqual(chunks[-1].usage.output_tokens, 2)
-        self.assertEqual(chunks[-1].usage.total_tokens, 8)
-        self.assertIsNotNone(chunks[-1].duration_seconds)
-        self.assertGreaterEqual(chunks[-1].duration_seconds, 0)
+        marker_chunks = stream_marker_chunks(chunks)
+        payload_chunks = stream_payload_chunks(chunks)
+
+        self.assertEqual(
+            [chunk.type for chunk in chunks],
+            [
+                "stream",
+                "thinking",
+                "stream",
+                "stream",
+                "content",
+                "stream",
+                "stream_completion",
+            ],
+        )
+        self.assertEqual(
+            stream_marker_events(chunks),
+            [
+                ("start", "thinking", None),
+                ("end", "thinking", None),
+                ("start", "content", None),
+                ("end", "content", None),
+            ],
+        )
+        self.assertEqual(payload_chunks[0].type, "thinking")
+        self.assertEqual(payload_chunks[0].chunk, "Plan")
+        self.assertEqual(payload_chunks[1].type, "content")
+        self.assertEqual(payload_chunks[1].chunk, "Hello")
+        self.assertEqual(payload_chunks[-1].type, "stream_completion")
+        self.assertEqual(payload_chunks[-1].messages[-1].thinking, "Plan")
+        self.assertIsInstance(payload_chunks[-1].content, list)
+        self.assertEqual(payload_chunks[-1].content[0].text, "Hello")
+        self.assertEqual(payload_chunks[-1].content[1].mime_type, "image/png")
+        self.assertEqual(payload_chunks[-1].usage.input_tokens, 6)
+        self.assertEqual(payload_chunks[-1].usage.output_tokens, 2)
+        self.assertEqual(payload_chunks[-1].usage.total_tokens, 8)
+        self.assertIsNotNone(payload_chunks[-1].duration_seconds)
+        self.assertGreaterEqual(payload_chunks[-1].duration_seconds, 0)
 
     def test_google_generate_hides_internal_response_schema_tool(self):
         fake_response = SimpleNamespace(
@@ -1182,7 +1605,7 @@ class ClientBehaviorTests(unittest.TestCase):
             client, sessions, _ = self.make_bedrock_client(
                 fake_runtime,
                 api_key="bedrock-api-key",
-                region_name="us-east-1",
+                region="us-east-1",
             )
             self.assertEqual(os.environ["AWS_BEARER_TOKEN_BEDROCK"], "bedrock-api-key")
 
@@ -1201,7 +1624,7 @@ class ClientBehaviorTests(unittest.TestCase):
             self.make_bedrock_client(
                 fake_runtime,
                 api_key="bedrock-api-key",
-                region_name="us-east-1",
+                region="us-east-1",
                 aws_access_key_id="aws-id",
                 aws_secret_access_key="aws-secret",
             )
@@ -1213,7 +1636,7 @@ class ClientBehaviorTests(unittest.TestCase):
         fake_runtime = FakeBedrockRuntimeClient(response={})
         client, sessions, _ = self.make_bedrock_client(
             fake_runtime,
-            region_name="us-west-2",
+            region="us-west-2",
             aws_access_key_id="aws-id",
             aws_secret_access_key="aws-secret",
             aws_session_token="aws-session",
@@ -1245,7 +1668,7 @@ class ClientBehaviorTests(unittest.TestCase):
         )
         client, _, _ = self.make_bedrock_client(
             fake_runtime,
-            region_name="us-east-1",
+            region="us-east-1",
             aws_access_key_id="aws-id",
             aws_secret_access_key="aws-secret",
         )
@@ -1281,7 +1704,7 @@ class ClientBehaviorTests(unittest.TestCase):
         )
         client, _, _ = self.make_bedrock_client(
             fake_runtime,
-            region_name="us-east-1",
+            region="us-east-1",
             aws_access_key_id="aws-id",
             aws_secret_access_key="aws-secret",
         )
@@ -1302,11 +1725,113 @@ class ClientBehaviorTests(unittest.TestCase):
             fake_runtime.calls[0]["outputConfig"]["textFormat"]["structure"]["jsonSchema"]["schema"],
         )
 
+    def test_bedrock_native_structured_output_sanitizes_response_schema_for_both_strict_values(self):
+        schema = {
+            "type": "object",
+            "properties": {
+                "bulletPoints": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "maxItems": 3,
+                },
+                "image": {
+                    "type": "object",
+                    "properties": {
+                        "prompt": {
+                            "type": "string",
+                            "minWords": 2,
+                        }
+                    },
+                    "required": ["prompt"],
+                },
+            },
+            "required": ["bulletPoints", "image"],
+        }
+
+        for strict in (False, True):
+            with self.subTest(strict=strict):
+                fake_runtime = FakeBedrockRuntimeClient(response={})
+                client, _, _ = self.make_bedrock_client(
+                    fake_runtime,
+                    region="us-east-1",
+                    aws_access_key_id="aws-id",
+                    aws_secret_access_key="aws-secret",
+                )
+
+                client.generate(
+                    model="anthropic.claude-3-5-haiku",
+                    messages=[UserMessage(content=text_parts("Answer in JSON"))],
+                    response_format=JSONSchemaResponse(
+                        strict=strict,
+                        json_schema=schema,
+                    ),
+                )
+
+                sent_schema = json.loads(
+                    fake_runtime.calls[0]["outputConfig"]["textFormat"]["structure"]["jsonSchema"]["schema"]
+                )
+                self.assertNotIn("maxItems", sent_schema["properties"]["bulletPoints"])
+                self.assertNotIn(
+                    "minWords",
+                    sent_schema["properties"]["image"]["properties"]["prompt"],
+                )
+
+    def test_bedrock_tool_structured_output_sanitizes_response_schema_for_both_strict_values(self):
+        schema = {
+            "type": "object",
+            "properties": {
+                "bulletPoints": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "maxItems": 3,
+                },
+                "image": {
+                    "type": "object",
+                    "properties": {
+                        "prompt": {
+                            "type": "string",
+                            "minWords": 2,
+                        }
+                    },
+                    "required": ["prompt"],
+                },
+            },
+            "required": ["bulletPoints", "image"],
+        }
+
+        client, _, _ = self.make_bedrock_client(
+            FakeBedrockRuntimeClient(response={}),
+            region="us-east-1",
+            aws_access_key_id="aws-id",
+            aws_secret_access_key="aws-secret",
+        )
+
+        for strict in (False, True):
+            with self.subTest(strict=strict):
+                tool_config = client._get_bedrock_tool_config(
+                    None,
+                    None,
+                    JSONSchemaResponse(
+                        name="final_answer",
+                        strict=strict,
+                        json_schema=schema,
+                    ),
+                    True,
+                )
+
+                response_schema = tool_config["tools"][0]["toolSpec"]["inputSchema"]["json"]
+                self.assertNotIn("maxItems", response_schema["properties"]["bulletPoints"])
+                self.assertNotIn(
+                    "minWords",
+                    response_schema["properties"]["image"]["properties"]["prompt"],
+                )
+                self.assertEqual(tool_config["tools"][0]["toolSpec"]["strict"], strict)
+
     def test_bedrock_tool_structured_output_uses_custom_name_and_strict(self):
         fake_runtime = FakeBedrockRuntimeClient(response={})
         client, _, _ = self.make_bedrock_client(
             fake_runtime,
-            region_name="us-east-1",
+            region="us-east-1",
             aws_access_key_id="aws-id",
             aws_secret_access_key="aws-secret",
         )
@@ -1346,7 +1871,7 @@ class ClientBehaviorTests(unittest.TestCase):
         )
         client, _, _ = self.make_bedrock_client(
             fake_runtime,
-            region_name="us-east-1",
+            region="us-east-1",
             aws_access_key_id="aws-id",
             aws_secret_access_key="aws-secret",
         )
@@ -1378,7 +1903,7 @@ class ClientBehaviorTests(unittest.TestCase):
         )
         client, _, _ = self.make_bedrock_client(
             fake_runtime,
-            region_name="us-east-1",
+            region="us-east-1",
             aws_access_key_id="aws-id",
             aws_secret_access_key="aws-secret",
         )
@@ -1434,6 +1959,14 @@ class ClientBehaviorTests(unittest.TestCase):
                         },
                         {
                             "contentBlockDelta": {
+                                "contentBlockIndex": 0,
+                                "delta": {
+                                    "reasoningContent": {"text": "Plan"}
+                                },
+                            }
+                        },
+                        {
+                            "contentBlockDelta": {
                                 "contentBlockIndex": 1,
                                 "delta": {
                                     "toolUse": {"input": '{"city":"Kath'}
@@ -1463,33 +1996,133 @@ class ClientBehaviorTests(unittest.TestCase):
         )
         client, _, _ = self.make_bedrock_client(
             fake_runtime,
-            region_name="us-east-1",
+            region="us-east-1",
             aws_access_key_id="aws-id",
             aws_secret_access_key="aws-secret",
         )
 
         chunks = list(
-            client.stream(
+            client.generate(
                 model="anthropic.claude-3-5-haiku",
                 messages=[UserMessage(content=text_parts("Weather?"))],
                 tools=[make_tool("get_weather")],
+                stream=True,
             )
         )
 
-        self.assertEqual(chunks[0].type, "stream_content")
-        self.assertEqual(chunks[0].chunk, "Hello")
-        self.assertEqual(chunks[1].source, "tool")
-        self.assertEqual(chunks[2].source, "tool")
-        self.assertEqual(chunks[-1].tool_calls[0].name, "get_weather")
+        marker_chunks = stream_marker_chunks(chunks)
+        payload_chunks = stream_payload_chunks(chunks)
+
         self.assertEqual(
-            chunks[-1].tool_calls[0].arguments,
+            [chunk.type for chunk in chunks],
+            [
+                "stream",
+                "content",
+                "stream",
+                "stream",
+                "thinking",
+                "stream",
+                "stream",
+                "tool",
+                "tool",
+                "stream",
+                "stream_completion",
+            ],
+        )
+        self.assertEqual(
+            stream_marker_events(chunks),
+            [
+                ("start", "content", None),
+                ("end", "content", None),
+                ("start", "thinking", None),
+                ("end", "thinking", None),
+                ("start", "tool", "get_weather"),
+                ("end", "tool", "get_weather"),
+            ],
+        )
+        self.assertEqual(payload_chunks[0].type, "content")
+        self.assertEqual(payload_chunks[0].chunk, "Hello")
+        self.assertEqual(payload_chunks[1].type, "thinking")
+        self.assertEqual(payload_chunks[1].chunk, "Plan")
+        self.assertEqual(payload_chunks[2].type, "tool")
+        self.assertEqual(payload_chunks[3].type, "tool")
+        self.assertEqual(payload_chunks[2].tool, "get_weather")
+        self.assertEqual(payload_chunks[3].tool, "get_weather")
+        self.assertEqual(payload_chunks[-1].messages[-1].thinking, "Plan")
+        self.assertEqual(payload_chunks[-1].tool_calls[0].name, "get_weather")
+        self.assertEqual(
+            payload_chunks[-1].tool_calls[0].arguments,
             '{"city":"Kathmandu"}',
         )
-        self.assertEqual(chunks[-1].usage.input_tokens, 10)
-        self.assertEqual(chunks[-1].usage.output_tokens, 4)
-        self.assertEqual(chunks[-1].usage.total_tokens, 14)
-        self.assertIsNotNone(chunks[-1].duration_seconds)
-        self.assertGreaterEqual(chunks[-1].duration_seconds, 0)
+        self.assertEqual(payload_chunks[-1].usage.input_tokens, 10)
+        self.assertEqual(payload_chunks[-1].usage.output_tokens, 4)
+        self.assertEqual(payload_chunks[-1].usage.total_tokens, 14)
+        self.assertIsNotNone(payload_chunks[-1].duration_seconds)
+        self.assertGreaterEqual(payload_chunks[-1].duration_seconds, 0)
+
+    def test_bedrock_stream_generates_tool_id_when_missing(self):
+        fake_runtime = FakeBedrockRuntimeClient(
+            stream_response={
+                "stream": iter(
+                    [
+                        {
+                            "contentBlockStart": {
+                                "contentBlockIndex": 0,
+                                "start": {
+                                    "toolUse": {
+                                        "name": "get_weather",
+                                        "type": "server_tool_use",
+                                    }
+                                },
+                            }
+                        },
+                        {
+                            "contentBlockDelta": {
+                                "contentBlockIndex": 0,
+                                "delta": {
+                                    "toolUse": {"input": '{"city":"Kath'}
+                                },
+                            }
+                        },
+                        {
+                            "contentBlockDelta": {
+                                "contentBlockIndex": 0,
+                                "delta": {
+                                    "toolUse": {"input": 'mandu"}'}
+                                },
+                            }
+                        },
+                    ]
+                )
+            }
+        )
+        client, _, _ = self.make_bedrock_client(
+            fake_runtime,
+            region="us-east-1",
+            aws_access_key_id="aws-id",
+            aws_secret_access_key="aws-secret",
+        )
+
+        chunks = list(
+            client.generate(
+                model="anthropic.claude-3-5-haiku",
+                messages=[UserMessage(content=text_parts("Weather?"))],
+                tools=[make_tool("get_weather")],
+                stream=True,
+            )
+        )
+
+        payload_chunks = stream_payload_chunks(chunks)
+        tool_chunk_1 = payload_chunks[0]
+        tool_chunk_2 = payload_chunks[1]
+        completion_chunk = payload_chunks[-1]
+
+        self.assertEqual(tool_chunk_1.type, "tool")
+        self.assertEqual(tool_chunk_2.type, "tool")
+        self.assertTrue(tool_chunk_1.id.startswith("call_"))
+        self.assertEqual(tool_chunk_1.id, tool_chunk_2.id)
+        self.assertEqual(completion_chunk.tool_calls[0].id, tool_chunk_1.id)
+        self.assertEqual(completion_chunk.messages[-1].tool_calls[0].id, tool_chunk_1.id)
 
     def test_bedrock_generate_wraps_provider_rate_limit_errors(self):
         fake_runtime = FakeBedrockRuntimeClient(
@@ -1508,7 +2141,7 @@ class ClientBehaviorTests(unittest.TestCase):
         )
         client, _, _ = self.make_bedrock_client(
             fake_runtime,
-            region_name="us-east-1",
+            region="us-east-1",
             aws_access_key_id="aws-id",
             aws_secret_access_key="aws-secret",
         )

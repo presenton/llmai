@@ -1,3 +1,5 @@
+from llmai.shared.tools import Tool
+
 IMAGE_SCHEMA = {
     "type": "object",
     "properties": {
@@ -37,4 +39,45 @@ SLIDE_SCHEMA = {
         "image": IMAGE_SCHEMA,
     },
     "required": ["title", "image", "url", "email", "bulletPoints"],
+}
+
+TOOL_DEFINITIONS = [
+    Tool(
+        name="get_weather",
+        description="Get the current weather for a city",
+        schema={
+            "type": "object",
+            "properties": {
+                "city": {"type": "string"},
+            },
+            "required": ["city"],
+        },
+    ),
+    Tool(
+        name="get_time",
+        description="Get the current local time for a city",
+        schema={
+            "type": "object",
+            "properties": {
+                "city": {"type": "string"},
+            },
+            "required": ["city"],
+        },
+    ),
+    Tool(
+        name="get_timezone",
+        description="Get the timezone identifier for a city",
+        schema={
+            "type": "object",
+            "properties": {
+                "city": {"type": "string"},
+            },
+            "required": ["city"],
+        },
+    ),
+]
+
+TOOL_CHOICE = {
+    "required": ["get_weather", "get_time"],
+    "optional": ["get_timezone"],
 }

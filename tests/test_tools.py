@@ -176,7 +176,7 @@ class SchemaTests(unittest.TestCase):
             strict=False,
         )
 
-        self.assertFalse(preserved["additionalProperties"])
+        self.assertNotIn("additionalProperties", preserved)
         self.assertEqual(preserved["properties"]["url"]["format"], "uri")
         self.assertEqual(
             preserved["properties"]["url"]["examples"],

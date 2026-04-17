@@ -58,8 +58,10 @@ from llmai.shared.response_formats import (
 )
 from llmai.shared.responses import (
     ResponseContent,
+    ResponseResult,
     ResponseStreamCompletionChunk,
     ResponseStreamContentChunk,
+    ResponseStreamToolChunk,
     ResponseUsage,
 )
 from llmai.shared.schema import get_schema_as_dict
@@ -80,10 +82,8 @@ OPENAI_SUPPORTED_SCHEMA_KEYS = {
     "$defs",
     "$ref",
     "additionalProperties",
-    "allOf",
     "anyOf",
     "const",
-    "definitions",
     "description",
     "enum",
     "exclusiveMaximum",
@@ -267,7 +267,9 @@ class OpenAIClient(BaseClient):
             return ResponseFormatJSONSchema(
                 type="json_schema",
                 json_schema={
-                    "name": get_response_format_name(response_format, default="response"),
+                    "name": get_response_format_name(
+                        response_format, default="response"
+                    ),
                     "schema": get_response_schema(
                         response_format,
                         supported_keys=OPENAI_SUPPORTED_SCHEMA_KEYS,
@@ -339,9 +341,8 @@ class OpenAIClient(BaseClient):
         response_format: ResponseFormat | None,
     ) -> object:
         text_content = self._assistant_content_to_openai_content(content)
-        if (
-            text_content
-            and isinstance(response_format, (JSONSchemaResponse, JSONObjectResponse))
+        if text_content and isinstance(
+            response_format, (JSONSchemaResponse, JSONObjectResponse)
         ):
             return json.loads(text_content)
 
@@ -382,6 +383,45 @@ class OpenAIClient(BaseClient):
         max_tokens: int | None = None,
         extra_body: dict | None = None,
         use_tools_for_structured_output: bool | None = None,
+        stream: bool = False,
+    ) -> ResponseResult:
+        if stream:
+            return self._generate_stream(
+                model=model,
+                messages=messages,
+                temperature=temperature,
+                tools=tools,
+                tool_choice=tool_choice,
+                response_format=response_format,
+                max_tokens=max_tokens,
+                extra_body=extra_body,
+                use_tools_for_structured_output=use_tools_for_structured_output,
+            )
+
+        return self._generate_once(
+            model=model,
+            messages=messages,
+            temperature=temperature,
+            tools=tools,
+            tool_choice=tool_choice,
+            response_format=response_format,
+            max_tokens=max_tokens,
+            extra_body=extra_body,
+            use_tools_for_structured_output=use_tools_for_structured_output,
+        )
+
+    def _generate_once(
+        self,
+        *,
+        model: str,
+        messages: list[Message],
+        temperature: float | None = None,
+        tools: list[Tool] | None = None,
+        tool_choice: ToolChoice | None = None,
+        response_format: ResponseFormat | None = None,
+        max_tokens: int | None = None,
+        extra_body: dict | None = None,
+        use_tools_for_structured_output: bool | None = None,
     ) -> ResponseContent:
         del use_tools_for_structured_output
 
@@ -395,7 +435,9 @@ class OpenAIClient(BaseClient):
                 model=model,
                 messages=self._messages_to_openai_messages(messages),
                 temperature=temperature,
-                response_format=self._get_openai_response_format_or_omit(response_format),
+                response_format=self._get_openai_response_format_or_omit(
+                    response_format
+                ),
                 tools=openai_tools,
                 tool_choice=openai_tool_choice,
                 max_completion_tokens=max_tokens,
@@ -424,7 +466,7 @@ class OpenAIClient(BaseClient):
         except Exception as exc:
             raise_llm_error(exc, provider="openai")
 
-    def stream(
+    def _generate_stream(
         self,
         *,
         model: str,
@@ -449,7 +491,9 @@ class OpenAIClient(BaseClient):
                 model=model,
                 messages=self._messages_to_openai_messages(messages),
                 temperature=temperature,
-                response_format=self._get_openai_response_format_or_omit(response_format),
+                response_format=self._get_openai_response_format_or_omit(
+                    response_format
+                ),
                 tools=openai_tools,
                 tool_choice=openai_tool_choice,
                 max_completion_tokens=max_tokens,
@@ -458,7 +502,8 @@ class OpenAIClient(BaseClient):
                 stream_options={"include_usage": True},
             )
 
-            stream_id = "0"
+            current_chunk_type = None
+            current_tool = None
             content = ""
             partial_tool_calls: dict[int, dict[str, str | None]] = {}
             tool_order: list[int] = []
@@ -476,9 +521,16 @@ class OpenAIClient(BaseClient):
 
                 if delta.content:
                     content += delta.content
+                    current_chunk_type, current_tool, stream_chunks = (
+                        self._transition_stream_chunk(
+                            current_chunk_type=current_chunk_type,
+                            next_chunk_type="content",
+                            current_tool=current_tool,
+                        )
+                    )
+                    for stream_chunk in stream_chunks:
+                        yield stream_chunk
                     yield ResponseStreamContentChunk(
-                        id=stream_id,
-                        source="direct",
                         chunk=delta.content,
                     )
 
@@ -509,16 +561,29 @@ class OpenAIClient(BaseClient):
                         current["arguments"] += tool_arguments
 
                     if tool_arguments:
-                        yield ResponseStreamContentChunk(
-                            id=stream_id,
-                            source="tool",
+                        current_chunk_type, current_tool, stream_chunks = (
+                            self._transition_stream_chunk(
+                                current_chunk_type=current_chunk_type,
+                                next_chunk_type="tool",
+                                current_tool=current_tool,
+                                next_tool=current["name"],
+                            )
+                        )
+                        for stream_chunk in stream_chunks:
+                            yield stream_chunk
+                        yield ResponseStreamToolChunk(
+                            id=current["id"] or current["name"] or "",
                             tool=current["name"],
                             chunk=tool_arguments,
                         )
 
             tool_calls = [
                 AssistantToolCall(
-                    id=(partial_tool_calls[index]["id"] or partial_tool_calls[index]["name"] or ""),
+                    id=(
+                        partial_tool_calls[index]["id"]
+                        or partial_tool_calls[index]["name"]
+                        or ""
+                    ),
                     name=partial_tool_calls[index]["name"] or "",
                     arguments=partial_tool_calls[index]["arguments"],
                 )
@@ -533,8 +598,13 @@ class OpenAIClient(BaseClient):
             new_messages = [*messages, assistant_message]
             duration_seconds = perf_counter() - start_time
 
+            stream_chunk = self._close_stream_chunk(
+                current_chunk_type=current_chunk_type,
+                current_tool=current_tool,
+            )
+            if stream_chunk is not None:
+                yield stream_chunk
             yield ResponseStreamCompletionChunk(
-                id=stream_id,
                 content=self._final_content(
                     assistant_message.content,
                     response_format,

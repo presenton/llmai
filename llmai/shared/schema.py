@@ -20,36 +20,33 @@ def get_schema_as_dict(
     strict: bool = False,
 ) -> dict:
     if isinstance(schema, dict):
-        normalized_schema = _normalize_object_schema(deepcopy(schema))
         if strict:
             return cleanup_schema_dict(
-                normalized_schema,
+                schema,
                 supported_keys=supported_keys,
                 supported_string_formats=supported_string_formats,
             )
-        return normalized_schema
+        return deepcopy(schema)
 
     if isinstance(schema, BaseModel):
-        normalized_schema = _normalize_object_schema(
-            _model_json_schema(schema.__class__)
-        )
+        schema_dict = _model_json_schema(schema.__class__)
         if strict:
             return cleanup_schema_dict(
-                normalized_schema,
+                schema_dict,
                 supported_keys=supported_keys,
                 supported_string_formats=supported_string_formats,
             )
-        return normalized_schema
+        return schema_dict
 
     if isinstance(schema, type) and issubclass(schema, BaseModel):
-        normalized_schema = _normalize_object_schema(_model_json_schema(schema))
+        schema_dict = _model_json_schema(schema)
         if strict:
             return cleanup_schema_dict(
-                normalized_schema,
+                schema_dict,
                 supported_keys=supported_keys,
                 supported_string_formats=supported_string_formats,
             )
-        return normalized_schema
+        return schema_dict
 
     if default is None:
         return {}
@@ -92,6 +89,14 @@ def filter_schema_dict(
     )
 
 
+def strip_schema_keys(
+    schema: dict,
+    *,
+    keys: set[str],
+) -> dict:
+    return _strip_schema_keys(deepcopy(schema), keys=keys)
+
+
 def _normalize_object_schema(schema: dict) -> dict:
     if not isinstance(schema, dict):
         return schema
@@ -127,6 +132,24 @@ def _normalize_object_schema(schema: dict) -> dict:
     if isinstance(definitions, dict):
         for each in definitions.values():
             _normalize_object_schema(each)
+
+    return schema
+
+
+def _strip_schema_keys(
+    schema: object,
+    *,
+    keys: set[str],
+) -> object:
+    if isinstance(schema, dict):
+        return {
+            key: _strip_schema_keys(value, keys=keys)
+            for key, value in schema.items()
+            if key not in keys
+        }
+
+    if isinstance(schema, list):
+        return [_strip_schema_keys(each, keys=keys) for each in schema]
 
     return schema
 

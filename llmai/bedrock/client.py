@@ -33,13 +33,30 @@ from llmai.shared.response_formats import (
     get_response_schema,
 )
 from llmai.shared.responses import (
-    ResponseContent,
+        ResponseContent,
+    ResponseResult,
     ResponseStreamCompletionChunk,
     ResponseStreamContentChunk,
+    ResponseStreamThinkingChunk,
+    ResponseStreamToolChunk,
     ResponseUsage,
 )
-from llmai.shared.schema import get_schema_as_dict
+from llmai.shared.schema import cleanup_schema_dict, get_schema_as_dict
 from llmai.shared.tools import Tool, ToolChoice, resolve_tools
+
+
+BEDROCK_SUPPORTED_RESPONSE_SCHEMA_KEYS = {
+    "$defs",
+    "$ref",
+    "additionalProperties",
+    "anyOf",
+    "description",
+    "enum",
+    "items",
+    "properties",
+    "required",
+    "type",
+}
 
 
 class BedrockClient(BaseClient):
@@ -47,7 +64,7 @@ class BedrockClient(BaseClient):
         self,
         *,
         api_key: str | None = None,
-        region_name: str | None = None,
+        region: str | None = None,
         aws_access_key_id: str | None = None,
         aws_secret_access_key: str | None = None,
         aws_session_token: str | None = None,
@@ -86,10 +103,10 @@ class BedrockClient(BaseClient):
                 aws_access_key_id=aws_access_key_id,
                 aws_secret_access_key=aws_secret_access_key,
                 aws_session_token=aws_session_token,
-                region_name=region_name,
+                region_name=region,
                 profile_name=profile_name,
             )
-            self._client = session.client("bedrock-runtime", region_name=region_name)
+            self._client = session.client("bedrock-runtime", region_name=region)
         except Exception as exc:
             raise_llm_error(exc, provider="bedrock")
 
@@ -310,6 +327,25 @@ class BedrockClient(BaseClient):
             }
         }
 
+    def _get_bedrock_response_schema(
+        self,
+        response_format: ResponseFormat | None,
+    ) -> dict | None:
+        response_schema = get_response_schema(
+            response_format,
+            supported_keys=None,
+            supported_string_formats=None,
+            strict=get_response_format_strict(response_format, default=False),
+        )
+        if response_schema is None:
+            return None
+
+        return cleanup_schema_dict(
+            response_schema,
+            supported_keys=BEDROCK_SUPPORTED_RESPONSE_SCHEMA_KEYS,
+            supported_string_formats=None,
+        )
+
     def _get_bedrock_tool_config(
         self,
         tools: list[Tool] | None,
@@ -320,12 +356,7 @@ class BedrockClient(BaseClient):
         resolved = resolve_tools(tools, tool_choice)
         bedrock_tools = self._llm_tools_to_bedrock_tools(resolved.tools)
 
-        response_schema = get_response_schema(
-            response_format,
-            supported_keys=None,
-            supported_string_formats=None,
-            strict=get_response_format_strict(response_format, default=False),
-        )
+        response_schema = self._get_bedrock_response_schema(response_format)
         if use_tools_for_structured_output and response_schema:
             bedrock_tools.append(
                 self._response_schema_tool(response_format, response_schema)
@@ -356,12 +387,7 @@ class BedrockClient(BaseClient):
         if use_tools_for_structured_output:
             return None
 
-        response_schema = get_response_schema(
-            response_format,
-            supported_keys=None,
-            supported_string_formats=None,
-            strict=get_response_format_strict(response_format, default=False),
-        )
+        response_schema = self._get_bedrock_response_schema(response_format)
         if not response_schema:
             return None
 
@@ -456,7 +482,7 @@ class BedrockClient(BaseClient):
             )
 
             tool_call = AssistantToolCall(
-                id=tool_use.get("toolUseId") or tool_use["name"],
+                id=self._tool_call_id(tool_use.get("toolUseId")),
                 name=tool_use["name"],
                 arguments=arguments,
             )
@@ -576,6 +602,45 @@ class BedrockClient(BaseClient):
         max_tokens: int | None = None,
         extra_body: dict | None = None,
         use_tools_for_structured_output: bool | None = None,
+        stream: bool = False,
+    ) -> ResponseResult:
+        if stream:
+            return self._generate_stream(
+                model=model,
+                messages=messages,
+                temperature=temperature,
+                tools=tools,
+                tool_choice=tool_choice,
+                response_format=response_format,
+                max_tokens=max_tokens,
+                extra_body=extra_body,
+                use_tools_for_structured_output=use_tools_for_structured_output,
+            )
+
+        return self._generate_once(
+            model=model,
+            messages=messages,
+            temperature=temperature,
+            tools=tools,
+            tool_choice=tool_choice,
+            response_format=response_format,
+            max_tokens=max_tokens,
+            extra_body=extra_body,
+            use_tools_for_structured_output=use_tools_for_structured_output,
+        )
+
+    def _generate_once(
+        self,
+        *,
+        model: str,
+        messages: list[Message],
+        temperature: float | None = None,
+        tools: list[Tool] | None = None,
+        tool_choice: ToolChoice | None = None,
+        response_format: ResponseFormat | None = None,
+        max_tokens: int | None = None,
+        extra_body: dict | None = None,
+        use_tools_for_structured_output: bool | None = None,
     ) -> ResponseContent:
         try:
             start_time = perf_counter()
@@ -619,7 +684,7 @@ class BedrockClient(BaseClient):
         except Exception as exc:
             raise_llm_error(exc, provider="bedrock")
 
-    def stream(
+    def _generate_stream(
         self,
         *,
         model: str,
@@ -647,7 +712,8 @@ class BedrockClient(BaseClient):
                     use_tools_for_structured_output=use_tools_for_structured_output,
                 )
             )
-            stream_id = "0"
+            current_chunk_type = None
+            current_tool = None
             usage: ResponseUsage | None = None
             content_blocks: dict[int, dict[str, Any]] = {}
             thinking_chunks: list[str] = []
@@ -680,7 +746,7 @@ class BedrockClient(BaseClient):
                     if isinstance(tool_use, dict):
                         content_blocks[index] = {
                             "toolUse": {
-                                "toolUseId": tool_use.get("toolUseId"),
+                                "toolUseId": self._tool_call_id(tool_use.get("toolUseId")),
                                 "name": tool_use.get("name"),
                                 "input": "",
                             }
@@ -709,15 +775,32 @@ class BedrockClient(BaseClient):
                 if delta.get("text"):
                     current = content_blocks.setdefault(index, {"text": ""})
                     current["text"] = f"{current.get('text', '')}{delta['text']}"
-                    yield ResponseStreamContentChunk(
-                        id=stream_id,
-                        source="direct",
-                        chunk=delta["text"],
+                    current_chunk_type, current_tool, stream_chunks = (
+                        self._transition_stream_chunk(
+                            current_chunk_type=current_chunk_type,
+                            next_chunk_type="content",
+                            current_tool=current_tool,
+                        )
                     )
+                    for stream_chunk in stream_chunks:
+                        yield stream_chunk
+                    yield ResponseStreamContentChunk(chunk=delta["text"])
 
                 reasoning_content = delta.get("reasoningContent") or {}
                 if isinstance(reasoning_content, dict) and reasoning_content.get("text"):
                     thinking_chunks.append(reasoning_content["text"])
+                    current_chunk_type, current_tool, stream_chunks = (
+                        self._transition_stream_chunk(
+                            current_chunk_type=current_chunk_type,
+                            next_chunk_type="thinking",
+                            current_tool=current_tool,
+                        )
+                    )
+                    for stream_chunk in stream_chunks:
+                        yield stream_chunk
+                    yield ResponseStreamThinkingChunk(
+                        chunk=reasoning_content["text"],
+                    )
 
                 tool_use_delta = delta.get("toolUse") or {}
                 if isinstance(tool_use_delta, dict) and tool_use_delta.get("input") is not None:
@@ -725,7 +808,7 @@ class BedrockClient(BaseClient):
                         index,
                         {
                             "toolUse": {
-                                "toolUseId": None,
+                                "toolUseId": self._tool_call_id(),
                                 "name": None,
                                 "input": "",
                             }
@@ -737,19 +820,21 @@ class BedrockClient(BaseClient):
                     )
 
                     tool_name = current_tool_use.get("name")
-                    if tool_name == response_schema_tool_name:
-                        yield ResponseStreamContentChunk(
-                            id=stream_id,
-                            source="direct",
-                            chunk=tool_use_delta["input"],
+                    current_chunk_type, current_tool, stream_chunks = (
+                        self._transition_stream_chunk(
+                            current_chunk_type=current_chunk_type,
+                            next_chunk_type="tool",
+                            current_tool=current_tool,
+                            next_tool=tool_name,
                         )
-                    else:
-                        yield ResponseStreamContentChunk(
-                            id=stream_id,
-                            source="tool",
-                            tool=tool_name,
-                            chunk=tool_use_delta["input"],
-                        )
+                    )
+                    for stream_chunk in stream_chunks:
+                        yield stream_chunk
+                    yield ResponseStreamToolChunk(
+                        id=self._tool_call_id(current_tool_use.get("toolUseId")),
+                        tool=tool_name,
+                        chunk=tool_use_delta["input"],
+                    )
 
                 image_delta = delta.get("image") or {}
                 if isinstance(image_delta, dict):
@@ -772,9 +857,8 @@ class BedrockClient(BaseClient):
                             source["s3Location"] = delta_source["s3Location"]
 
             content_parts: list[TextContentPart | ImageContentPart] = []
-            response_schema_content: dict | None = None
-            user_tool_calls: list[AssistantToolCall] = []
             response_schema_holder: list[dict | None] = [None]
+            user_tool_calls: list[AssistantToolCall] = []
             for index in sorted(content_blocks):
                 block = content_blocks[index]
                 self._append_generated_content_block(
@@ -795,8 +879,13 @@ class BedrockClient(BaseClient):
             new_messages = [*messages, assistant_message]
             duration_seconds = perf_counter() - start_time
 
+            stream_chunk = self._close_stream_chunk(
+                current_chunk_type=current_chunk_type,
+                current_tool=current_tool,
+            )
+            if stream_chunk is not None:
+                yield stream_chunk
             yield ResponseStreamCompletionChunk(
-                id=stream_id,
                 content=self._final_content(
                     assistant_message.content,
                     response_schema_content,

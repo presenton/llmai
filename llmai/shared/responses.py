@@ -1,3 +1,4 @@
+from collections.abc import Generator
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -21,21 +22,52 @@ class ResponseContent(BaseModel):
     duration_seconds: float | None = None
 
 
-class ResponseStreamChunk(BaseModel):
+ResponseStreamChunkType = Literal["content", "thinking", "tool"]
+ResponseStreamChunkEvent = Literal["start", "end"]
+
+
+class BaseResponseStreamChunk(BaseModel):
+    pass
+
+
+class ResponseStreamChunk(BaseResponseStreamChunk):
+    type: Literal["stream"] = "stream"
+    chunk_type: ResponseStreamChunkType
+    event: ResponseStreamChunkEvent
+    tool: str | None = None
+
+
+class ResponseStreamContentChunk(BaseResponseStreamChunk):
+    type: Literal["content"] = "content"
+    chunk: str
+
+
+class ResponseStreamThinkingChunk(BaseResponseStreamChunk):
+    type: Literal["thinking"] = "thinking"
+    chunk: str
+
+
+class ResponseStreamToolChunk(BaseResponseStreamChunk):
     id: str
-
-
-class ResponseStreamContentChunk(ResponseStreamChunk):
-    type: Literal["stream_content"] = "stream_content"
-    source: Literal["direct", "tool"]
+    type: Literal["tool"] = "tool"
     tool: str | None = None
     chunk: str
 
 
-class ResponseStreamCompletionChunk(ResponseStreamChunk):
+class ResponseStreamCompletionChunk(BaseResponseStreamChunk):
     type: Literal["stream_completion"] = "stream_completion"
     content: Any = None
     messages: list[Message] = Field(default_factory=list)
     tool_calls: list[AssistantToolCall] = Field(default_factory=list)
     usage: ResponseUsage | None = None
     duration_seconds: float | None = None
+
+
+ResponseStreamEvent = (
+    ResponseStreamChunk
+    | ResponseStreamContentChunk
+    | ResponseStreamThinkingChunk
+    | ResponseStreamToolChunk
+    | ResponseStreamCompletionChunk
+)
+ResponseResult = ResponseContent | Generator[ResponseStreamEvent, None, None]

@@ -1,14 +1,14 @@
 from dev.shared import SLIDE_SCHEMA, TOOL_CHOICE, TOOL_DEFINITIONS
-from llmai.openai import OpenAIClient
+from llmai.google import GoogleClient
 from llmai.shared.messages import UserMessage
 from llmai.shared.response_formats import JSONSchemaResponse
 
 
-MODEL = "gpt-5-mini"
+MODEL = "gemini-3.1-pro-preview"
 
 
 def test_generate():
-    client = OpenAIClient()
+    client = GoogleClient()
 
     response = client.generate(
         model=MODEL,
@@ -16,13 +16,13 @@ def test_generate():
             UserMessage(content="What is presentation?"),
         ],
     )
-    print("OpenAI plain generation")
+    print("Google plain generation")
     print(response)
     print("-" * 50)
 
 
 def test_generate_structured():
-    client = OpenAIClient()
+    client = GoogleClient()
 
     response = client.generate(
         model=MODEL,
@@ -35,13 +35,13 @@ def test_generate_structured():
             json_schema=SLIDE_SCHEMA,
         ),
     )
-    print("OpenAI structured generation")
+    print("Google structured generation")
     print(response)
     print("-" * 50)
 
 
 def test_generate_tool_calls():
-    client = OpenAIClient()
+    client = GoogleClient()
 
     response = client.generate(
         model=MODEL,
@@ -51,15 +51,15 @@ def test_generate_tool_calls():
         tools=TOOL_DEFINITIONS,
         tool_choice=TOOL_CHOICE,
     )
-    print("OpenAI tool-call generation")
+    print("Google tool-call generation")
     print(response)
     print("-" * 50)
 
 
 def test_stream():
-    client = OpenAIClient()
+    client = GoogleClient()
 
-    print("OpenAI plain stream")
+    print("Google plain stream")
     for chunk in client.generate(
         model=MODEL,
         messages=[
@@ -72,9 +72,9 @@ def test_stream():
 
 
 def test_stream_structured():
-    client = OpenAIClient()
+    client = GoogleClient()
 
-    print("OpenAI structured stream")
+    print("Google structured stream")
     for chunk in client.generate(
         model=MODEL,
         messages=[
@@ -90,9 +90,9 @@ def test_stream_structured():
 
 
 def test_stream_tool_calls():
-    client = OpenAIClient()
+    client = GoogleClient()
 
-    print("OpenAI tool-call stream")
+    print("Google tool-call stream")
     for chunk in client.generate(
         model=MODEL,
         messages=[
