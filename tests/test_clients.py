@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from llmai import (
     AnthropicClient,
     BedrockClient,
+    ChatGPTClient,
     DeepSeekClient,
     GoogleClient,
     LLMProvider,
@@ -180,6 +181,61 @@ class AnswerSchema(BaseModel):
 
 
 class ClientBehaviorTests(unittest.TestCase):
+    def test_get_client_chatgpt_uses_chatgpt_env_configuration(self):
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "CHATGPT_ACCESS_TOKEN": "chatgpt-token",
+                    "CHATGPT_ACCOUNT_ID": "account-123",
+                    "CHATGPT_BASE_URL": "https://chatgpt.example/codex",
+                },
+                clear=True,
+            ),
+            patch("llmai.client.ChatGPTClient") as chatgpt_client_cls,
+        ):
+            client = get_client(LLMProvider.CHATGPT)
+
+        self.assertIs(client, chatgpt_client_cls.return_value)
+        chatgpt_client_cls.assert_called_once_with(
+            api_key="chatgpt-token",
+            account_id="account-123",
+            base_url="https://chatgpt.example/codex",
+            logger=None,
+        )
+
+    def test_get_client_chatgpt_falls_back_to_codex_env_configuration(self):
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "CODEX_ACCESS_TOKEN": "codex-token",
+                    "CODEX_ACCOUNT_ID": "codex-account",
+                    "CODEX_BASE_URL": "https://codex.example/backend-api/codex",
+                },
+                clear=True,
+            ),
+            patch("llmai.client.ChatGPTClient") as chatgpt_client_cls,
+        ):
+            client = get_client("chatgpt")
+
+        self.assertIs(client, chatgpt_client_cls.return_value)
+        chatgpt_client_cls.assert_called_once_with(
+            api_key="codex-token",
+            account_id="codex-account",
+            base_url="https://codex.example/backend-api/codex",
+            logger=None,
+        )
+
+    def test_get_client_chatgpt_requires_chatgpt_or_codex_access_token_env(self):
+        with patch.dict(os.environ, {}, clear=True):
+            with self.assertRaises(LLMConfigurationError) as context:
+                get_client(LLMProvider.CHATGPT)
+
+        self.assertEqual(context.exception.provider, "chatgpt")
+        self.assertIn("CHATGPT_ACCESS_TOKEN", context.exception.message)
+        self.assertIn("CODEX_ACCESS_TOKEN", context.exception.message)
+
     def test_get_client_openai_uses_env_configuration(self):
         with (
             patch.dict(
@@ -544,6 +600,84 @@ class ClientBehaviorTests(unittest.TestCase):
         )
 
         self.assertEqual(fake_completions.calls[0]["reasoning_effort"], "high")
+
+    def test_chatgpt_init_uses_codex_base_url_and_headers(self):
+        with patch("llmai.chatgpt.client.OpenAI") as openai_cls:
+            ChatGPTClient(
+                api_key="token-123",
+                account_id="account-123",
+            )
+
+        openai_cls.assert_called_once()
+        kwargs = openai_cls.call_args.kwargs
+        self.assertEqual(
+            kwargs["base_url"],
+            "https://chatgpt.com/backend-api/codex",
+        )
+        self.assertEqual(kwargs["api_key"], "token-123")
+        self.assertEqual(kwargs["timeout"], 120.0)
+        self.assertEqual(
+            kwargs["default_headers"]["OpenAI-Beta"],
+            "responses=experimental",
+        )
+        self.assertEqual(kwargs["default_headers"]["originator"], "pi")
+        self.assertEqual(
+            kwargs["default_headers"]["chatgpt-account-id"],
+            "account-123",
+        )
+
+    def test_chatgpt_generate_uses_openai_responses_api(self):
+        fake_response = SimpleNamespace(
+            output=[
+                SimpleNamespace(
+                    type="message",
+                    content=[
+                        SimpleNamespace(
+                            type="output_text",
+                            text="final answer",
+                        )
+                    ],
+                )
+            ]
+        )
+        fake_responses = FakeOpenAIResponses(fake_response)
+        fake_completions = FakeOpenAICompletions(
+            Exception("chat completions should not be used")
+        )
+
+        client = ChatGPTClient(api_key="test")
+        client._client = SimpleNamespace(
+            responses=fake_responses,
+            chat=SimpleNamespace(completions=fake_completions),
+        )
+
+        result = client.generate(
+            model="chatgpt-4o-latest",
+            messages=[UserMessage(content=text_parts("Hello"))],
+        )
+
+        self.assertEqual(result.content[0].text, "final answer")
+        self.assertEqual(fake_responses.calls[0]["model"], "chatgpt-4o-latest")
+        self.assertEqual(fake_responses.calls[0]["extra_body"]["store"], False)
+        self.assertEqual(
+            fake_responses.calls[0]["extra_body"]["include"],
+            ["reasoning.encrypted_content"],
+        )
+        self.assertEqual(
+            fake_responses.calls[0]["extra_body"]["parallel_tool_calls"],
+            True,
+        )
+        self.assertEqual(
+            fake_responses.calls[0]["extra_body"]["text"],
+            {"verbosity": "medium"},
+        )
+        self.assertFalse(fake_completions.calls)
+
+    def test_chatgpt_generate_does_not_expose_api_type(self):
+        self.assertNotIn(
+            "api_type",
+            inspect.signature(ChatGPTClient.generate).parameters,
+        )
 
     def test_openai_generate_wraps_provider_auth_errors(self):
         request = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")

@@ -1,5 +1,6 @@
 from llmai.anthropic import AnthropicClient
 from llmai.bedrock import BedrockClient
+from llmai.chatgpt import ChatGPTClient
 from llmai.client import LLMProvider, get_client
 from llmai.deepseek import DeepSeekClient
 from llmai.google import GoogleClient
@@ -9,6 +10,7 @@ from llmai.shared import ReasoningEffort, ReasoningEffortValue, ReasoningSummary
 __all__ = [
     "AnthropicClient",
     "BedrockClient",
+    "ChatGPTClient",
     "DeepSeekClient",
     "GoogleClient",
     "LLMProvider",

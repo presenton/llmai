@@ -5,6 +5,7 @@ from logging import Logger
 
 from llmai.anthropic.client import AnthropicClient
 from llmai.bedrock.client import BedrockClient
+from llmai.chatgpt.client import ChatGPTClient
 from llmai.deepseek.client import DeepSeekClient
 from llmai.google.client import GoogleClient
 from llmai.openai.client import OpenAIClient
@@ -30,6 +31,19 @@ def get_client(
         return OpenAIClient(
             api_key=api_key,
             base_url=_env("OPENAI_BASE_URL"),
+            logger=logger,
+        )
+
+    if resolved_provider == LLMProvider.CHATGPT:
+        access_token = _required_env(
+            resolved_provider,
+            "CHATGPT_ACCESS_TOKEN",
+            "CODEX_ACCESS_TOKEN",
+        )
+        return ChatGPTClient(
+            api_key=access_token,
+            account_id=_first_env("CHATGPT_ACCOUNT_ID", "CODEX_ACCOUNT_ID"),
+            base_url=_first_env("CHATGPT_BASE_URL", "CODEX_BASE_URL"),
             logger=logger,
         )
 

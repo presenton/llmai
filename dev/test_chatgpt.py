@@ -1,36 +1,30 @@
 from dev.shared import SLIDE_SCHEMA, TOOL_CHOICE, TOOL_DEFINITIONS
-from llmai import DeepSeekClient
+from llmai import ChatGPTClient
 from llmai.shared.messages import UserMessage
 from llmai.shared.reasoning import ReasoningEffort, ReasoningSummary
 from llmai.shared.response_formats import JSONSchemaResponse
 
 
-MODEL = "deepseek-reasoner"
-
-
-def make_client() -> DeepSeekClient:
-    return DeepSeekClient()
+MODEL = "chatgpt-4o-latest"
 
 
 def test_generate():
-    client = make_client()
+    client = ChatGPTClient()
 
     response = client.generate(
         model=MODEL,
         messages=[
             UserMessage(content="What is presentation?"),
         ],
-        reasoning_effort=ReasoningEffort(
-            summary=ReasoningSummary.DETAILED,
-        ),
+        reasoning_effort=ReasoningEffort(summary=ReasoningSummary.DETAILED),
     )
-    print("DeepSeek plain generation")
+    print("ChatGPT plain generation")
     print(response)
     print("-" * 50)
 
 
 def test_generate_structured():
-    client = make_client()
+    client = ChatGPTClient()
 
     response = client.generate(
         model=MODEL,
@@ -42,14 +36,15 @@ def test_generate_structured():
             strict=True,
             json_schema=SLIDE_SCHEMA,
         ),
+        reasoning_effort=ReasoningEffort(summary=ReasoningSummary.DETAILED),
     )
-    print("DeepSeek structured generation")
+    print("ChatGPT structured generation")
     print(response)
     print("-" * 50)
 
 
 def test_generate_tool_calls():
-    client = make_client()
+    client = ChatGPTClient()
 
     response = client.generate(
         model=MODEL,
@@ -58,21 +53,23 @@ def test_generate_tool_calls():
         ],
         tools=TOOL_DEFINITIONS,
         tool_choice=TOOL_CHOICE,
+        reasoning_effort=ReasoningEffort(summary=ReasoningSummary.DETAILED),
     )
-    print("DeepSeek tool-call generation")
+    print("ChatGPT tool-call generation")
     print(response)
     print("-" * 50)
 
 
 def test_stream():
-    client = make_client()
+    client = ChatGPTClient()
 
-    print("DeepSeek plain stream")
+    print("ChatGPT plain stream")
     for chunk in client.generate(
         model=MODEL,
         messages=[
             UserMessage(content="What is presentation?"),
         ],
+        reasoning_effort=ReasoningEffort(summary=ReasoningSummary.DETAILED),
         stream=True,
     ):
         print(chunk)
@@ -80,9 +77,9 @@ def test_stream():
 
 
 def test_stream_structured():
-    client = make_client()
+    client = ChatGPTClient()
 
-    print("DeepSeek structured stream")
+    print("ChatGPT structured stream")
     for chunk in client.generate(
         model=MODEL,
         messages=[
@@ -99,9 +96,9 @@ def test_stream_structured():
 
 
 def test_stream_tool_calls():
-    client = make_client()
+    client = ChatGPTClient()
 
-    print("DeepSeek tool-call stream")
+    print("ChatGPT tool-call stream")
     for chunk in client.generate(
         model=MODEL,
         messages=[
@@ -109,6 +106,7 @@ def test_stream_tool_calls():
         ],
         tools=TOOL_DEFINITIONS,
         tool_choice=TOOL_CHOICE,
+        reasoning_effort=ReasoningEffort(summary=ReasoningSummary.DETAILED),
         stream=True,
     ):
         print(chunk)

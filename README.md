@@ -4,6 +4,7 @@
 
 Today the repository includes adapters for:
 
+- ChatGPT
 - OpenAI
 - DeepSeek
 - Anthropic
@@ -53,6 +54,29 @@ print(result.duration_seconds)
 ```
 
 If you want to swap providers, the overall call shape stays the same. In most cases you only need to change the client class, credentials, and model name.
+
+## ChatGPT
+
+```python
+from llmai import ChatGPTClient
+from llmai.shared import TextContentPart, UserMessage
+
+
+client = ChatGPTClient(access_token="CHATGPT_ACCESS_TOKEN")
+
+result = client.generate(
+    model="chatgpt-4o-latest",
+    messages=[
+        UserMessage(
+            content=[TextContentPart(text="Write a two-line poem about clean interfaces.")]
+        ),
+    ],
+)
+
+print(result.content)
+```
+
+`ChatGPTClient` targets ChatGPT's Codex backend at `https://chatgpt.com/backend-api/codex`. It always uses the Responses API internally, and reads `CHATGPT_ACCESS_TOKEN` or `CODEX_ACCESS_TOKEN` by default, with optional `CHATGPT_ACCOUNT_ID` or `CODEX_ACCOUNT_ID`.
 
 ## DeepSeek
 
