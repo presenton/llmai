@@ -1,4 +1,4 @@
-from llmai.shared.tools import Tool
+from llmai.shared.tools import Tool, ToolChoiceMode
 
 IMAGE_SCHEMA = {
     "type": "object",
@@ -78,6 +78,6 @@ TOOL_DEFINITIONS = [
 ]
 
 TOOL_CHOICE = {
-    "required": ["get_weather", "get_time"],
-    "optional": ["get_timezone"],
+    "mode": ToolChoiceMode.REQUIRED,
+    "tools": ["get_weather", "get_time", "get_timezone"],
 }

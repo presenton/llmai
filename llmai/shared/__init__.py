@@ -28,6 +28,11 @@ from llmai.shared.messages import (
     normalize_content_parts,
 )
 from llmai.shared.providers import LLMProvider
+from llmai.shared.reasoning import (
+    ReasoningEffort,
+    ReasoningEffortValue,
+    ReasoningSummary,
+)
 from llmai.shared.response_formats import (
     JSONSchemaResponse,
     JSONObjectResponse,
@@ -45,6 +50,7 @@ from llmai.shared.responses import (
     ResponseStreamContentChunk,
     ResponseStreamEvent,
     ResponseStreamThinkingChunk,
+    ResponseStreamToolCompleteChunk,
     ResponseStreamToolChunk,
     ResponseUsage,
 )
@@ -54,7 +60,7 @@ from llmai.shared.schema import (
     filter_schema_dict,
     get_schema_as_dict,
 )
-from llmai.shared.tools import Tool, ToolChoice
+from llmai.shared.tools import Tool, ToolChoice, ToolChoiceMode
 
 __all__ = [
     "AssistantContent",
@@ -85,8 +91,12 @@ __all__ = [
     "ResponseStreamContentChunk",
     "ResponseStreamEvent",
     "ResponseStreamThinkingChunk",
+    "ResponseStreamToolCompleteChunk",
     "ResponseStreamToolChunk",
     "ResponseUsage",
+    "ReasoningEffort",
+    "ReasoningEffortValue",
+    "ReasoningSummary",
     "SchemaLike",
     "SystemMessage",
     "TextContentPart",
@@ -94,6 +104,7 @@ __all__ = [
     "TextResponse",
     "Tool",
     "ToolChoice",
+    "ToolChoiceMode",
     "ToolError",
     "ToolResponseMessage",
     "UserMessage",

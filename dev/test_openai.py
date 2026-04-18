@@ -1,10 +1,16 @@
 from dev.shared import SLIDE_SCHEMA, TOOL_CHOICE, TOOL_DEFINITIONS
-from llmai.openai import OpenAIClient
+from llmai.openai import OpenAIApiType, OpenAIClient
 from llmai.shared.messages import UserMessage
+from llmai.shared.reasoning import (
+    ReasoningEffort,
+    ReasoningEffortValue,
+    ReasoningSummary,
+)
 from llmai.shared.response_formats import JSONSchemaResponse
 
 
-MODEL = "gpt-5-mini"
+MODEL = "gpt-5.4"
+API_TYPE = OpenAIApiType.COMPLETIONS
 
 
 def test_generate():
@@ -13,8 +19,15 @@ def test_generate():
     response = client.generate(
         model=MODEL,
         messages=[
-            UserMessage(content="What is presentation?"),
+            UserMessage(
+                content="Think as long as you want to define who is better at math AI or Human? You must think and answer"
+            ),
         ],
+        api_type=API_TYPE,
+        reasoning_effort=ReasoningEffort(
+            effort=ReasoningEffortValue.HIGH,
+            summary=ReasoningSummary.DETAILED,
+        ),
     )
     print("OpenAI plain generation")
     print(response)
@@ -34,6 +47,11 @@ def test_generate_structured():
             strict=True,
             json_schema=SLIDE_SCHEMA,
         ),
+        reasoning_effort=ReasoningEffort(
+            effort=ReasoningEffortValue.HIGH,
+            summary=ReasoningSummary.DETAILED,
+        ),
+        api_type=API_TYPE,
     )
     print("OpenAI structured generation")
     print(response)
@@ -48,8 +66,13 @@ def test_generate_tool_calls():
         messages=[
             UserMessage(content="What is presentation?"),
         ],
+        reasoning_effort=ReasoningEffort(
+            effort=ReasoningEffortValue.HIGH,
+            summary=ReasoningSummary.DETAILED,
+        ),
         tools=TOOL_DEFINITIONS,
         tool_choice=TOOL_CHOICE,
+        api_type=API_TYPE,
     )
     print("OpenAI tool-call generation")
     print(response)
@@ -65,6 +88,11 @@ def test_stream():
         messages=[
             UserMessage(content="What is presentation?"),
         ],
+        reasoning_effort=ReasoningEffort(
+            effort=ReasoningEffortValue.HIGH,
+            summary=ReasoningSummary.DETAILED,
+        ),
+        api_type=API_TYPE,
         stream=True,
     ):
         print(chunk)
@@ -83,6 +111,11 @@ def test_stream_structured():
         response_format=JSONSchemaResponse(
             name="ResponseSchema", strict=True, json_schema=SLIDE_SCHEMA
         ),
+        reasoning_effort=ReasoningEffort(
+            effort=ReasoningEffortValue.HIGH,
+            summary=ReasoningSummary.DETAILED,
+        ),
+        api_type=API_TYPE,
         stream=True,
     ):
         print(chunk)
@@ -100,6 +133,11 @@ def test_stream_tool_calls():
         ],
         tools=TOOL_DEFINITIONS,
         tool_choice=TOOL_CHOICE,
+        api_type=API_TYPE,
+        reasoning_effort=ReasoningEffort(
+            effort=ReasoningEffortValue.HIGH,
+            summary=ReasoningSummary.DETAILED,
+        ),
         stream=True,
     ):
         print(chunk)
@@ -108,7 +146,7 @@ def test_stream_tool_calls():
 
 # test_generate()
 # test_generate_structured()
-test_generate_tool_calls()
+# test_generate_tool_calls()
 # test_stream()
-# test_stream_structured()
+test_stream_structured()
 # test_stream_tool_calls()

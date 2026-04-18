@@ -5,6 +5,7 @@ from uuid import uuid4
 
 from llmai.shared.logs import LogLevel
 from llmai.shared.messages import Message
+from llmai.shared.reasoning import ReasoningEffort
 from llmai.shared.response_formats import ResponseFormat
 from llmai.shared.responses import (
     ResponseResult,
@@ -121,6 +122,7 @@ class BaseClient(ABC):
         tool_choice: ToolChoice | None = None,
         response_format: ResponseFormat | None = None,
         max_tokens: int | None = None,
+        reasoning_effort: ReasoningEffort | None = None,
         extra_body: dict | None = None,
         use_tools_for_structured_output: bool | None = None,
         stream: bool = False,

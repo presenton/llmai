@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from typing import TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -22,24 +23,29 @@ class Tool(BaseModel):
     )
 
 
+class ToolChoiceMode(str, Enum):
+    AUTO = "auto"
+    REQUIRED = "required"
+
+
 class ToolChoice(TypedDict, total=False):
-    required: list[str]
-    optional: list[str]
+    mode: ToolChoiceMode
+    tools: list[str]
 
 
 @dataclass(frozen=True)
 class ResolvedToolChoice:
     tools: list[Tool]
-    required_tools: list[Tool]
-    optional_tools: list[Tool]
+    mode: ToolChoiceMode = ToolChoiceMode.AUTO
+    is_explicit: bool = False
 
     @property
-    def required_names(self) -> list[str]:
-        return [tool.name for tool in self.required_tools]
+    def tool_names(self) -> list[str]:
+        return [tool.name for tool in self.tools]
 
     @property
-    def optional_names(self) -> list[str]:
-        return [tool.name for tool in self.optional_tools]
+    def requires_tool(self) -> bool:
+        return self.mode == ToolChoiceMode.REQUIRED
 
 
 def resolve_tools(
@@ -52,41 +58,50 @@ def resolve_tools(
     if not tool_choice:
         return ResolvedToolChoice(
             tools=available_tools,
-            required_tools=[],
-            optional_tools=[],
         )
 
-    required_names = _unique_names(tool_choice.get("required"))
-    optional_names = _unique_names(tool_choice.get("optional"))
-    overlapping_names = set(required_names) & set(optional_names)
-    if overlapping_names:
-        names = ", ".join(sorted(overlapping_names))
+    unknown_keys = sorted(set(tool_choice) - {"mode", "tools"})
+    if unknown_keys:
+        names = ", ".join(unknown_keys)
         raise ToolError(
             400,
-            f"Tool names cannot be both required and optional: {names}",
+            f"Unsupported keys in tool_choice: {names}. Use 'mode' and 'tools'.",
         )
 
-    unknown_names = [
-        name
-        for name in [*required_names, *optional_names]
-        if name not in tool_by_name
-    ]
+    mode = _coerce_tool_choice_mode(tool_choice.get("mode", ToolChoiceMode.AUTO))
+    if mode is None:
+        raise ToolError(
+            400,
+            f"Unsupported tool_choice mode: {tool_choice.get('mode')}",
+        )
+
+    tool_names = _unique_names(tool_choice.get("tools"))
+    unknown_names = [name for name in tool_names if name not in tool_by_name]
     if unknown_names:
         names = ", ".join(unknown_names)
         raise ToolError(400, f"Unknown tool names in tool_choice: {names}")
 
-    if not required_names and not optional_names:
+    visible_tools = (
+        [tool_by_name[name] for name in tool_names]
+        if tool_names
+        else available_tools
+    )
+    if not visible_tools:
+        if mode == ToolChoiceMode.REQUIRED:
+            raise ToolError(
+                400,
+                "tool_choice mode='required' requires at least one visible tool",
+            )
         return ResolvedToolChoice(
-            tools=available_tools,
-            required_tools=[],
-            optional_tools=[],
+            tools=[],
+            mode=mode,
+            is_explicit=True,
         )
 
-    visible_names = [*required_names, *optional_names]
     return ResolvedToolChoice(
-        tools=[tool_by_name[name] for name in visible_names],
-        required_tools=[tool_by_name[name] for name in required_names],
-        optional_tools=[tool_by_name[name] for name in optional_names],
+        tools=visible_tools,
+        mode=mode,
+        is_explicit=True,
     )
 
 
@@ -115,3 +130,18 @@ def _unique_names(names: list[str] | None) -> list[str]:
         unique_names.append(name)
 
     return unique_names
+
+
+def _coerce_tool_choice_mode(
+    value: ToolChoiceMode | str | None,
+) -> ToolChoiceMode | None:
+    if value is None:
+        return None
+
+    if isinstance(value, ToolChoiceMode):
+        return value
+
+    try:
+        return ToolChoiceMode(value)
+    except ValueError:
+        return None

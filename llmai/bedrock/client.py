@@ -24,6 +24,7 @@ from llmai.shared.messages import (
     content_has_images,
     normalize_content_parts,
 )
+from llmai.shared.reasoning import ReasoningEffort
 from llmai.shared.response_formats import (
     JSONSchemaResponse,
     JSONObjectResponse,
@@ -33,11 +34,12 @@ from llmai.shared.response_formats import (
     get_response_schema,
 )
 from llmai.shared.responses import (
-        ResponseContent,
+    ResponseContent,
     ResponseResult,
     ResponseStreamCompletionChunk,
     ResponseStreamContentChunk,
     ResponseStreamThinkingChunk,
+    ResponseStreamToolCompleteChunk,
     ResponseStreamToolChunk,
     ResponseUsage,
 )
@@ -367,13 +369,11 @@ class BedrockClient(BaseClient):
 
         config: dict[str, object] = {"tools": bedrock_tools}
 
-        if resolved.required_names:
-            if len(resolved.required_names) == 1 and not resolved.optional_names:
-                config["toolChoice"] = {"tool": {"name": resolved.required_names[0]}}
+        if resolved.requires_tool:
+            if len(resolved.tools) == 1:
+                config["toolChoice"] = {"tool": {"name": resolved.tools[0].name}}
             else:
                 config["toolChoice"] = {"any": {}}
-        elif resolved.optional_names:
-            config["toolChoice"] = {"auto": {}}
         elif use_tools_for_structured_output and response_schema:
             config["toolChoice"] = {"any": {}}
 
@@ -600,6 +600,7 @@ class BedrockClient(BaseClient):
         tool_choice: ToolChoice | None = None,
         response_format: ResponseFormat | None = None,
         max_tokens: int | None = None,
+        reasoning_effort: ReasoningEffort | None = None,
         extra_body: dict | None = None,
         use_tools_for_structured_output: bool | None = None,
         stream: bool = False,
@@ -613,6 +614,7 @@ class BedrockClient(BaseClient):
                 tool_choice=tool_choice,
                 response_format=response_format,
                 max_tokens=max_tokens,
+                reasoning_effort=reasoning_effort,
                 extra_body=extra_body,
                 use_tools_for_structured_output=use_tools_for_structured_output,
             )
@@ -625,6 +627,7 @@ class BedrockClient(BaseClient):
             tool_choice=tool_choice,
             response_format=response_format,
             max_tokens=max_tokens,
+            reasoning_effort=reasoning_effort,
             extra_body=extra_body,
             use_tools_for_structured_output=use_tools_for_structured_output,
         )
@@ -639,9 +642,12 @@ class BedrockClient(BaseClient):
         tool_choice: ToolChoice | None = None,
         response_format: ResponseFormat | None = None,
         max_tokens: int | None = None,
+        reasoning_effort: ReasoningEffort | None = None,
         extra_body: dict | None = None,
         use_tools_for_structured_output: bool | None = None,
     ) -> ResponseContent:
+        del reasoning_effort
+
         try:
             start_time = perf_counter()
             response = self._client.converse(
@@ -694,9 +700,12 @@ class BedrockClient(BaseClient):
         tool_choice: ToolChoice | None = None,
         response_format: ResponseFormat | None = None,
         max_tokens: int | None = None,
+        reasoning_effort: ReasoningEffort | None = None,
         extra_body: dict | None = None,
         use_tools_for_structured_output: bool | None = None,
     ):
+        del reasoning_effort
+
         try:
             start_time = perf_counter()
             response = self._client.converse_stream(
@@ -879,12 +888,28 @@ class BedrockClient(BaseClient):
             new_messages = [*messages, assistant_message]
             duration_seconds = perf_counter() - start_time
 
+            if current_chunk_type == "tool":
+                for tool_call in user_tool_calls:
+                    yield ResponseStreamToolCompleteChunk(
+                        id=tool_call.id,
+                        tool=tool_call.name,
+                        arguments=tool_call.arguments,
+                    )
+
             stream_chunk = self._close_stream_chunk(
                 current_chunk_type=current_chunk_type,
                 current_tool=current_tool,
             )
             if stream_chunk is not None:
                 yield stream_chunk
+
+            if current_chunk_type != "tool":
+                for tool_call in user_tool_calls:
+                    yield ResponseStreamToolCompleteChunk(
+                        id=tool_call.id,
+                        tool=tool_call.name,
+                        arguments=tool_call.arguments,
+                    )
             yield ResponseStreamCompletionChunk(
                 content=self._final_content(
                     assistant_message.content,

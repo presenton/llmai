@@ -29,6 +29,7 @@ from llmai.shared.messages import (
     content_from_text,
     normalize_content_parts,
 )
+from llmai.shared.reasoning import ReasoningEffort
 from llmai.shared.response_formats import (
     ResponseFormat,
     get_response_format_name,
@@ -41,6 +42,7 @@ from llmai.shared.responses import (
     ResponseStreamCompletionChunk,
     ResponseStreamContentChunk,
     ResponseStreamThinkingChunk,
+    ResponseStreamToolCompleteChunk,
     ResponseStreamToolChunk,
     ResponseUsage,
 )
@@ -90,6 +92,24 @@ class AnthropicClient(BaseClient):
             return {}
 
         return parsed if isinstance(parsed, dict) else {}
+
+    def _get_anthropic_thinking_or_omit(
+        self,
+        reasoning_effort: ReasoningEffort | None,
+    ) -> dict[str, object] | Omit:
+        if reasoning_effort is None:
+            return Omit()
+
+        if reasoning_effort.effort == "none" or reasoning_effort.tokens == 0:
+            return {"type": "disabled"}
+
+        if reasoning_effort.tokens is not None:
+            return {
+                "type": "enabled",
+                "budget_tokens": reasoning_effort.tokens,
+            }
+
+        return {"type": "adaptive"}
 
     def _assistant_message_to_message_param(
         self,
@@ -256,16 +276,16 @@ class AnthropicClient(BaseClient):
             )
 
         anthropic_tool_choice: dict[str, object] | Omit = Omit()
-        if resolved.required_names:
-            if len(resolved.required_names) == 1 and not resolved.optional_names:
+        if resolved.requires_tool:
+            if len(resolved.tools) == 1:
                 anthropic_tool_choice = {
                     "type": "tool",
-                    "name": resolved.required_names[0],
+                    "name": resolved.tools[0].name,
                 }
             else:
                 anthropic_tool_choice = {"type": "any"}
         elif response_schema_tool_name:
-            if resolved.optional_names:
+            if resolved.is_explicit and resolved.tools:
                 anthropic_tool_choice = {"type": "any"}
             else:
                 anthropic_tool_choice = {
@@ -322,6 +342,7 @@ class AnthropicClient(BaseClient):
         tool_choice: ToolChoice | None = None,
         response_format: ResponseFormat | None = None,
         max_tokens: int | None = None,
+        reasoning_effort: ReasoningEffort | None = None,
         extra_body: dict | None = None,
         use_tools_for_structured_output: bool | None = None,
         stream: bool = False,
@@ -335,6 +356,7 @@ class AnthropicClient(BaseClient):
                 tool_choice=tool_choice,
                 response_format=response_format,
                 max_tokens=max_tokens,
+                reasoning_effort=reasoning_effort,
                 extra_body=extra_body,
                 use_tools_for_structured_output=use_tools_for_structured_output,
             )
@@ -347,6 +369,7 @@ class AnthropicClient(BaseClient):
             tool_choice=tool_choice,
             response_format=response_format,
             max_tokens=max_tokens,
+            reasoning_effort=reasoning_effort,
             extra_body=extra_body,
             use_tools_for_structured_output=use_tools_for_structured_output,
         )
@@ -361,6 +384,7 @@ class AnthropicClient(BaseClient):
         tool_choice: ToolChoice | None = None,
         response_format: ResponseFormat | None = None,
         max_tokens: int | None = None,
+        reasoning_effort: ReasoningEffort | None = None,
         extra_body: dict | None = None,
         use_tools_for_structured_output: bool | None = None,
     ) -> ResponseContent:
@@ -381,6 +405,7 @@ class AnthropicClient(BaseClient):
                 messages=self._messages_to_anthropic_messages(messages),
                 tools=anthropic_tools,
                 tool_choice=anthropic_tool_choice,
+                thinking=self._get_anthropic_thinking_or_omit(reasoning_effort),
                 max_tokens=max_tokens or 8000,
                 temperature=temperature or Omit(),
                 extra_body=extra_body,
@@ -446,6 +471,7 @@ class AnthropicClient(BaseClient):
         tool_choice: ToolChoice | None = None,
         response_format: ResponseFormat | None = None,
         max_tokens: int | None = None,
+        reasoning_effort: ReasoningEffort | None = None,
         extra_body: dict | None = None,
         use_tools_for_structured_output: bool | None = None,
     ):
@@ -480,6 +506,7 @@ class AnthropicClient(BaseClient):
                 messages=self._messages_to_anthropic_messages(messages),
                 tools=anthropic_tools,
                 tool_choice=anthropic_tool_choice,
+                thinking=self._get_anthropic_thinking_or_omit(reasoning_effort),
                 max_tokens=max_tokens or 8000,
                 temperature=temperature or Omit(),
                 extra_body=extra_body,
@@ -557,6 +584,11 @@ class AnthropicClient(BaseClient):
                             )
                         else:
                             user_tool_calls.append(tool_call)
+                            yield ResponseStreamToolCompleteChunk(
+                                id=tool_call.id,
+                                tool=tool_call.name,
+                                arguments=tool_call.arguments,
+                            )
                         active_tool_name = None
                         active_tool_id = None
 

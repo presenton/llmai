@@ -5,6 +5,9 @@ from pydantic import ValidationError
 from llmai.shared import (
     AssistantMessage,
     ImageContentPart,
+    ReasoningEffort,
+    ReasoningEffortValue,
+    ReasoningSummary,
     SystemMessage,
     TextContentPart,
     UserMessage,
@@ -14,6 +17,21 @@ from llmai.shared import (
 
 
 class AssistantMessageTests(unittest.TestCase):
+    def test_reasoning_effort_supports_effort_tokens_and_summary(self):
+        reasoning = ReasoningEffort(
+            effort=ReasoningEffortValue.HIGH,
+            tokens=2048,
+            summary=ReasoningSummary.DETAILED,
+        )
+
+        self.assertEqual(reasoning.effort, ReasoningEffortValue.HIGH)
+        self.assertEqual(reasoning.tokens, 2048)
+        self.assertEqual(reasoning.summary, ReasoningSummary.DETAILED)
+
+    def test_reasoning_effort_rejects_negative_tokens(self):
+        with self.assertRaises(ValidationError):
+            ReasoningEffort(tokens=-1)
+
     def test_supports_optional_thinking_field(self):
         message = AssistantMessage(
             content=[TextContentPart(text="final answer")],

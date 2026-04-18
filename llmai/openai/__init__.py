@@ -1,3 +1,3 @@
-from llmai.openai.client import OpenAIClient
+from llmai.openai.client import OpenAIClient, OpenAIApiType
 
-__all__ = ["OpenAIClient"]
+__all__ = ["OpenAIClient", "OpenAIApiType"]

@@ -5,6 +5,7 @@
 Today the repository includes adapters for:
 
 - OpenAI
+- DeepSeek
 - Anthropic
 - Google Gemini
 - Amazon Bedrock
@@ -52,6 +53,36 @@ print(result.duration_seconds)
 ```
 
 If you want to swap providers, the overall call shape stays the same. In most cases you only need to change the client class, credentials, and model name.
+
+## DeepSeek
+
+```python
+from llmai import DeepSeekClient
+from llmai.shared import JSONSchemaResponse, TextContentPart, UserMessage
+
+
+client = DeepSeekClient()
+
+result = client.generate(
+    model="deepseek-chat",
+    messages=[
+        UserMessage(content=[TextContentPart(text="Return a JSON object with one field named answer.")]),
+    ],
+    response_format=JSONSchemaResponse(
+        name="final_answer",
+        json_schema={
+            "type": "object",
+            "properties": {
+                "answer": {"type": "string"},
+            },
+            "required": ["answer"],
+        },
+    ),
+    stream=True,
+)
+```
+
+`DeepSeekClient` uses the OpenAI SDK against DeepSeek's OpenAI-compatible API and reads `DEEPSEEK_API_KEY` by default. For structured output, it always uses an internal function-tool schema because DeepSeek does not support `response_format={"type":"json_schema"}`. During streaming, the internal response tool is surfaced as incremental JSON `content` chunks, and the stream still ends with parsed JSON in `ResponseStreamCompletionChunk.content`. If you need DeepSeek's server-side `strict` tool enforcement, point `base_url` at `https://api.deepseek.com/beta`.
 
 ## Amazon Bedrock
 
@@ -170,7 +201,7 @@ first = client.generate(
         ),
     ],
     tools=[weather_tool],
-    tool_choice={"optional": ["get_weather"]},
+    tool_choice={"tools": ["get_weather"]},
 )
 
 for tool_call in first.tool_calls:
@@ -219,6 +250,7 @@ for chunk in client.generate(
 ## Package Layout
 
 - `llmai/openai`: OpenAI adapter
+- `llmai/deepseek`: DeepSeek adapter
 - `llmai/anthropic`: Anthropic adapter
 - `llmai/google`: Google Gemini adapter
 - `llmai/bedrock`: Amazon Bedrock adapter

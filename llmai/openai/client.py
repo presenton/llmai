@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import base64
 import json
+from enum import Enum
 from logging import Logger
 from time import perf_counter
+from uuid import uuid4
 
 from openai import Omit, OpenAI
 from openai.types.chat import (
@@ -47,6 +49,7 @@ from llmai.shared.messages import (
     content_has_images,
     normalize_content_parts,
 )
+from llmai.shared.reasoning import ReasoningEffort
 from llmai.shared.response_formats import (
     JSONSchemaResponse,
     JSONObjectResponse,
@@ -61,6 +64,8 @@ from llmai.shared.responses import (
     ResponseResult,
     ResponseStreamCompletionChunk,
     ResponseStreamContentChunk,
+    ResponseStreamThinkingChunk,
+    ResponseStreamToolCompleteChunk,
     ResponseStreamToolChunk,
     ResponseUsage,
 )
@@ -102,6 +107,11 @@ OPENAI_SUPPORTED_SCHEMA_KEYS = {
 }
 
 
+class OpenAIApiType(str, Enum):
+    COMPLETIONS = "completions"
+    RESPONSES = "responses"
+
+
 class OpenAIClient(BaseClient):
     def __init__(
         self,
@@ -135,6 +145,9 @@ class OpenAIClient(BaseClient):
                 for tool_call in (message.tool_calls or [])
             ],
         )
+
+    def _response_item_id(self, prefix: str = "item") -> str:
+        return f"{prefix}_{uuid4().hex}"
 
     def _assistant_message_to_chat_completion_assistant_message_param(
         self,
@@ -221,6 +234,124 @@ class OpenAIClient(BaseClient):
 
         return openai_content
 
+    def _message_content_to_openai_responses_content(
+        self,
+        content: MessageContent,
+    ) -> list[dict[str, object]]:
+        openai_content: list[dict[str, object]] = []
+        for part in normalize_content_parts(content):
+            if isinstance(part, ImageContentPart):
+                openai_content.append(
+                    {
+                        "type": "input_image",
+                        "detail": "auto",
+                        "image_url": self._image_content_part_to_openai_image_url(part),
+                    }
+                )
+            else:
+                openai_content.append(
+                    {
+                        "type": "input_text",
+                        "text": part.text,
+                    }
+                )
+
+        return openai_content
+
+    def _assistant_message_to_openai_responses_input_items(
+        self,
+        message: AssistantMessage,
+    ) -> list[dict[str, object]]:
+        input_items: list[dict[str, object]] = []
+
+        if message.thinking:
+            input_items.append(
+                {
+                    "id": self._response_item_id("reasoning"),
+                    "type": "reasoning",
+                    "status": "completed",
+                    "summary": [
+                        {
+                            "type": "summary_text",
+                            "text": message.thinking,
+                        }
+                    ],
+                }
+            )
+
+        text_content = self._assistant_content_to_openai_content(message.content)
+        if text_content is not None:
+            input_items.append(
+                {
+                    "id": self._response_item_id("message"),
+                    "type": "message",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": text_content,
+                            "annotations": [],
+                        }
+                    ],
+                }
+            )
+
+        for tool_call in message.tool_calls:
+            input_items.append(
+                {
+                    "type": "function_call",
+                    "status": "completed",
+                    "call_id": tool_call.id,
+                    "name": tool_call.name,
+                    "arguments": tool_call.arguments or "",
+                }
+            )
+
+        return input_items
+
+    def _messages_to_openai_responses_input(
+        self,
+        messages: list[Message],
+    ) -> list[dict[str, object]]:
+        openai_input: list[dict[str, object]] = []
+
+        for message in messages:
+            if isinstance(message, SystemMessage):
+                openai_input.append(
+                    {
+                        "type": "message",
+                        "role": "system",
+                        "content": self._message_content_to_openai_responses_content(
+                            message.content
+                        ),
+                    }
+                )
+            elif isinstance(message, UserMessage):
+                openai_input.append(
+                    {
+                        "type": "message",
+                        "role": "user",
+                        "content": self._message_content_to_openai_responses_content(
+                            message.content
+                        ),
+                    }
+                )
+            elif isinstance(message, AssistantMessage):
+                openai_input.extend(
+                    self._assistant_message_to_openai_responses_input_items(message)
+                )
+            elif isinstance(message, ToolResponseMessage):
+                openai_input.append(
+                    {
+                        "type": "function_call_output",
+                        "call_id": message.id,
+                        "output": self._text_content_to_string(message.content),
+                    }
+                )
+
+        return openai_input
+
     def _messages_to_openai_messages(
         self,
         messages: list[Message],
@@ -292,6 +423,44 @@ class OpenAIClient(BaseClient):
 
         return Omit()
 
+    def _get_openai_responses_text_or_omit(
+        self,
+        response_format: ResponseFormat | None,
+    ) -> dict[str, object] | Omit:
+        if isinstance(response_format, JSONSchemaResponse):
+            return {
+                "format": {
+                    "type": "json_schema",
+                    "name": get_response_format_name(
+                        response_format,
+                        default="response",
+                    ),
+                    "schema": get_response_schema(
+                        response_format,
+                        supported_keys=OPENAI_SUPPORTED_SCHEMA_KEYS,
+                        supported_string_formats=OPENAI_SUPPORTED_STRING_FORMATS,
+                        strict=get_response_format_strict(
+                            response_format,
+                            default=False,
+                        ),
+                    )
+                    or {},
+                    "strict": get_response_format_strict(response_format, default=True),
+                }
+            }
+
+        if isinstance(response_format, JSONObjectResponse):
+            return {
+                "format": ResponseFormatJSONObject(type="json_object"),
+            }
+
+        if isinstance(response_format, TextResponse):
+            return {
+                "format": ResponseFormatText(type="text"),
+            }
+
+        return Omit()
+
     def _llm_tools_to_openai_tools(
         self,
         tools: list[Tool],
@@ -314,6 +483,26 @@ class OpenAIClient(BaseClient):
             for tool in tools
         ]
 
+    def _llm_tools_to_openai_responses_tools(
+        self,
+        tools: list[Tool],
+    ) -> list[dict[str, object]]:
+        return [
+            {
+                "type": "function",
+                "name": tool.name,
+                "description": tool.description,
+                "parameters": get_schema_as_dict(
+                    tool.input_schema,
+                    supported_keys=OPENAI_SUPPORTED_SCHEMA_KEYS,
+                    supported_string_formats=OPENAI_SUPPORTED_STRING_FORMATS,
+                    strict=tool.strict,
+                ),
+                "strict": tool.strict,
+            }
+            for tool in tools
+        ]
+
     def _get_openai_tools_and_tool_choice_or_omit(
         self,
         tools: list[Tool] | None,
@@ -324,13 +513,34 @@ class OpenAIClient(BaseClient):
         if not openai_tools:
             return Omit(), Omit()
 
-        if not resolved.required_names:
+        if not resolved.requires_tool:
             return openai_tools, Omit()
 
-        if len(resolved.required_names) == 1 and not resolved.optional_names:
+        if len(resolved.tools) == 1:
             return openai_tools, {
                 "type": "function",
-                "function": {"name": resolved.required_names[0]},
+                "function": {"name": resolved.tools[0].name},
+            }
+
+        return openai_tools, "required"
+
+    def _get_openai_responses_tools_and_tool_choice_or_omit(
+        self,
+        tools: list[Tool] | None,
+        tool_choice: ToolChoice | None,
+    ) -> tuple[list[dict[str, object]] | Omit, object | Omit]:
+        resolved = resolve_tools(tools, tool_choice)
+        openai_tools = self._llm_tools_to_openai_responses_tools(resolved.tools)
+        if not openai_tools:
+            return Omit(), Omit()
+
+        if not resolved.requires_tool:
+            return openai_tools, Omit()
+
+        if len(resolved.tools) == 1:
+            return openai_tools, {
+                "type": "function",
+                "name": resolved.tools[0].name,
             }
 
         return openai_tools, "required"
@@ -350,25 +560,107 @@ class OpenAIClient(BaseClient):
 
     def _response_usage(self, usage: object | None) -> ResponseUsage | None:
         raw_usage = self._dump_model(usage)
-        prompt_tokens = getattr(usage, "prompt_tokens", None)
-        completion_tokens = getattr(usage, "completion_tokens", None)
+        input_tokens = getattr(usage, "input_tokens", None)
+        if input_tokens is None:
+            input_tokens = getattr(usage, "prompt_tokens", None)
+
+        output_tokens = getattr(usage, "output_tokens", None)
+        if output_tokens is None:
+            output_tokens = getattr(usage, "completion_tokens", None)
+
         total_tokens = getattr(usage, "total_tokens", None)
 
         if not raw_usage and all(
-            value is None for value in (prompt_tokens, completion_tokens, total_tokens)
+            value is None for value in (input_tokens, output_tokens, total_tokens)
         ):
             return None
 
         details = dict(raw_usage)
+        details.pop("input_tokens", None)
+        details.pop("output_tokens", None)
         details.pop("prompt_tokens", None)
         details.pop("completion_tokens", None)
         details.pop("total_tokens", None)
 
         return ResponseUsage(
-            input_tokens=prompt_tokens,
-            output_tokens=completion_tokens,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
             total_tokens=total_tokens,
             details=details,
+        )
+
+    def _openai_responses_reasoning_and_extra_body(
+        self,
+        reasoning_effort: ReasoningEffort | None,
+        extra_body: dict | None,
+    ) -> tuple[dict[str, object] | Omit, dict | None]:
+        request_extra_body = dict(extra_body or {})
+        raw_reasoning = request_extra_body.pop("reasoning", None)
+
+        if raw_reasoning is None:
+            reasoning: dict[str, object] = {}
+        elif isinstance(raw_reasoning, dict):
+            reasoning = dict(raw_reasoning)
+        elif reasoning_effort is None:
+            return raw_reasoning, request_extra_body or None
+        else:
+            reasoning = {}
+
+        if reasoning_effort is not None:
+            if reasoning_effort.effort is not None:
+                reasoning["effort"] = reasoning_effort.effort
+            if reasoning_effort.summary is not None:
+                reasoning["summary"] = reasoning_effort.summary
+
+        reasoning.setdefault("summary", "auto")
+        return reasoning or Omit(), request_extra_body or None
+
+    def _get_openai_chat_reasoning_effort_or_omit(
+        self,
+        reasoning_effort: ReasoningEffort | None,
+    ) -> str | Omit:
+        if reasoning_effort is None or reasoning_effort.effort is None:
+            return Omit()
+
+        return reasoning_effort.effort
+
+    def _responses_output_to_assistant_message(
+        self,
+        output: list[object],
+    ) -> AssistantMessage:
+        text_chunks: list[str] = []
+        thinking_chunks: list[str] = []
+        tool_calls: list[AssistantToolCall] = []
+
+        for item in output:
+            item_type = getattr(item, "type", None)
+
+            if item_type == "message":
+                for content in getattr(item, "content", []) or []:
+                    content_type = getattr(content, "type", None)
+                    if content_type == "output_text" and getattr(content, "text", None):
+                        text_chunks.append(content.text)
+                    elif content_type == "refusal" and getattr(
+                        content, "refusal", None
+                    ):
+                        text_chunks.append(content.refusal)
+            elif item_type == "reasoning":
+                for summary in getattr(item, "summary", []) or []:
+                    if getattr(summary, "text", None):
+                        thinking_chunks.append(summary.text)
+            elif item_type == "function_call":
+                tool_calls.append(
+                    AssistantToolCall(
+                        id=getattr(item, "call_id", None) or getattr(item, "id", None) or "",
+                        name=getattr(item, "name", None) or "",
+                        arguments=getattr(item, "arguments", None),
+                    )
+                )
+
+        return AssistantMessage(
+            content=content_from_text("".join(text_chunks) or None),
+            thinking="".join(thinking_chunks) or None,
+            tool_calls=tool_calls,
         )
 
     def generate(
@@ -381,12 +673,32 @@ class OpenAIClient(BaseClient):
         tool_choice: ToolChoice | None = None,
         response_format: ResponseFormat | None = None,
         max_tokens: int | None = None,
+        reasoning_effort: ReasoningEffort | None = None,
         extra_body: dict | None = None,
         use_tools_for_structured_output: bool | None = None,
+        api_type: OpenAIApiType = OpenAIApiType.COMPLETIONS,
         stream: bool = False,
     ) -> ResponseResult:
+        resolved_api_type = self._coerce_api_type(api_type)
+        if resolved_api_type is None:
+            raise LLMError(400, f"Unsupported OpenAI api_type: {api_type}")
+
         if stream:
-            return self._generate_stream(
+            if resolved_api_type == OpenAIApiType.RESPONSES:
+                return self._generate_responses_stream(
+                    model=model,
+                    messages=messages,
+                    temperature=temperature,
+                    tools=tools,
+                    tool_choice=tool_choice,
+                    response_format=response_format,
+                    max_tokens=max_tokens,
+                    reasoning_effort=reasoning_effort,
+                    extra_body=extra_body,
+                    use_tools_for_structured_output=use_tools_for_structured_output,
+                )
+
+            return self._generate_completions_stream(
                 model=model,
                 messages=messages,
                 temperature=temperature,
@@ -394,11 +706,26 @@ class OpenAIClient(BaseClient):
                 tool_choice=tool_choice,
                 response_format=response_format,
                 max_tokens=max_tokens,
+                reasoning_effort=reasoning_effort,
                 extra_body=extra_body,
                 use_tools_for_structured_output=use_tools_for_structured_output,
             )
 
-        return self._generate_once(
+        if resolved_api_type == OpenAIApiType.RESPONSES:
+            return self._generate_responses_once(
+                model=model,
+                messages=messages,
+                temperature=temperature,
+                tools=tools,
+                tool_choice=tool_choice,
+                response_format=response_format,
+                max_tokens=max_tokens,
+                reasoning_effort=reasoning_effort,
+                extra_body=extra_body,
+                use_tools_for_structured_output=use_tools_for_structured_output,
+            )
+
+        return self._generate_completions_once(
             model=model,
             messages=messages,
             temperature=temperature,
@@ -406,11 +733,24 @@ class OpenAIClient(BaseClient):
             tool_choice=tool_choice,
             response_format=response_format,
             max_tokens=max_tokens,
+            reasoning_effort=reasoning_effort,
             extra_body=extra_body,
             use_tools_for_structured_output=use_tools_for_structured_output,
         )
 
-    def _generate_once(
+    def _coerce_api_type(
+        self,
+        api_type: OpenAIApiType | str,
+    ) -> OpenAIApiType | None:
+        if isinstance(api_type, OpenAIApiType):
+            return api_type
+
+        try:
+            return OpenAIApiType(api_type)
+        except ValueError:
+            return None
+
+    def _generate_completions_once(
         self,
         *,
         model: str,
@@ -420,6 +760,7 @@ class OpenAIClient(BaseClient):
         tool_choice: ToolChoice | None = None,
         response_format: ResponseFormat | None = None,
         max_tokens: int | None = None,
+        reasoning_effort: ReasoningEffort | None = None,
         extra_body: dict | None = None,
         use_tools_for_structured_output: bool | None = None,
     ) -> ResponseContent:
@@ -441,6 +782,9 @@ class OpenAIClient(BaseClient):
                 tools=openai_tools,
                 tool_choice=openai_tool_choice,
                 max_completion_tokens=max_tokens,
+                reasoning_effort=self._get_openai_chat_reasoning_effort_or_omit(
+                    reasoning_effort
+                ),
                 extra_body=extra_body,
             )
             duration_seconds = perf_counter() - start_time
@@ -466,7 +810,7 @@ class OpenAIClient(BaseClient):
         except Exception as exc:
             raise_llm_error(exc, provider="openai")
 
-    def _generate_stream(
+    def _generate_completions_stream(
         self,
         *,
         model: str,
@@ -476,6 +820,7 @@ class OpenAIClient(BaseClient):
         tool_choice: ToolChoice | None = None,
         response_format: ResponseFormat | None = None,
         max_tokens: int | None = None,
+        reasoning_effort: ReasoningEffort | None = None,
         extra_body: dict | None = None,
         use_tools_for_structured_output: bool | None = None,
     ):
@@ -497,6 +842,9 @@ class OpenAIClient(BaseClient):
                 tools=openai_tools,
                 tool_choice=openai_tool_choice,
                 max_completion_tokens=max_tokens,
+                reasoning_effort=self._get_openai_chat_reasoning_effort_or_omit(
+                    reasoning_effort
+                ),
                 extra_body=extra_body,
                 stream=True,
                 stream_options={"include_usage": True},
@@ -598,12 +946,324 @@ class OpenAIClient(BaseClient):
             new_messages = [*messages, assistant_message]
             duration_seconds = perf_counter() - start_time
 
+            if current_chunk_type == "tool":
+                for tool_call in tool_calls:
+                    yield ResponseStreamToolCompleteChunk(
+                        id=tool_call.id,
+                        tool=tool_call.name,
+                        arguments=tool_call.arguments,
+                    )
+
             stream_chunk = self._close_stream_chunk(
                 current_chunk_type=current_chunk_type,
                 current_tool=current_tool,
             )
             if stream_chunk is not None:
                 yield stream_chunk
+
+            if current_chunk_type != "tool":
+                for tool_call in tool_calls:
+                    yield ResponseStreamToolCompleteChunk(
+                        id=tool_call.id,
+                        tool=tool_call.name,
+                        arguments=tool_call.arguments,
+                    )
+            yield ResponseStreamCompletionChunk(
+                content=self._final_content(
+                    assistant_message.content,
+                    response_format,
+                ),
+                messages=new_messages,
+                tool_calls=tool_calls,
+                usage=usage,
+                duration_seconds=duration_seconds,
+            )
+        except Exception as exc:
+            raise_llm_error(exc, provider="openai")
+
+    def _generate_responses_once(
+        self,
+        *,
+        model: str,
+        messages: list[Message],
+        temperature: float | None = None,
+        tools: list[Tool] | None = None,
+        tool_choice: ToolChoice | None = None,
+        response_format: ResponseFormat | None = None,
+        max_tokens: int | None = None,
+        reasoning_effort: ReasoningEffort | None = None,
+        extra_body: dict | None = None,
+        use_tools_for_structured_output: bool | None = None,
+    ) -> ResponseContent:
+        del use_tools_for_structured_output
+
+        openai_tools, openai_tool_choice = (
+            self._get_openai_responses_tools_and_tool_choice_or_omit(
+                tools,
+                tool_choice,
+            )
+        )
+        reasoning, request_extra_body = self._openai_responses_reasoning_and_extra_body(
+            reasoning_effort,
+            extra_body
+        )
+
+        try:
+            start_time = perf_counter()
+            response = self._client.responses.create(
+                model=model,
+                input=self._messages_to_openai_responses_input(messages),
+                temperature=temperature,
+                text=self._get_openai_responses_text_or_omit(response_format),
+                tools=openai_tools,
+                tool_choice=openai_tool_choice,
+                reasoning=reasoning,
+                max_output_tokens=max_tokens,
+                extra_body=request_extra_body,
+            )
+            duration_seconds = perf_counter() - start_time
+
+            assistant_message = self._responses_output_to_assistant_message(
+                getattr(response, "output", []) or []
+            )
+            new_messages = [*messages, assistant_message]
+
+            return ResponseContent(
+                content=self._final_content(
+                    assistant_message.content,
+                    response_format,
+                ),
+                messages=new_messages,
+                tool_calls=assistant_message.tool_calls,
+                usage=self._response_usage(getattr(response, "usage", None)),
+                duration_seconds=duration_seconds,
+            )
+        except Exception as exc:
+            raise_llm_error(exc, provider="openai")
+
+    def _generate_responses_stream(
+        self,
+        *,
+        model: str,
+        messages: list[Message],
+        temperature: float | None = None,
+        tools: list[Tool] | None = None,
+        tool_choice: ToolChoice | None = None,
+        response_format: ResponseFormat | None = None,
+        max_tokens: int | None = None,
+        reasoning_effort: ReasoningEffort | None = None,
+        extra_body: dict | None = None,
+        use_tools_for_structured_output: bool | None = None,
+    ):
+        del use_tools_for_structured_output
+
+        openai_tools, openai_tool_choice = (
+            self._get_openai_responses_tools_and_tool_choice_or_omit(
+                tools,
+                tool_choice,
+            )
+        )
+        reasoning, request_extra_body = self._openai_responses_reasoning_and_extra_body(
+            reasoning_effort,
+            extra_body
+        )
+
+        try:
+            start_time = perf_counter()
+            response = self._client.responses.create(
+                model=model,
+                input=self._messages_to_openai_responses_input(messages),
+                temperature=temperature,
+                text=self._get_openai_responses_text_or_omit(response_format),
+                tools=openai_tools,
+                tool_choice=openai_tool_choice,
+                reasoning=reasoning,
+                max_output_tokens=max_tokens,
+                extra_body=request_extra_body,
+                stream=True,
+            )
+
+            current_chunk_type = None
+            current_tool = None
+            content = ""
+            thinking = ""
+            partial_tool_calls: dict[str, dict[str, str | None]] = {}
+            tool_order: list[str] = []
+            completed_tool_ids: set[str] = set()
+            final_response = None
+
+            for event in response:
+                event_type = getattr(event, "type", None)
+
+                if event_type == "response.output_text.delta":
+                    content += event.delta
+                    current_chunk_type, current_tool, stream_chunks = (
+                        self._transition_stream_chunk(
+                            current_chunk_type=current_chunk_type,
+                            next_chunk_type="content",
+                            current_tool=current_tool,
+                        )
+                    )
+                    for stream_chunk in stream_chunks:
+                        yield stream_chunk
+                    yield ResponseStreamContentChunk(chunk=event.delta)
+                    continue
+
+                if event_type == "response.reasoning_summary_text.delta":
+                    thinking += event.delta
+                    current_chunk_type, current_tool, stream_chunks = (
+                        self._transition_stream_chunk(
+                            current_chunk_type=current_chunk_type,
+                            next_chunk_type="thinking",
+                            current_tool=current_tool,
+                        )
+                    )
+                    for stream_chunk in stream_chunks:
+                        yield stream_chunk
+                    yield ResponseStreamThinkingChunk(chunk=event.delta)
+                    continue
+
+                if event_type == "response.output_item.added":
+                    item = getattr(event, "item", None)
+                    if getattr(item, "type", None) != "function_call":
+                        continue
+
+                    tool_key = getattr(item, "id", None) or getattr(
+                        item, "call_id", None
+                    ) or self._response_item_id("tool")
+                    current = partial_tool_calls.get(tool_key)
+                    if current is None:
+                        current = {"id": None, "name": None, "arguments": None}
+                        partial_tool_calls[tool_key] = current
+                        tool_order.append(tool_key)
+
+                    current["id"] = getattr(item, "call_id", None) or getattr(
+                        item, "id", None
+                    )
+                    current["name"] = getattr(item, "name", None)
+                    if current["arguments"] is None:
+                        current["arguments"] = getattr(item, "arguments", None)
+                    continue
+
+                if event_type == "response.output_item.done":
+                    item = getattr(event, "item", None)
+                    if getattr(item, "type", None) != "function_call":
+                        continue
+
+                    tool_key = getattr(item, "id", None) or getattr(
+                        item, "call_id", None
+                    )
+                    if tool_key is None:
+                        continue
+
+                    current = partial_tool_calls.get(tool_key)
+                    if current is None:
+                        current = {"id": None, "name": None, "arguments": None}
+                        partial_tool_calls[tool_key] = current
+                        tool_order.append(tool_key)
+
+                    current["id"] = getattr(item, "call_id", None) or getattr(
+                        item, "id", None
+                    )
+                    current["name"] = getattr(item, "name", None)
+                    current["arguments"] = getattr(item, "arguments", None)
+                    completed_tool_id = current["id"] or current["name"] or tool_key
+                    if current["name"] and completed_tool_id not in completed_tool_ids:
+                        completed_tool_ids.add(completed_tool_id)
+                        yield ResponseStreamToolCompleteChunk(
+                            id=completed_tool_id,
+                            tool=current["name"],
+                            arguments=current["arguments"],
+                        )
+                    continue
+
+                if event_type == "response.function_call_arguments.delta":
+                    tool_key = event.item_id
+                    current = partial_tool_calls.get(tool_key)
+                    if current is None:
+                        current = {"id": None, "name": None, "arguments": None}
+                        partial_tool_calls[tool_key] = current
+                        tool_order.append(tool_key)
+
+                    if current["arguments"] is None:
+                        current["arguments"] = event.delta
+                    else:
+                        current["arguments"] += event.delta
+
+                    current_chunk_type, current_tool, stream_chunks = (
+                        self._transition_stream_chunk(
+                            current_chunk_type=current_chunk_type,
+                            next_chunk_type="tool",
+                            current_tool=current_tool,
+                            next_tool=current["name"],
+                        )
+                    )
+                    for stream_chunk in stream_chunks:
+                        yield stream_chunk
+                    yield ResponseStreamToolChunk(
+                        id=current["id"] or current["name"] or tool_key,
+                        tool=current["name"],
+                        chunk=event.delta,
+                    )
+                    continue
+
+                if event_type == "response.completed":
+                    final_response = event.response
+
+            if final_response is not None:
+                assistant_message = self._responses_output_to_assistant_message(
+                    getattr(final_response, "output", []) or []
+                )
+                tool_calls = assistant_message.tool_calls
+                usage = self._response_usage(getattr(final_response, "usage", None))
+            else:
+                tool_calls = [
+                    AssistantToolCall(
+                        id=partial_tool_calls[tool_key]["id"]
+                        or partial_tool_calls[tool_key]["name"]
+                        or tool_key,
+                        name=partial_tool_calls[tool_key]["name"] or "",
+                        arguments=partial_tool_calls[tool_key]["arguments"],
+                    )
+                    for tool_key in tool_order
+                    if partial_tool_calls[tool_key]["name"]
+                ]
+                assistant_message = AssistantMessage(
+                    content=content_from_text(content or None),
+                    thinking=thinking or None,
+                    tool_calls=tool_calls,
+                )
+                usage = None
+
+            new_messages = [*messages, assistant_message]
+            duration_seconds = perf_counter() - start_time
+
+            pending_tool_calls = [
+                tool_call for tool_call in tool_calls if tool_call.id not in completed_tool_ids
+            ]
+
+            if current_chunk_type == "tool":
+                for tool_call in pending_tool_calls:
+                    yield ResponseStreamToolCompleteChunk(
+                        id=tool_call.id,
+                        tool=tool_call.name,
+                        arguments=tool_call.arguments,
+                    )
+
+            stream_chunk = self._close_stream_chunk(
+                current_chunk_type=current_chunk_type,
+                current_tool=current_tool,
+            )
+            if stream_chunk is not None:
+                yield stream_chunk
+
+            if current_chunk_type != "tool":
+                for tool_call in pending_tool_calls:
+                    yield ResponseStreamToolCompleteChunk(
+                        id=tool_call.id,
+                        tool=tool_call.name,
+                        arguments=tool_call.arguments,
+                    )
             yield ResponseStreamCompletionChunk(
                 content=self._final_content(
                     assistant_message.content,

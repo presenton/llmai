@@ -11,6 +11,8 @@ from google.genai.types import (
     FunctionCallingConfigMode as GoogleFunctionCallingConfigMode,
     GenerateContentConfig,
     Part as GooglePart,
+    ThinkingConfig as GoogleThinkingConfig,
+    ThinkingLevel as GoogleThinkingLevel,
     Tool as GoogleTool,
     ToolConfig as GoogleToolConfig,
 )
@@ -29,6 +31,7 @@ from llmai.shared.messages import (
     collapse_content_parts,
     normalize_content_parts,
 )
+from llmai.shared.reasoning import ReasoningEffort
 from llmai.shared.response_formats import (
     JSONSchemaResponse,
     JSONObjectResponse,
@@ -43,6 +46,7 @@ from llmai.shared.responses import (
     ResponseStreamCompletionChunk,
     ResponseStreamContentChunk,
     ResponseStreamThinkingChunk,
+    ResponseStreamToolCompleteChunk,
     ResponseStreamToolChunk,
     ResponseUsage,
 )
@@ -127,6 +131,41 @@ class GoogleClient(BaseClient):
             return {}
 
         return parsed if isinstance(parsed, dict) else {}
+
+    def _get_google_thinking_config(
+        self,
+        reasoning_effort: ReasoningEffort | None,
+    ) -> GoogleThinkingConfig | None:
+        if reasoning_effort is None:
+            return None
+
+        thinking_budget = reasoning_effort.tokens
+        if reasoning_effort.effort == "none" and thinking_budget is None:
+            thinking_budget = 0
+
+        thinking_level = None
+        if reasoning_effort.effort == "minimal":
+            thinking_level = GoogleThinkingLevel.MINIMAL
+        elif reasoning_effort.effort == "low":
+            thinking_level = GoogleThinkingLevel.LOW
+        elif reasoning_effort.effort == "medium":
+            thinking_level = GoogleThinkingLevel.MEDIUM
+        elif reasoning_effort.effort in {"high", "xhigh"}:
+            thinking_level = GoogleThinkingLevel.HIGH
+
+        include_thoughts = None
+        if reasoning_effort.effort == "none":
+            include_thoughts = False
+        elif reasoning_effort.summary is not None:
+            include_thoughts = True
+        elif reasoning_effort.effort is not None or reasoning_effort.tokens is not None:
+            include_thoughts = True
+
+        return GoogleThinkingConfig(
+            include_thoughts=include_thoughts,
+            thinking_budget=thinking_budget,
+            thinking_level=thinking_level,
+        )
 
     def _content_to_assistant_message(self, content: GoogleContent) -> AssistantMessage:
         content_parts: list[TextContentPart | ImageContentPart] = []
@@ -357,10 +396,10 @@ class GoogleClient(BaseClient):
 
         mode = GoogleFunctionCallingConfigMode.AUTO
         allowed_function_names: list[str] | None = None
-        if use_tools_for_structured_output or resolved.required_names:
+        if use_tools_for_structured_output or resolved.requires_tool:
             mode = GoogleFunctionCallingConfigMode.ANY
-            if resolved.required_names and not resolved.optional_names:
-                allowed_function_names = resolved.required_names
+            if resolved.requires_tool and len(resolved.tools) == 1:
+                allowed_function_names = resolved.tool_names
 
         tool_config = GoogleToolConfig(
             function_calling_config=GoogleFunctionCallingConfig(
@@ -442,6 +481,7 @@ class GoogleClient(BaseClient):
         tool_choice: ToolChoice | None = None,
         response_format: ResponseFormat | None = None,
         max_tokens: int | None = None,
+        reasoning_effort: ReasoningEffort | None = None,
         extra_body: dict | None = None,
         use_tools_for_structured_output: bool | None = None,
         stream: bool = False,
@@ -455,6 +495,7 @@ class GoogleClient(BaseClient):
                 tool_choice=tool_choice,
                 response_format=response_format,
                 max_tokens=max_tokens,
+                reasoning_effort=reasoning_effort,
                 extra_body=extra_body,
                 use_tools_for_structured_output=use_tools_for_structured_output,
             )
@@ -467,6 +508,7 @@ class GoogleClient(BaseClient):
             tool_choice=tool_choice,
             response_format=response_format,
             max_tokens=max_tokens,
+            reasoning_effort=reasoning_effort,
             extra_body=extra_body,
             use_tools_for_structured_output=use_tools_for_structured_output,
         )
@@ -481,6 +523,7 @@ class GoogleClient(BaseClient):
         tool_choice: ToolChoice | None = None,
         response_format: ResponseFormat | None = None,
         max_tokens: int | None = None,
+        reasoning_effort: ReasoningEffort | None = None,
         extra_body: dict | None = None,
         use_tools_for_structured_output: bool | None = None,
     ) -> ResponseContent:
@@ -504,6 +547,7 @@ class GoogleClient(BaseClient):
                 response_format,
                 use_tools_for_structured_output,
             ),
+            thinking_config=self._get_google_thinking_config(reasoning_effort),
             max_output_tokens=max_tokens,
             temperature=temperature,
         )
@@ -572,6 +616,7 @@ class GoogleClient(BaseClient):
         tool_choice: ToolChoice | None = None,
         response_format: ResponseFormat | None = None,
         max_tokens: int | None = None,
+        reasoning_effort: ReasoningEffort | None = None,
         extra_body: dict | None = None,
         use_tools_for_structured_output: bool | None = None,
     ):
@@ -595,6 +640,7 @@ class GoogleClient(BaseClient):
                 response_format,
                 use_tools_for_structured_output,
             ),
+            thinking_config=self._get_google_thinking_config(reasoning_effort),
             max_output_tokens=max_tokens,
             temperature=temperature,
         )
@@ -753,12 +799,28 @@ class GoogleClient(BaseClient):
             new_messages = [*messages, assistant_message]
             duration_seconds = perf_counter() - start_time
 
+            if current_chunk_type == "tool":
+                for tool_call in user_tool_calls:
+                    yield ResponseStreamToolCompleteChunk(
+                        id=tool_call.id,
+                        tool=tool_call.name,
+                        arguments=tool_call.arguments,
+                    )
+
             stream_chunk = self._close_stream_chunk(
                 current_chunk_type=current_chunk_type,
                 current_tool=current_tool,
             )
             if stream_chunk is not None:
                 yield stream_chunk
+
+            if current_chunk_type != "tool":
+                for tool_call in user_tool_calls:
+                    yield ResponseStreamToolCompleteChunk(
+                        id=tool_call.id,
+                        tool=tool_call.name,
+                        arguments=tool_call.arguments,
+                    )
             yield ResponseStreamCompletionChunk(
                 content=self._final_content(
                     assistant_message.content,

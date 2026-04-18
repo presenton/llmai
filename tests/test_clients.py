@@ -1,3 +1,4 @@
+import inspect
 import json
 import os
 import unittest
@@ -11,7 +12,16 @@ from botocore import exceptions as botocore_exceptions
 from google.genai import errors as google_errors
 from pydantic import BaseModel
 
-from llmai import AnthropicClient, BedrockClient, GoogleClient, OpenAIClient
+from llmai import (
+    AnthropicClient,
+    BedrockClient,
+    DeepSeekClient,
+    GoogleClient,
+    LLMProvider,
+    OpenAIApiType,
+    OpenAIClient,
+    get_client,
+)
 from llmai.shared import (
     AssistantMessage,
     ImageContentPart,
@@ -20,6 +30,9 @@ from llmai.shared import (
     JSONSchemaResponse,
     LLMError,
     LLMRateLimitError,
+    ReasoningEffort,
+    ReasoningEffortValue,
+    ReasoningSummary,
     TextContentPart,
     Tool,
     UserMessage,
@@ -50,6 +63,18 @@ def stream_marker_events(chunks):
 
 
 class FakeOpenAICompletions:
+    def __init__(self, response):
+        self.response = response
+        self.calls = []
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        if isinstance(self.response, Exception):
+            raise self.response
+        return self.response
+
+
+class FakeOpenAIResponses:
     def __init__(self, response):
         self.response = response
         self.calls = []
@@ -155,6 +180,198 @@ class AnswerSchema(BaseModel):
 
 
 class ClientBehaviorTests(unittest.TestCase):
+    def test_get_client_openai_uses_env_configuration(self):
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "OPENAI_API_KEY": "openai-key",
+                    "OPENAI_BASE_URL": "https://openai.example/v1",
+                },
+                clear=True,
+            ),
+            patch("llmai.client.OpenAIClient") as openai_client_cls,
+        ):
+            client = get_client(LLMProvider.OPENAI)
+
+        self.assertIs(client, openai_client_cls.return_value)
+        openai_client_cls.assert_called_once_with(
+            api_key="openai-key",
+            base_url="https://openai.example/v1",
+            logger=None,
+        )
+
+    def test_get_client_openai_requires_api_key_env(self):
+        with patch.dict(os.environ, {}, clear=True):
+            with self.assertRaises(LLMConfigurationError) as context:
+                get_client(LLMProvider.OPENAI)
+
+        self.assertEqual(context.exception.provider, "openai")
+        self.assertIn("OPENAI_API_KEY", context.exception.message)
+
+    def test_get_client_deepseek_uses_env_configuration(self):
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "DEEPSEEK_API_KEY": "deepseek-key",
+                    "DEEPSEEK_BASE_URL": "https://api.deepseek.com/beta",
+                },
+                clear=True,
+            ),
+            patch("llmai.client.DeepSeekClient") as deepseek_client_cls,
+        ):
+            client = get_client(LLMProvider.DEEPSEEK)
+
+        self.assertIs(client, deepseek_client_cls.return_value)
+        deepseek_client_cls.assert_called_once_with(
+            api_key="deepseek-key",
+            base_url="https://api.deepseek.com/beta",
+            logger=None,
+        )
+
+    def test_get_client_google_accepts_google_and_gemini_env_names(self):
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "GEMINI_API_KEY": "google-key",
+                },
+                clear=True,
+            ),
+            patch("llmai.client.GoogleClient") as google_client_cls,
+        ):
+            client = get_client(LLMProvider.GOOGLE)
+
+        self.assertIs(client, google_client_cls.return_value)
+        google_client_cls.assert_called_once_with(
+            api_key="google-key",
+            logger=None,
+        )
+
+    def test_get_client_anthropic_uses_env_configuration(self):
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "ANTHROPIC_API_KEY": "anthropic-key",
+                },
+                clear=True,
+            ),
+            patch("llmai.client.AnthropicClient") as anthropic_client_cls,
+        ):
+            client = get_client(LLMProvider.ANTHROPIC)
+
+        self.assertIs(client, anthropic_client_cls.return_value)
+        anthropic_client_cls.assert_called_once_with(
+            api_key="anthropic-key",
+            logger=None,
+        )
+
+    def test_get_client_bedrock_supports_api_key_envs(self):
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "BEDROCK_API_KEY": "bedrock-key",
+                    "BEDROCK_REGION": "us-east-1",
+                },
+                clear=True,
+            ),
+            patch("llmai.client.BedrockClient") as bedrock_client_cls,
+        ):
+            client = get_client(LLMProvider.BEDROCK)
+
+        self.assertIs(client, bedrock_client_cls.return_value)
+        bedrock_client_cls.assert_called_once_with(
+            api_key="bedrock-key",
+            region="us-east-1",
+            logger=None,
+        )
+
+    def test_get_client_bedrock_supports_aws_credentials_envs(self):
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "AWS_ACCESS_KEY_ID": "aws-id",
+                    "AWS_SECRET_ACCESS_KEY": "aws-secret",
+                    "AWS_SESSION_TOKEN": "aws-session",
+                    "AWS_REGION": "us-west-2",
+                },
+                clear=True,
+            ),
+            patch("llmai.client.BedrockClient") as bedrock_client_cls,
+        ):
+            client = get_client(LLMProvider.BEDROCK)
+
+        self.assertIs(client, bedrock_client_cls.return_value)
+        bedrock_client_cls.assert_called_once_with(
+            region="us-west-2",
+            aws_access_key_id="aws-id",
+            aws_secret_access_key="aws-secret",
+            aws_session_token="aws-session",
+            logger=None,
+        )
+
+    def test_get_client_bedrock_supports_profile_env(self):
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "AWS_PROFILE": "dev-profile",
+                    "AWS_DEFAULT_REGION": "us-west-2",
+                },
+                clear=True,
+            ),
+            patch("llmai.client.BedrockClient") as bedrock_client_cls,
+        ):
+            client = get_client(LLMProvider.BEDROCK)
+
+        self.assertIs(client, bedrock_client_cls.return_value)
+        bedrock_client_cls.assert_called_once_with(
+            region="us-west-2",
+            profile_name="dev-profile",
+            logger=None,
+        )
+
+    def test_get_client_bedrock_rejects_ambiguous_auth_envs(self):
+        with patch.dict(
+            os.environ,
+            {
+                "BEDROCK_API_KEY": "bedrock-key",
+                "AWS_ACCESS_KEY_ID": "aws-id",
+                "AWS_SECRET_ACCESS_KEY": "aws-secret",
+                "BEDROCK_REGION": "us-east-1",
+            },
+            clear=True,
+        ):
+            with self.assertRaises(LLMConfigurationError) as context:
+                get_client(LLMProvider.BEDROCK)
+
+        self.assertEqual(context.exception.provider, "bedrock")
+        self.assertIn("ambiguous", context.exception.message)
+
+    def test_get_client_accepts_string_provider_names(self):
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "OPENAI_API_KEY": "openai-key",
+                },
+                clear=True,
+            ),
+            patch("llmai.client.OpenAIClient") as openai_client_cls,
+        ):
+            client = get_client("openai")
+
+        self.assertIs(client, openai_client_cls.return_value)
+        openai_client_cls.assert_called_once_with(
+            api_key="openai-key",
+            base_url=None,
+            logger=None,
+        )
+
     def make_bedrock_client(self, runtime_client, **client_kwargs):
         captured_sessions = []
 
@@ -174,7 +391,7 @@ class ClientBehaviorTests(unittest.TestCase):
 
         openai_tools, tool_choice = client._get_openai_tools_and_tool_choice_or_omit(
             [make_tool("weather"), make_tool("time")],
-            {"required": ["weather"]},
+            {"mode": "required", "tools": ["weather"]},
         )
 
         self.assertEqual(
@@ -249,7 +466,7 @@ class ClientBehaviorTests(unittest.TestCase):
             model="gpt-test",
             messages=[UserMessage(content=text_parts("Weather?"))],
             tools=[make_tool("get_weather"), make_tool("time")],
-            tool_choice={"optional": ["get_weather"]},
+            tool_choice={"tools": ["get_weather"]},
         )
 
         self.assertEqual(result.tool_calls[0].name, "get_weather")
@@ -300,6 +517,33 @@ class ClientBehaviorTests(unittest.TestCase):
         )
         self.assertIsNotNone(result.duration_seconds)
         self.assertGreaterEqual(result.duration_seconds, 0)
+
+    def test_openai_generate_passes_reasoning_effort_model_to_chat_completions(self):
+        fake_message = SimpleNamespace(
+            content="final answer",
+            tool_calls=None,
+        )
+        fake_response = SimpleNamespace(
+            choices=[SimpleNamespace(message=fake_message)]
+        )
+        fake_completions = FakeOpenAICompletions(fake_response)
+
+        client = OpenAIClient(api_key="test")
+        client._client = SimpleNamespace(
+            chat=SimpleNamespace(completions=fake_completions)
+        )
+
+        client.generate(
+            model="gpt-test",
+            messages=[UserMessage(content=text_parts("Hello"))],
+            reasoning_effort=ReasoningEffort(
+                effort=ReasoningEffortValue.HIGH,
+                tokens=2048,
+                summary=ReasoningSummary.DETAILED,
+            ),
+        )
+
+        self.assertEqual(fake_completions.calls[0]["reasoning_effort"], "high")
 
     def test_openai_generate_wraps_provider_auth_errors(self):
         request = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
@@ -449,6 +693,7 @@ class ClientBehaviorTests(unittest.TestCase):
                 "stream",
                 "tool",
                 "tool",
+                "tool_complete",
                 "stream",
                 "stream_completion",
             ],
@@ -467,6 +712,9 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(payload_chunks[2].type, "tool")
         self.assertEqual(payload_chunks[1].tool, "get_weather")
         self.assertEqual(payload_chunks[2].tool, "get_weather")
+        self.assertEqual(payload_chunks[3].type, "tool_complete")
+        self.assertEqual(payload_chunks[3].tool, "get_weather")
+        self.assertEqual(payload_chunks[3].arguments, '{"city":"Kathmandu"}')
         self.assertEqual(payload_chunks[-1].type, "stream_completion")
         self.assertEqual(payload_chunks[-1].tool_calls[0].name, "get_weather")
         self.assertEqual(
@@ -846,13 +1094,594 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(payload_chunks[1].chunk, 'pong"}')
         self.assertEqual(payload_chunks[-1].content, {"answer": "pong"})
 
-    def test_anthropic_required_tool_choice_keeps_optional_tools_visible(self):
+    def test_openai_responses_generate_parses_structured_output_and_thinking(self):
+        fake_response = SimpleNamespace(
+            output=[
+                SimpleNamespace(
+                    type="reasoning",
+                    summary=[SimpleNamespace(text="Compare speed and creativity.")],
+                ),
+                SimpleNamespace(
+                    type="message",
+                    content=[
+                        SimpleNamespace(
+                            type="output_text",
+                            text='{"answer":"pong"}',
+                        )
+                    ],
+                ),
+            ],
+            usage=SimpleNamespace(
+                input_tokens=11,
+                output_tokens=7,
+                total_tokens=18,
+                input_tokens_details=SimpleNamespace(cached_tokens=2),
+                output_tokens_details=SimpleNamespace(reasoning_tokens=3),
+            ),
+        )
+        fake_responses = FakeOpenAIResponses(fake_response)
+
+        client = OpenAIClient(api_key="test")
+        client._client = SimpleNamespace(responses=fake_responses)
+
+        result = client.generate(
+            model="gpt-test",
+            messages=[UserMessage(content=text_parts("Answer in JSON"))],
+            response_format=JSONSchemaResponse(json_schema=AnswerSchema),
+            api_type="responses",
+        )
+
+        self.assertEqual(result.content, {"answer": "pong"})
+        self.assertEqual(
+            result.messages[-1].thinking,
+            "Compare speed and creativity.",
+        )
+        self.assertEqual(result.usage.input_tokens, 11)
+        self.assertEqual(result.usage.output_tokens, 7)
+        self.assertEqual(result.usage.total_tokens, 18)
+        self.assertEqual(result.usage.details["input_tokens_details"]["cached_tokens"], 2)
+        self.assertEqual(
+            result.usage.details["output_tokens_details"]["reasoning_tokens"],
+            3,
+        )
+        self.assertEqual(
+            fake_responses.calls[0]["text"]["format"]["type"],
+            "json_schema",
+        )
+        self.assertEqual(
+            fake_responses.calls[0]["reasoning"],
+            {"summary": "auto"},
+        )
+        self.assertEqual(fake_responses.calls[0]["input"][0]["role"], "user")
+
+    def test_openai_responses_generate_passes_reasoning_effort_model(self):
+        fake_response = SimpleNamespace(
+            output=[
+                SimpleNamespace(
+                    type="message",
+                    content=[
+                        SimpleNamespace(
+                            type="output_text",
+                            text="done",
+                        )
+                    ],
+                )
+            ]
+        )
+        fake_responses = FakeOpenAIResponses(fake_response)
+
+        client = OpenAIClient(api_key="test")
+        client._client = SimpleNamespace(responses=fake_responses)
+
+        client.generate(
+            model="gpt-test",
+            messages=[UserMessage(content=text_parts("Hello"))],
+            api_type=OpenAIApiType.RESPONSES,
+            reasoning_effort=ReasoningEffort(
+                effort=ReasoningEffortValue.HIGH,
+                tokens=2048,
+                summary=ReasoningSummary.DETAILED,
+            ),
+        )
+
+        self.assertEqual(
+            fake_responses.calls[0]["reasoning"],
+            {"effort": "high", "summary": "detailed"},
+        )
+
+    def test_openai_responses_stream_emits_thinking_tool_chunks_and_completion(self):
+        completed_response = SimpleNamespace(
+            output=[
+                SimpleNamespace(
+                    type="reasoning",
+                    summary=[SimpleNamespace(text="Plan")],
+                ),
+                SimpleNamespace(
+                    type="message",
+                    content=[
+                        SimpleNamespace(
+                            type="output_text",
+                            text="Hello",
+                        )
+                    ],
+                ),
+                SimpleNamespace(
+                    type="function_call",
+                    id="fc_1",
+                    call_id="call_1",
+                    name="get_weather",
+                    arguments='{"city":"Kathmandu"}',
+                ),
+            ],
+            usage=SimpleNamespace(
+                input_tokens=10,
+                output_tokens=4,
+                total_tokens=14,
+                input_tokens_details=SimpleNamespace(cached_tokens=1),
+                output_tokens_details=SimpleNamespace(reasoning_tokens=2),
+            ),
+        )
+        events = iter(
+            [
+                SimpleNamespace(
+                    type="response.output_item.added",
+                    item=SimpleNamespace(
+                        type="function_call",
+                        id="fc_1",
+                        call_id="call_1",
+                        name="get_weather",
+                        arguments="",
+                    ),
+                    output_index=2,
+                    sequence_number=1,
+                ),
+                SimpleNamespace(
+                    type="response.reasoning_summary_text.delta",
+                    delta="Plan",
+                    item_id="rs_1",
+                    output_index=0,
+                    sequence_number=2,
+                    summary_index=0,
+                ),
+                SimpleNamespace(
+                    type="response.output_text.delta",
+                    delta="Hello",
+                    item_id="msg_1",
+                    content_index=0,
+                    output_index=1,
+                    logprobs=[],
+                    sequence_number=3,
+                ),
+                SimpleNamespace(
+                    type="response.function_call_arguments.delta",
+                    delta='{"city":"Kath',
+                    item_id="fc_1",
+                    output_index=2,
+                    sequence_number=4,
+                ),
+                SimpleNamespace(
+                    type="response.function_call_arguments.delta",
+                    delta='mandu"}',
+                    item_id="fc_1",
+                    output_index=2,
+                    sequence_number=5,
+                ),
+                SimpleNamespace(
+                    type="response.completed",
+                    response=completed_response,
+                    sequence_number=6,
+                ),
+            ]
+        )
+        fake_responses = FakeOpenAIResponses(events)
+
+        client = OpenAIClient(api_key="test")
+        client._client = SimpleNamespace(responses=fake_responses)
+
+        chunks = list(
+            client.generate(
+                model="gpt-test",
+                messages=[UserMessage(content=text_parts("Weather?"))],
+                tools=[make_tool("get_weather")],
+                stream=True,
+                api_type="responses",
+            )
+        )
+
+        payload_chunks = stream_payload_chunks(chunks)
+
+        self.assertEqual(
+            [chunk.type for chunk in chunks],
+            [
+                "stream",
+                "thinking",
+                "stream",
+                "stream",
+                "content",
+                "stream",
+                "stream",
+                "tool",
+                "tool",
+                "tool_complete",
+                "stream",
+                "stream_completion",
+            ],
+        )
+        self.assertEqual(
+            stream_marker_events(chunks),
+            [
+                ("start", "thinking", None),
+                ("end", "thinking", None),
+                ("start", "content", None),
+                ("end", "content", None),
+                ("start", "tool", "get_weather"),
+                ("end", "tool", "get_weather"),
+            ],
+        )
+        self.assertEqual(payload_chunks[0].type, "thinking")
+        self.assertEqual(payload_chunks[0].chunk, "Plan")
+        self.assertEqual(payload_chunks[1].type, "content")
+        self.assertEqual(payload_chunks[1].chunk, "Hello")
+        self.assertEqual(payload_chunks[2].type, "tool")
+        self.assertEqual(payload_chunks[2].tool, "get_weather")
+        self.assertEqual(payload_chunks[3].type, "tool")
+        self.assertEqual(payload_chunks[3].tool, "get_weather")
+        self.assertEqual(payload_chunks[4].type, "tool_complete")
+        self.assertEqual(payload_chunks[4].tool, "get_weather")
+        self.assertEqual(payload_chunks[4].arguments, '{"city":"Kathmandu"}')
+        self.assertEqual(payload_chunks[-1].messages[-1].thinking, "Plan")
+        self.assertEqual(
+            payload_chunks[-1].tool_calls[0].arguments,
+            '{"city":"Kathmandu"}',
+        )
+        self.assertEqual(payload_chunks[-1].usage.input_tokens, 10)
+        self.assertEqual(payload_chunks[-1].usage.output_tokens, 4)
+        self.assertEqual(payload_chunks[-1].usage.total_tokens, 14)
+        self.assertEqual(
+            payload_chunks[-1].usage.details["output_tokens_details"]["reasoning_tokens"],
+            2,
+        )
+        self.assertTrue(fake_responses.calls[0]["stream"])
+        self.assertEqual(
+            fake_responses.calls[0]["reasoning"],
+            {"summary": "auto"},
+        )
+
+    def test_deepseek_init_uses_official_default_base_url(self):
+        with patch("llmai.deepseek.client.OpenAI") as openai_cls:
+            DeepSeekClient(api_key="test")
+
+        openai_cls.assert_called_once_with(
+            base_url="https://api.deepseek.com",
+            api_key="test",
+        )
+
+    def test_deepseek_init_uses_deepseek_api_key_env_by_default(self):
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "DEEPSEEK_API_KEY": "deepseek-env-key",
+                },
+                clear=True,
+            ),
+            patch("llmai.deepseek.client.OpenAI") as openai_cls,
+        ):
+            DeepSeekClient()
+
+        openai_cls.assert_called_once_with(
+            base_url="https://api.deepseek.com",
+            api_key="deepseek-env-key",
+        )
+
+    def test_deepseek_init_prefers_explicit_api_key_over_env(self):
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "DEEPSEEK_API_KEY": "deepseek-env-key",
+                },
+                clear=True,
+            ),
+            patch("llmai.deepseek.client.OpenAI") as openai_cls,
+        ):
+            DeepSeekClient(api_key="explicit-key")
+
+        openai_cls.assert_called_once_with(
+            base_url="https://api.deepseek.com",
+            api_key="explicit-key",
+        )
+
+    def test_deepseek_init_requires_deepseek_api_key_env_or_explicit_key(self):
+        with patch.dict(
+            os.environ,
+            {
+                "OPENAI_API_KEY": "openai-key",
+            },
+            clear=True,
+        ):
+            with self.assertRaises(LLMConfigurationError) as context:
+                DeepSeekClient()
+
+        self.assertEqual(context.exception.provider, "deepseek")
+        self.assertIn("DEEPSEEK_API_KEY", context.exception.message)
+
+    def test_deepseek_stream_uses_internal_response_schema_tool(self):
+        events = iter(
+            [
+                SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(
+                            delta=SimpleNamespace(
+                                content=None,
+                                tool_calls=[
+                                    SimpleNamespace(
+                                        index=0,
+                                        id="schema_1",
+                                        function=SimpleNamespace(
+                                            name="final_answer",
+                                            arguments='{"answer":"',
+                                        ),
+                                    )
+                                ],
+                            )
+                        )
+                    ]
+                ),
+                SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(
+                            delta=SimpleNamespace(
+                                content=None,
+                                tool_calls=[
+                                    SimpleNamespace(
+                                        index=0,
+                                        id=None,
+                                        function=SimpleNamespace(
+                                            name=None,
+                                            arguments='done"}',
+                                        ),
+                                    )
+                                ],
+                            )
+                        )
+                    ]
+                ),
+                SimpleNamespace(
+                    choices=[],
+                    usage=SimpleNamespace(
+                        prompt_tokens=8,
+                        completion_tokens=3,
+                        total_tokens=11,
+                    ),
+                ),
+            ]
+        )
+        fake_completions = FakeOpenAICompletions(events)
+
+        client = DeepSeekClient(api_key="test")
+        client._client = SimpleNamespace(
+            chat=SimpleNamespace(completions=fake_completions)
+        )
+
+        chunks = list(
+            client.generate(
+                model="deepseek-chat",
+                messages=[UserMessage(content=text_parts("Answer in JSON"))],
+                response_format=JSONSchemaResponse(
+                    name="final_answer",
+                    json_schema=AnswerSchema,
+                ),
+                stream=True,
+            )
+        )
+
+        marker_chunks = stream_marker_chunks(chunks)
+        payload_chunks = stream_payload_chunks(chunks)
+
+        self.assertEqual(
+            stream_marker_events(chunks),
+            [
+                ("start", "content", None),
+                ("end", "content", None),
+            ],
+        )
+        self.assertEqual(payload_chunks[0].type, "content")
+        self.assertEqual(payload_chunks[0].chunk, '{"answer":"')
+        self.assertEqual(payload_chunks[1].type, "content")
+        self.assertEqual(payload_chunks[1].chunk, 'done"}')
+        self.assertEqual(payload_chunks[-1].type, "stream_completion")
+        self.assertEqual(payload_chunks[-1].content, {"answer": "done"})
+        self.assertEqual(payload_chunks[-1].tool_calls, [])
+        self.assertEqual(payload_chunks[-1].messages[-1].tool_calls, [])
+        self.assertEqual(payload_chunks[-1].messages[-1].content[0].text, '{"answer":"done"}')
+        self.assertEqual(payload_chunks[-1].usage.input_tokens, 8)
+        self.assertEqual(payload_chunks[-1].usage.output_tokens, 3)
+        self.assertEqual(payload_chunks[-1].usage.total_tokens, 11)
+        self.assertEqual(
+            [tool["function"]["name"] for tool in fake_completions.calls[0]["tools"]],
+            ["final_answer"],
+        )
+        self.assertFalse(fake_completions.calls[0]["tools"][0]["function"]["strict"])
+        self.assertEqual(
+            fake_completions.calls[0]["tool_choice"],
+            {
+                "type": "function",
+                "function": {"name": "final_answer"},
+            },
+        )
+        self.assertEqual(
+            fake_completions.calls[0]["stream_options"],
+            {"include_usage": True},
+        )
+
+    def test_deepseek_generate_uses_internal_response_schema_tool(self):
+        fake_message = SimpleNamespace(
+            content=None,
+            tool_calls=[
+                SimpleNamespace(
+                    id="schema_1",
+                    function=SimpleNamespace(
+                        name="final_answer",
+                        arguments='{"answer":"done"}',
+                    ),
+                )
+            ],
+        )
+        fake_response = SimpleNamespace(
+            choices=[SimpleNamespace(message=fake_message)]
+        )
+        fake_completions = FakeOpenAICompletions(fake_response)
+
+        client = DeepSeekClient(api_key="test")
+        client._client = SimpleNamespace(
+            chat=SimpleNamespace(completions=fake_completions)
+        )
+
+        result = client.generate(
+            model="deepseek-chat",
+            messages=[UserMessage(content=text_parts("Answer in JSON"))],
+            response_format=JSONSchemaResponse(
+                name="final_answer",
+                json_schema=AnswerSchema,
+            ),
+        )
+
+        self.assertEqual(result.content, {"answer": "done"})
+        self.assertEqual(result.tool_calls, [])
+        self.assertEqual(result.messages[-1].tool_calls, [])
+        self.assertEqual(
+            [tool["function"]["name"] for tool in fake_completions.calls[0]["tools"]],
+            ["final_answer"],
+        )
+        self.assertEqual(
+            fake_completions.calls[0]["tool_choice"],
+            {
+                "type": "function",
+                "function": {"name": "final_answer"},
+            },
+        )
+        self.assertIsInstance(fake_completions.calls[0]["response_format"], openai.Omit)
+
+    def test_deepseek_stream_emits_tool_complete_chunk(self):
+        events = iter(
+            [
+                SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(
+                            delta=SimpleNamespace(
+                                content=None,
+                                tool_calls=[
+                                    SimpleNamespace(
+                                        index=0,
+                                        id="call_1",
+                                        function=SimpleNamespace(
+                                            name="get_weather",
+                                            arguments='{"city":"Kath',
+                                        ),
+                                    )
+                                ],
+                            )
+                        )
+                    ]
+                ),
+                SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(
+                            delta=SimpleNamespace(
+                                content=None,
+                                tool_calls=[
+                                    SimpleNamespace(
+                                        index=0,
+                                        id=None,
+                                        function=SimpleNamespace(
+                                            name=None,
+                                            arguments='mandu"}',
+                                        ),
+                                    )
+                                ],
+                            )
+                        )
+                    ]
+                ),
+            ]
+        )
+        fake_completions = FakeOpenAICompletions(events)
+
+        client = DeepSeekClient(api_key="test")
+        client._client = SimpleNamespace(
+            chat=SimpleNamespace(completions=fake_completions)
+        )
+
+        chunks = list(
+            client.generate(
+                model="deepseek-chat",
+                messages=[UserMessage(content=text_parts("Weather?"))],
+                tools=[make_tool("get_weather")],
+                stream=True,
+            )
+        )
+
+        payload_chunks = stream_payload_chunks(chunks)
+
+        self.assertEqual(
+            [chunk.type for chunk in chunks],
+            [
+                "stream",
+                "tool",
+                "tool",
+                "tool_complete",
+                "stream",
+                "stream_completion",
+            ],
+        )
+        self.assertEqual(
+            stream_marker_events(chunks),
+            [
+                ("start", "tool", "get_weather"),
+                ("end", "tool", "get_weather"),
+            ],
+        )
+        self.assertEqual(payload_chunks[0].type, "tool")
+        self.assertEqual(payload_chunks[1].type, "tool")
+        self.assertEqual(payload_chunks[2].type, "tool_complete")
+        self.assertEqual(payload_chunks[2].tool, "get_weather")
+        self.assertEqual(payload_chunks[2].arguments, '{"city":"Kathmandu"}')
+        self.assertEqual(payload_chunks[-1].tool_calls[0].arguments, '{"city":"Kathmandu"}')
+
+    def test_deepseek_generate_does_not_expose_structured_output_toggle(self):
+        self.assertNotIn(
+            "use_tools_for_structured_output",
+            inspect.signature(DeepSeekClient.generate).parameters,
+        )
+
+    def test_deepseek_tool_structured_output_keeps_selected_user_tools_visible(self):
+        client = DeepSeekClient(api_key="test")
+
+        deepseek_tools, deepseek_tool_choice, _ = (
+            client._get_deepseek_tools_and_tool_choice_or_omit(
+                [make_tool("get_weather")],
+                {"tools": ["get_weather"]},
+                JSONSchemaResponse(
+                    name="final_answer",
+                    json_schema=AnswerSchema,
+                ),
+            )
+        )
+
+        self.assertEqual(
+            [tool["function"]["name"] for tool in deepseek_tools],
+            ["get_weather", "final_answer"],
+        )
+        self.assertEqual(deepseek_tool_choice, "required")
+
+    def test_anthropic_required_tool_choice_uses_any_for_multiple_visible_tools(self):
         client = AnthropicClient(api_key="test")
 
         anthropic_tools, tool_choice = (
             client._get_anthropic_tools_and_tool_choice_or_omit(
                 [make_tool("weather"), make_tool("time")],
-                {"required": ["weather"], "optional": ["time"]},
+                {"mode": "required", "tools": ["weather", "time"]},
                 None,
                 None,
             )
@@ -987,6 +1816,26 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(result.usage.details["cache_read_input_tokens"], 3)
         self.assertIsNotNone(result.duration_seconds)
         self.assertGreaterEqual(result.duration_seconds, 0)
+
+    def test_anthropic_generate_passes_reasoning_effort_tokens_as_thinking_budget(self):
+        fake_response = SimpleNamespace(
+            content=[SimpleNamespace(type="text", text="final answer")],
+        )
+        fake_messages = FakeAnthropicMessages(fake_response)
+
+        client = AnthropicClient(api_key="test")
+        client._client = SimpleNamespace(messages=fake_messages)
+
+        client.generate(
+            model="claude-test",
+            messages=[UserMessage(content=text_parts("Answer me"))],
+            reasoning_effort=ReasoningEffort(tokens=2048),
+        )
+
+        self.assertEqual(
+            fake_messages.calls[0]["thinking"],
+            {"type": "enabled", "budget_tokens": 2048},
+        )
 
     def test_anthropic_generate_wraps_provider_rate_limit_errors(self):
         request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
@@ -1190,12 +2039,95 @@ class ClientBehaviorTests(unittest.TestCase):
             {"type": "tool", "name": "final_answer"},
         )
 
+    def test_anthropic_stream_emits_tool_complete_chunk(self):
+        fake_stream = FakeAnthropicStream(
+            events=[
+                SimpleNamespace(
+                    type="content_block_start",
+                    content_block=SimpleNamespace(
+                        type="tool_use",
+                        id="call_1",
+                        name="get_weather",
+                    ),
+                ),
+                SimpleNamespace(
+                    type="content_block_delta",
+                    delta=SimpleNamespace(
+                        type="input_json_delta",
+                        partial_json='{"city":"Kath',
+                    ),
+                ),
+                SimpleNamespace(
+                    type="content_block_delta",
+                    delta=SimpleNamespace(
+                        type="input_json_delta",
+                        partial_json='mandu"}',
+                    ),
+                ),
+                SimpleNamespace(
+                    type="content_block_stop",
+                    content_block=SimpleNamespace(
+                        type="tool_use",
+                        id="call_1",
+                        name="get_weather",
+                        input={"city": "Kathmandu"},
+                    ),
+                ),
+            ],
+            final_message=SimpleNamespace(
+                usage=SimpleNamespace(
+                    input_tokens=8,
+                    output_tokens=2,
+                )
+            ),
+        )
+        fake_messages = FakeAnthropicMessages(stream_response=fake_stream)
+
+        client = AnthropicClient(api_key="test")
+        client._client = SimpleNamespace(messages=fake_messages)
+
+        chunks = list(
+            client.generate(
+                model="claude-test",
+                messages=[UserMessage(content=text_parts("Weather?"))],
+                tools=[make_tool("get_weather")],
+                stream=True,
+            )
+        )
+
+        payload_chunks = stream_payload_chunks(chunks)
+
+        self.assertEqual(
+            [chunk.type for chunk in chunks],
+            [
+                "stream",
+                "tool",
+                "tool",
+                "tool_complete",
+                "stream",
+                "stream_completion",
+            ],
+        )
+        self.assertEqual(
+            stream_marker_events(chunks),
+            [
+                ("start", "tool", "get_weather"),
+                ("end", "tool", "get_weather"),
+            ],
+        )
+        self.assertEqual(payload_chunks[0].type, "tool")
+        self.assertEqual(payload_chunks[1].type, "tool")
+        self.assertEqual(payload_chunks[2].type, "tool_complete")
+        self.assertEqual(payload_chunks[2].tool, "get_weather")
+        self.assertEqual(payload_chunks[2].arguments, '{"city": "Kathmandu"}')
+        self.assertEqual(payload_chunks[-1].tool_calls[0].arguments, '{"city": "Kathmandu"}')
+
     def test_google_required_tool_choice_uses_any_mode_with_allowed_names(self):
         client = GoogleClient(api_key="test")
 
         google_tools, tool_config = client._get_google_tools_and_tool_config(
             [make_tool("weather"), make_tool("time")],
-            {"required": ["weather"]},
+            {"mode": "required", "tools": ["weather"]},
             None,
             None,
         )
@@ -1327,12 +2259,17 @@ class ClientBehaviorTests(unittest.TestCase):
 
         payload_chunks = stream_payload_chunks(chunks)
         tool_chunk = payload_chunks[0]
+        tool_complete_chunk = payload_chunks[1]
         completion_chunk = payload_chunks[-1]
 
         self.assertEqual(tool_chunk.type, "tool")
         self.assertEqual(tool_chunk.tool, "get_weather")
         self.assertTrue(tool_chunk.id.startswith("call_"))
         self.assertNotEqual(tool_chunk.id, "get_weather")
+        self.assertEqual(tool_complete_chunk.type, "tool_complete")
+        self.assertEqual(tool_complete_chunk.id, tool_chunk.id)
+        self.assertEqual(tool_complete_chunk.tool, "get_weather")
+        self.assertEqual(tool_complete_chunk.arguments, '{"city": "Kathmandu"}')
         self.assertEqual(completion_chunk.tool_calls[0].id, tool_chunk.id)
         self.assertEqual(completion_chunk.messages[-1].tool_calls[0].id, tool_chunk.id)
 
@@ -1421,6 +2358,44 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(result.usage.details["thoughts_token_count"], 3)
         self.assertIsNotNone(result.duration_seconds)
         self.assertGreaterEqual(result.duration_seconds, 0)
+
+    def test_google_generate_passes_reasoning_effort_to_thinking_config(self):
+        fake_response = SimpleNamespace(
+            candidates=[
+                SimpleNamespace(
+                    content=SimpleNamespace(
+                        parts=[
+                            SimpleNamespace(
+                                text="hello",
+                                thought=False,
+                                inline_data=None,
+                                file_data=None,
+                                function_call=None,
+                            ),
+                        ]
+                    )
+                )
+            ]
+        )
+        fake_models = FakeGoogleModels(response=fake_response)
+
+        client = GoogleClient(api_key="test")
+        client._client = SimpleNamespace(models=fake_models)
+
+        client.generate(
+            model="gemini-test",
+            messages=[UserMessage(content=text_parts("Show me something"))],
+            reasoning_effort=ReasoningEffort(
+                effort=ReasoningEffortValue.HIGH,
+                tokens=1024,
+                summary=ReasoningSummary.DETAILED,
+            ),
+        )
+
+        thinking_config = fake_models.calls[0]["config"].thinking_config
+        self.assertEqual(thinking_config.include_thoughts, True)
+        self.assertEqual(thinking_config.thinking_budget, 1024)
+        self.assertEqual(thinking_config.thinking_level, "HIGH")
 
     def test_google_stream_includes_images_only_in_completion(self):
         fake_models = FakeGoogleModels(
@@ -1880,7 +2855,7 @@ class ClientBehaviorTests(unittest.TestCase):
             model="anthropic.claude-3-5-haiku",
             messages=[UserMessage(content=text_parts("Weather?"))],
             tools=[make_tool("get_weather"), make_tool("time")],
-            tool_choice={"required": ["get_weather"]},
+            tool_choice={"mode": "required", "tools": ["get_weather"]},
         )
 
         self.assertEqual(result.tool_calls[0].name, "get_weather")
@@ -2025,6 +3000,7 @@ class ClientBehaviorTests(unittest.TestCase):
                 "stream",
                 "tool",
                 "tool",
+                "tool_complete",
                 "stream",
                 "stream_completion",
             ],
@@ -2048,6 +3024,9 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(payload_chunks[3].type, "tool")
         self.assertEqual(payload_chunks[2].tool, "get_weather")
         self.assertEqual(payload_chunks[3].tool, "get_weather")
+        self.assertEqual(payload_chunks[4].type, "tool_complete")
+        self.assertEqual(payload_chunks[4].tool, "get_weather")
+        self.assertEqual(payload_chunks[4].arguments, '{"city":"Kathmandu"}')
         self.assertEqual(payload_chunks[-1].messages[-1].thinking, "Plan")
         self.assertEqual(payload_chunks[-1].tool_calls[0].name, "get_weather")
         self.assertEqual(

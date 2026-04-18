@@ -54,6 +54,13 @@ class ResponseStreamToolChunk(BaseResponseStreamChunk):
     chunk: str
 
 
+class ResponseStreamToolCompleteChunk(BaseResponseStreamChunk):
+    id: str
+    type: Literal["tool_complete"] = "tool_complete"
+    tool: str | None = None
+    arguments: str | None = None
+
+
 class ResponseStreamCompletionChunk(BaseResponseStreamChunk):
     type: Literal["stream_completion"] = "stream_completion"
     content: Any = None
@@ -68,6 +75,7 @@ ResponseStreamEvent = (
     | ResponseStreamContentChunk
     | ResponseStreamThinkingChunk
     | ResponseStreamToolChunk
+    | ResponseStreamToolCompleteChunk
     | ResponseStreamCompletionChunk
 )
 ResponseResult = ResponseContent | Generator[ResponseStreamEvent, None, None]

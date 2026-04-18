@@ -29,30 +29,44 @@ class ResolveToolsTests(unittest.TestCase):
         resolved = resolve_tools(tools, None)
 
         self.assertEqual([tool.name for tool in resolved.tools], ["weather", "time"])
-        self.assertEqual(resolved.required_names, [])
-        self.assertEqual(resolved.optional_names, [])
+        self.assertEqual(resolved.tool_names, ["weather", "time"])
+        self.assertFalse(resolved.requires_tool)
+        self.assertFalse(resolved.is_explicit)
 
-    def test_filters_tools_for_required_and_optional_names(self):
+    def test_filters_tools_for_selected_names(self):
         tools = [make_tool("weather"), make_tool("time"), make_tool("news")]
 
         resolved = resolve_tools(
             tools,
-            {"required": ["weather"], "optional": ["time"]},
+            {"tools": ["weather", "time"]},
         )
 
         self.assertEqual([tool.name for tool in resolved.tools], ["weather", "time"])
-        self.assertEqual(resolved.required_names, ["weather"])
-        self.assertEqual(resolved.optional_names, ["time"])
+        self.assertEqual(resolved.tool_names, ["weather", "time"])
+        self.assertFalse(resolved.requires_tool)
+        self.assertTrue(resolved.is_explicit)
+
+    def test_required_mode_uses_all_tools_when_no_subset_is_provided(self):
+        tools = [make_tool("weather"), make_tool("time")]
+
+        resolved = resolve_tools(
+            tools,
+            {"mode": "required"},
+        )
+
+        self.assertEqual(resolved.tool_names, ["weather", "time"])
+        self.assertTrue(resolved.requires_tool)
+        self.assertTrue(resolved.is_explicit)
 
     def test_rejects_unknown_tool_names(self):
         tools = [make_tool("weather")]
 
         with self.assertRaises(ToolError) as context:
-            resolve_tools(tools, {"required": ["time"]})
+            resolve_tools(tools, {"tools": ["time"]})
 
         self.assertIn("Unknown tool names", str(context.exception))
 
-    def test_rejects_overlapping_required_and_optional_names(self):
+    def test_rejects_legacy_required_and_optional_keys(self):
         tools = [make_tool("weather")]
 
         with self.assertRaises(ToolError) as context:
@@ -61,7 +75,27 @@ class ResolveToolsTests(unittest.TestCase):
                 {"required": ["weather"], "optional": ["weather"]},
             )
 
-        self.assertIn("both required and optional", str(context.exception))
+        self.assertIn("Use 'mode' and 'tools'", str(context.exception))
+
+    def test_rejects_invalid_tool_choice_mode(self):
+        tools = [make_tool("weather")]
+
+        with self.assertRaises(ToolError) as context:
+            resolve_tools(
+                tools,
+                {"mode": "always"},
+            )
+
+        self.assertIn("Unsupported tool_choice mode", str(context.exception))
+
+    def test_rejects_required_mode_without_visible_tools(self):
+        with self.assertRaises(ToolError) as context:
+            resolve_tools(
+                [],
+                {"mode": "required"},
+            )
+
+        self.assertIn("requires at least one visible tool", str(context.exception))
 
     def test_rejects_duplicate_tool_definitions(self):
         tools = [make_tool("weather"), make_tool("weather")]
