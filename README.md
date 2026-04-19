@@ -185,10 +185,10 @@ result = client.generate(
 )
 
 print(result.content)
-print(result.messages[-1].thinking)
+print(result.thinking)
 ```
 
-Use explicit content parts when you need multimodal inputs or want to mix text with images in one message. Normal completion content is surfaced as `list[TextContentPart | ImageContentPart]` when the provider returns message content, including text-only replies. `AssistantMessage.thinking` is returned as `list[str]` when the provider exposes one or more reasoning blocks.
+Use explicit content parts when you need multimodal inputs or want to mix text with images in one message. Normal completion content is surfaced as `list[TextContentPart | ImageContentPart]` when the provider returns message content, including text-only replies. Reasoning is exposed on `ResponseContent.thinking` as `list[str]` when the provider returns one or more thinking blocks, and the same value is also available on the final `AssistantMessage`.
 
 ## Tool Calling
 
@@ -260,7 +260,7 @@ result = client.generate(
 )
 
 print(result.content)
-print(result.messages[-1].thinking)
+print(result.thinking)
 ```
 
 You can also target it explicitly in `tool_choice`:
@@ -303,7 +303,7 @@ for chunk in client.generate(
         print(chunk.chunk, end="")
 ```
 
-`generate(..., stream=True)` yields `ResponseStreamChunk` markers with `event="start"` and `event="end"` around each `content`, `thinking`, and `tool` section. If a provider returns multiple reasoning blocks, each block gets its own `thinking` start/end pair. `ResponseStreamCompletionChunk` is emitted bare at the end.
+`generate(..., stream=True)` yields `ResponseStreamChunk` markers with `event="start"` and `event="end"` around each `content`, `thinking`, and `tool` section. If a provider returns multiple reasoning blocks, each block gets its own `thinking` start/end pair. The final `ResponseStreamCompletionChunk` also includes top-level `content` and `thinking`.
 
 ## Package Layout
 

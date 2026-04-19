@@ -3,7 +3,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from llmai.shared.messages import AssistantToolCall, Message
+from llmai.shared.messages import AssistantToolCall, Message, ThinkingContent
 
 
 class ResponseUsage(BaseModel):
@@ -16,6 +16,7 @@ class ResponseUsage(BaseModel):
 class ResponseContent(BaseModel):
     type: Literal["content"] = "content"
     content: Any = None
+    thinking: ThinkingContent = None
     messages: list[Message] = Field(default_factory=list)
     tool_calls: list[AssistantToolCall] = Field(default_factory=list)
     usage: ResponseUsage | None = None
@@ -64,6 +65,7 @@ class ResponseStreamToolCompleteChunk(BaseResponseStreamChunk):
 class ResponseStreamCompletionChunk(BaseResponseStreamChunk):
     type: Literal["stream_completion"] = "stream_completion"
     content: Any = None
+    thinking: ThinkingContent = None
     messages: list[Message] = Field(default_factory=list)
     tool_calls: list[AssistantToolCall] = Field(default_factory=list)
     usage: ResponseUsage | None = None

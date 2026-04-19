@@ -1349,6 +1349,10 @@ class ClientBehaviorTests(unittest.TestCase):
 
         self.assertEqual(result.content, {"answer": "pong"})
         self.assertEqual(
+            result.thinking,
+            ["Compare speed and creativity."],
+        )
+        self.assertEqual(
             result.messages[-1].thinking,
             ["Compare speed and creativity."],
         )
@@ -1403,6 +1407,7 @@ class ClientBehaviorTests(unittest.TestCase):
             api_type=OpenAIApiType.RESPONSES,
         )
 
+        self.assertEqual(result.thinking, ["Plan", "Reflect"])
         self.assertEqual(result.messages[-1].thinking, ["Plan", "Reflect"])
 
     def test_openai_responses_generate_passes_reasoning_effort_model(self):
@@ -1580,6 +1585,7 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(payload_chunks[4].type, "tool_complete")
         self.assertEqual(payload_chunks[4].tool, "get_weather")
         self.assertEqual(payload_chunks[4].arguments, '{"city":"Kathmandu"}')
+        self.assertEqual(payload_chunks[-1].thinking, ["Plan"])
         self.assertEqual(payload_chunks[-1].messages[-1].thinking, ["Plan"])
         self.assertEqual(
             payload_chunks[-1].tool_calls[0].arguments,
@@ -1696,6 +1702,7 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(payload_chunks[0].chunk, "Plan")
         self.assertEqual(payload_chunks[1].chunk, "Reflect")
         self.assertEqual(payload_chunks[2].chunk, "Hello")
+        self.assertEqual(payload_chunks[-1].thinking, ["Plan", "Reflect"])
         self.assertEqual(payload_chunks[-1].messages[-1].thinking, ["Plan", "Reflect"])
         self.assertEqual(
             fake_responses.calls[0]["reasoning"],
@@ -2174,6 +2181,7 @@ class ClientBehaviorTests(unittest.TestCase):
         )
 
         self.assertEqual(result.content[0].text, "final answer")
+        self.assertEqual(result.thinking, ["internal"])
         self.assertEqual(result.messages[-1].thinking, ["internal"])
 
     def test_anthropic_generate_preserves_multiple_thinking_blocks(self):
@@ -2194,6 +2202,7 @@ class ClientBehaviorTests(unittest.TestCase):
             messages=[UserMessage(content=text_parts("Answer me"))],
         )
 
+        self.assertEqual(result.thinking, ["internal-1", "internal-2"])
         self.assertEqual(result.messages[-1].thinking, ["internal-1", "internal-2"])
 
     def test_anthropic_generate_returns_usage_and_duration(self):
@@ -2328,6 +2337,7 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(payload_chunks[0].chunk, "Plan")
         self.assertEqual(payload_chunks[1].type, "content")
         self.assertEqual(payload_chunks[1].chunk, "Hello")
+        self.assertEqual(payload_chunks[-1].thinking, ["Plan"])
         self.assertEqual(payload_chunks[-1].messages[-1].thinking, ["Plan"])
         self.assertEqual(payload_chunks[-1].usage.input_tokens, 9)
         self.assertEqual(payload_chunks[-1].usage.output_tokens, 2)
@@ -2398,6 +2408,7 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(payload_chunks[0].chunk, "Plan")
         self.assertEqual(payload_chunks[1].chunk, "Reflect")
         self.assertEqual(payload_chunks[2].chunk, "Hello")
+        self.assertEqual(payload_chunks[-1].thinking, ["Plan", "Reflect"])
         self.assertEqual(payload_chunks[-1].messages[-1].thinking, ["Plan", "Reflect"])
 
     def test_anthropic_generate_hides_internal_response_schema_tool(self):
@@ -2849,6 +2860,7 @@ class ClientBehaviorTests(unittest.TestCase):
             messages=[UserMessage(content=text_parts("Show me something"))],
         )
 
+        self.assertEqual(result.thinking, ["hidden reasoning"])
         self.assertEqual(result.messages[-1].thinking, ["hidden reasoning"])
         self.assertIsInstance(result.content, list)
         self.assertEqual(result.content[0].text, "I found an image.")
@@ -2904,6 +2916,7 @@ class ClientBehaviorTests(unittest.TestCase):
             messages=[UserMessage(content=text_parts("Show me something"))],
         )
 
+        self.assertEqual(result.thinking, ["Plan", "Reflect"])
         self.assertEqual(result.messages[-1].thinking, ["Plan", "Reflect"])
 
     def test_google_generate_passes_reasoning_effort_to_thinking_config(self):
@@ -3044,6 +3057,7 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(payload_chunks[1].type, "content")
         self.assertEqual(payload_chunks[1].chunk, "Hello")
         self.assertEqual(payload_chunks[-1].type, "stream_completion")
+        self.assertEqual(payload_chunks[-1].thinking, ["Plan"])
         self.assertEqual(payload_chunks[-1].messages[-1].thinking, ["Plan"])
         self.assertIsInstance(payload_chunks[-1].content, list)
         self.assertEqual(payload_chunks[-1].content[0].text, "Hello")
@@ -3120,6 +3134,7 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(payload_chunks[0].chunk, "Plan")
         self.assertEqual(payload_chunks[1].chunk, "Reflect")
         self.assertEqual(payload_chunks[2].chunk, "Hello")
+        self.assertEqual(payload_chunks[-1].thinking, ["Plan", "Reflect"])
         self.assertEqual(payload_chunks[-1].messages[-1].thinking, ["Plan", "Reflect"])
 
     def test_google_generate_hides_internal_response_schema_tool(self):
@@ -3660,6 +3675,7 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(payload_chunks[4].type, "tool_complete")
         self.assertEqual(payload_chunks[4].tool, "get_weather")
         self.assertEqual(payload_chunks[4].arguments, '{"city":"Kathmandu"}')
+        self.assertEqual(payload_chunks[-1].thinking, ["Plan"])
         self.assertEqual(payload_chunks[-1].messages[-1].thinking, ["Plan"])
         self.assertEqual(payload_chunks[-1].tool_calls[0].name, "get_weather")
         self.assertEqual(
@@ -3744,6 +3760,7 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(payload_chunks[0].chunk, "Plan")
         self.assertEqual(payload_chunks[1].chunk, "Reflect")
         self.assertEqual(payload_chunks[2].chunk, "Hello")
+        self.assertEqual(payload_chunks[-1].thinking, ["Plan", "Reflect"])
         self.assertEqual(payload_chunks[-1].messages[-1].thinking, ["Plan", "Reflect"])
 
     def test_bedrock_stream_generates_tool_id_when_missing(self):

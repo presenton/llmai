@@ -479,6 +479,7 @@ class AnthropicClient(BaseClient):
 
             return ResponseContent(
                 content=final_content,
+                thinking=assistant_message.thinking,
                 messages=new_messages,
                 tool_calls=user_tool_calls,
                 usage=self._response_usage(getattr(response, "usage", None)),
@@ -672,6 +673,7 @@ class AnthropicClient(BaseClient):
                 yield stream_chunk
             yield ResponseStreamCompletionChunk(
                 content=final_content,
+                thinking=assistant_message.thinking,
                 messages=new_messages,
                 tool_calls=user_tool_calls,
                 usage=usage,
