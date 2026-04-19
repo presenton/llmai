@@ -4,6 +4,7 @@ import os
 from logging import Logger
 
 from llmai.anthropic.client import AnthropicClient
+from llmai.azure.client import AzureOpenAIClient
 from llmai.bedrock.client import BedrockClient
 from llmai.chatgpt.client import ChatGPTClient
 from llmai.deepseek.client import DeepSeekClient
@@ -12,6 +13,7 @@ from llmai.openai.client import OpenAIClient
 from llmai.shared.base import BaseClient
 from llmai.shared.errors import configuration_error
 from llmai.shared.providers import LLMProvider
+from llmai.vertex.client import VertexAIClient
 
 __all__ = ["LLMProvider", "get_client"]
 
@@ -33,6 +35,12 @@ def get_client(
             base_url=_env("OPENAI_BASE_URL"),
             logger=logger,
         )
+
+    if resolved_provider == LLMProvider.AZURE:
+        return _get_azure_client(logger=logger)
+
+    if resolved_provider == LLMProvider.VERTEX:
+        return _get_vertex_client(logger=logger)
 
     if resolved_provider == LLMProvider.CHATGPT:
         access_token = _required_env(
@@ -156,6 +164,65 @@ def _get_bedrock_client(*, logger: Logger | None = None) -> BedrockClient:
     raise configuration_error(
         "Missing Bedrock auth envs. Set BEDROCK_API_KEY, or AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY, or AWS_PROFILE",
         provider=provider.value,
+    )
+
+
+def _get_azure_client(*, logger: Logger | None = None) -> AzureOpenAIClient:
+    provider = LLMProvider.AZURE
+    api_key = _env("AZURE_OPENAI_API_KEY")
+    azure_ad_token = _env("AZURE_OPENAI_AD_TOKEN")
+    base_url = _env("AZURE_OPENAI_BASE_URL")
+    endpoint = _env("AZURE_OPENAI_ENDPOINT")
+    api_version = _first_env("AZURE_OPENAI_API_VERSION", "OPENAI_API_VERSION")
+    deployment = _env("AZURE_OPENAI_DEPLOYMENT")
+
+    if api_key and azure_ad_token:
+        raise configuration_error(
+            "Azure OpenAI auth is ambiguous. Configure either AZURE_OPENAI_API_KEY or AZURE_OPENAI_AD_TOKEN, not both",
+            provider=provider.value,
+        )
+
+    if not api_key and not azure_ad_token:
+        raise configuration_error(
+            "Missing Azure OpenAI auth envs. Set AZURE_OPENAI_API_KEY or AZURE_OPENAI_AD_TOKEN",
+            provider=provider.value,
+        )
+
+    if base_url and endpoint:
+        raise configuration_error(
+            "Azure OpenAI endpoint envs are ambiguous. Configure either AZURE_OPENAI_BASE_URL or AZURE_OPENAI_ENDPOINT, not both",
+            provider=provider.value,
+        )
+
+    if not base_url and not endpoint:
+        raise configuration_error(
+            "Missing Azure OpenAI endpoint envs. Set AZURE_OPENAI_BASE_URL or AZURE_OPENAI_ENDPOINT",
+            provider=provider.value,
+        )
+
+    if not api_version:
+        raise configuration_error(
+            "Missing Azure OpenAI API version. Set AZURE_OPENAI_API_VERSION or OPENAI_API_VERSION",
+            provider=provider.value,
+        )
+
+    return AzureOpenAIClient(
+        api_key=api_key,
+        azure_ad_token=azure_ad_token,
+        base_url=base_url,
+        endpoint=endpoint,
+        api_version=api_version,
+        deployment=deployment,
+        logger=logger,
+    )
+
+
+def _get_vertex_client(*, logger: Logger | None = None) -> VertexAIClient:
+    return VertexAIClient(
+        api_key=_env("VERTEX_API_KEY"),
+        project=_env("VERTEX_PROJECT"),
+        location=_env("VERTEX_LOCATION"),
+        logger=logger,
     )
 
 

@@ -19,7 +19,7 @@ from google.genai.types import (
 )
 
 from llmai.shared.base import BaseClient
-from llmai.shared.errors import LLMError, raise_llm_error
+from llmai.shared.errors import LLMError, configuration_error, raise_llm_error
 from llmai.shared.messages import (
     AssistantMessage,
     AssistantToolCall,
@@ -112,6 +112,9 @@ GOOGLE_SUPPORTED_TOOL_SCHEMA_KEYS = {
 
 
 class GoogleClient(BaseClient):
+    PROVIDER_NAME = "google"
+    PROVIDER_LABEL = "Google Gemini"
+
     def __init__(
         self,
         *,
@@ -119,10 +122,19 @@ class GoogleClient(BaseClient):
         logger: Logger | None = None,
     ):
         super().__init__(logger=logger)
+        self._client = self._create_genai_client(api_key=api_key)
+
+    def _create_genai_client(self, **kwargs):
         try:
-            self._client = genai.Client(api_key=api_key)
+            return genai.Client(**kwargs)
+        except ValueError as exc:
+            raise configuration_error(
+                str(exc),
+                provider=self.PROVIDER_NAME,
+                cause=exc,
+            )
         except Exception as exc:
-            raise_llm_error(exc, provider="google")
+            raise_llm_error(exc, provider=self.PROVIDER_NAME)
 
     def _get_system_prompt(self, messages: list[Message]) -> str | None:
         for message in messages:
@@ -635,7 +647,7 @@ class GoogleClient(BaseClient):
                 duration_seconds=duration_seconds,
             )
         except Exception as exc:
-            raise_llm_error(exc, provider="google")
+            raise_llm_error(exc, provider=self.PROVIDER_NAME)
 
     def _generate_stream(
         self,
@@ -897,4 +909,4 @@ class GoogleClient(BaseClient):
                 duration_seconds=duration_seconds,
             )
         except Exception as exc:
-            raise_llm_error(exc, provider="google")
+            raise_llm_error(exc, provider=self.PROVIDER_NAME)

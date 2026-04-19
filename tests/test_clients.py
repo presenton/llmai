@@ -14,6 +14,7 @@ from pydantic import BaseModel
 
 from llmai import (
     AnthropicClient,
+    AzureOpenAIClient,
     BedrockClient,
     ChatGPTClient,
     DeepSeekClient,
@@ -21,6 +22,7 @@ from llmai import (
     LLMProvider,
     OpenAIApiType,
     OpenAIClient,
+    VertexAIClient,
     get_client,
 )
 from llmai.shared import (
@@ -54,11 +56,11 @@ def text_parts(text: str) -> list[TextContentPart]:
 
 
 def stream_marker_chunks(chunks):
-    return [chunk for chunk in chunks if chunk.type == "stream"]
+    return [chunk for chunk in chunks if chunk.type == "event"]
 
 
 def stream_payload_chunks(chunks):
-    return [chunk for chunk in chunks if chunk.type != "stream"]
+    return [chunk for chunk in chunks if chunk.type != "event"]
 
 
 def stream_marker_events(chunks):
@@ -269,6 +271,149 @@ class ClientBehaviorTests(unittest.TestCase):
 
         self.assertEqual(context.exception.provider, "openai")
         self.assertIn("OPENAI_API_KEY", context.exception.message)
+
+    def test_get_client_azure_uses_api_key_env_configuration(self):
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "AZURE_OPENAI_API_KEY": "azure-key",
+                    "AZURE_OPENAI_ENDPOINT": "https://azure.example.openai.azure.com",
+                    "AZURE_OPENAI_API_VERSION": "2024-10-21",
+                    "AZURE_OPENAI_DEPLOYMENT": "gpt-4.1",
+                },
+                clear=True,
+            ),
+            patch("llmai.client.AzureOpenAIClient") as azure_client_cls,
+        ):
+            client = get_client(LLMProvider.AZURE)
+
+        self.assertIs(client, azure_client_cls.return_value)
+        azure_client_cls.assert_called_once_with(
+            api_key="azure-key",
+            azure_ad_token=None,
+            base_url=None,
+            endpoint="https://azure.example.openai.azure.com",
+            api_version="2024-10-21",
+            deployment="gpt-4.1",
+            logger=None,
+        )
+
+    def test_get_client_azure_accepts_ad_token_and_openai_api_version_envs(self):
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "AZURE_OPENAI_AD_TOKEN": "azure-ad-token",
+                    "AZURE_OPENAI_BASE_URL": "https://azure.example.openai.azure.com/openai/v1",
+                    "OPENAI_API_VERSION": "2024-08-01-preview",
+                },
+                clear=True,
+            ),
+            patch("llmai.client.AzureOpenAIClient") as azure_client_cls,
+        ):
+            client = get_client("azure")
+
+        self.assertIs(client, azure_client_cls.return_value)
+        azure_client_cls.assert_called_once_with(
+            api_key=None,
+            azure_ad_token="azure-ad-token",
+            base_url="https://azure.example.openai.azure.com/openai/v1",
+            endpoint=None,
+            api_version="2024-08-01-preview",
+            deployment=None,
+            logger=None,
+        )
+
+    def test_get_client_azure_rejects_ambiguous_auth_envs(self):
+        with patch.dict(
+            os.environ,
+            {
+                "AZURE_OPENAI_API_KEY": "azure-key",
+                "AZURE_OPENAI_AD_TOKEN": "azure-ad-token",
+                "AZURE_OPENAI_ENDPOINT": "https://azure.example.openai.azure.com",
+                "AZURE_OPENAI_API_VERSION": "2024-10-21",
+            },
+            clear=True,
+        ):
+            with self.assertRaises(LLMConfigurationError) as context:
+                get_client(LLMProvider.AZURE)
+
+        self.assertEqual(context.exception.provider, "azure")
+        self.assertIn("ambiguous", context.exception.message)
+
+    def test_get_client_azure_requires_endpoint_env(self):
+        with patch.dict(
+            os.environ,
+            {
+                "AZURE_OPENAI_API_KEY": "azure-key",
+                "AZURE_OPENAI_API_VERSION": "2024-10-21",
+            },
+            clear=True,
+        ):
+            with self.assertRaises(LLMConfigurationError) as context:
+                get_client(LLMProvider.AZURE)
+
+        self.assertEqual(context.exception.provider, "azure")
+        self.assertIn("AZURE_OPENAI_ENDPOINT", context.exception.message)
+
+    def test_get_client_azure_requires_api_version_env(self):
+        with patch.dict(
+            os.environ,
+            {
+                "AZURE_OPENAI_API_KEY": "azure-key",
+                "AZURE_OPENAI_ENDPOINT": "https://azure.example.openai.azure.com",
+            },
+            clear=True,
+        ):
+            with self.assertRaises(LLMConfigurationError) as context:
+                get_client(LLMProvider.AZURE)
+
+        self.assertEqual(context.exception.provider, "azure")
+        self.assertIn("AZURE_OPENAI_API_VERSION", context.exception.message)
+
+    def test_get_client_vertex_uses_provider_specific_env_configuration(self):
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "VERTEX_PROJECT": "vertex-project",
+                    "VERTEX_LOCATION": "us-central1",
+                },
+                clear=True,
+            ),
+            patch("llmai.client.VertexAIClient") as vertex_client_cls,
+        ):
+            client = get_client(LLMProvider.VERTEX)
+
+        self.assertIs(client, vertex_client_cls.return_value)
+        vertex_client_cls.assert_called_once_with(
+            api_key=None,
+            project="vertex-project",
+            location="us-central1",
+            logger=None,
+        )
+
+    def test_get_client_vertex_supports_provider_specific_api_key_env(self):
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "VERTEX_API_KEY": "vertex-key",
+                },
+                clear=True,
+            ),
+            patch("llmai.client.VertexAIClient") as vertex_client_cls,
+        ):
+            client = get_client("vertex")
+
+        self.assertIs(client, vertex_client_cls.return_value)
+        vertex_client_cls.assert_called_once_with(
+            api_key="vertex-key",
+            project=None,
+            location=None,
+            logger=None,
+        )
 
     def test_get_client_deepseek_uses_env_configuration(self):
         with (
@@ -903,15 +1048,15 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(
             [chunk.type for chunk in chunks],
             [
-                "stream",
+                "event",
                 "content",
-                "stream",
-                "stream",
+                "event",
+                "event",
                 "tool",
                 "tool",
                 "tool_complete",
-                "stream",
-                "stream_completion",
+                "event",
+                "completion",
             ],
         )
         self.assertEqual(
@@ -931,7 +1076,7 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(payload_chunks[3].type, "tool_complete")
         self.assertEqual(payload_chunks[3].tool, "get_weather")
         self.assertEqual(payload_chunks[3].arguments, '{"city":"Kathmandu"}')
-        self.assertEqual(payload_chunks[-1].type, "stream_completion")
+        self.assertEqual(payload_chunks[-1].type, "completion")
         self.assertEqual(payload_chunks[-1].tool_calls[0].name, "get_weather")
         self.assertEqual(
             payload_chunks[-1].tool_calls[0].arguments,
@@ -1549,18 +1694,18 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(
             [chunk.type for chunk in chunks],
             [
-                "stream",
+                "event",
                 "thinking",
-                "stream",
-                "stream",
+                "event",
+                "event",
                 "content",
-                "stream",
-                "stream",
+                "event",
+                "event",
                 "tool",
                 "tool",
                 "tool_complete",
-                "stream",
-                "stream_completion",
+                "event",
+                "completion",
             ],
         )
         self.assertEqual(
@@ -1718,6 +1863,175 @@ class ClientBehaviorTests(unittest.TestCase):
             api_key="test",
         )
 
+    def test_azure_init_uses_endpoint_api_key_and_api_version(self):
+        with patch("llmai.azure.client.AzureOpenAI") as azure_openai_cls:
+            AzureOpenAIClient(
+                api_key="test",
+                endpoint="https://azure.example.openai.azure.com",
+                api_version="2024-10-21",
+                deployment="gpt-4.1",
+            )
+
+        azure_openai_cls.assert_called_once_with(
+            api_version="2024-10-21",
+            api_key="test",
+            azure_ad_token=None,
+            azure_ad_token_provider=None,
+            base_url=None,
+            azure_endpoint="https://azure.example.openai.azure.com",
+            azure_deployment="gpt-4.1",
+        )
+
+    def test_azure_init_uses_env_configuration_by_default(self):
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "AZURE_OPENAI_AD_TOKEN": "azure-ad-token",
+                    "AZURE_OPENAI_BASE_URL": "https://azure.example.openai.azure.com/openai/v1",
+                    "AZURE_OPENAI_API_VERSION": "2024-10-21",
+                },
+                clear=True,
+            ),
+            patch("llmai.azure.client.AzureOpenAI") as azure_openai_cls,
+        ):
+            AzureOpenAIClient()
+
+        azure_openai_cls.assert_called_once_with(
+            api_version="2024-10-21",
+            api_key=None,
+            azure_ad_token="azure-ad-token",
+            azure_ad_token_provider=None,
+            base_url="https://azure.example.openai.azure.com/openai/v1",
+        )
+
+    def test_azure_init_requires_credentials(self):
+        with patch.dict(
+            os.environ,
+            {
+                "AZURE_OPENAI_ENDPOINT": "https://azure.example.openai.azure.com",
+                "AZURE_OPENAI_API_VERSION": "2024-10-21",
+            },
+            clear=True,
+        ):
+            with self.assertRaises(LLMConfigurationError) as context:
+                AzureOpenAIClient()
+
+        self.assertEqual(context.exception.provider, "azure")
+        self.assertIn("AZURE_OPENAI_API_KEY", context.exception.message)
+
+    def test_azure_init_rejects_ambiguous_endpoint_aliases(self):
+        with self.assertRaises(LLMConfigurationError) as context:
+            AzureOpenAIClient(
+                api_key="test",
+                endpoint="https://first.azure.com",
+                azure_endpoint="https://second.azure.com",
+                api_version="2024-10-21",
+            )
+
+        self.assertEqual(context.exception.provider, "azure")
+        self.assertIn("endpoint or azure_endpoint", context.exception.message)
+
+    def test_azure_generate_wraps_provider_auth_errors(self):
+        request = httpx.Request(
+            "POST",
+            "https://azure.example.openai.azure.com/openai/deployments/gpt/chat/completions",
+        )
+        response = httpx.Response(401, request=request)
+        fake_completions = FakeOpenAICompletions(
+            openai.AuthenticationError(
+                "bad api key",
+                response=response,
+                body={},
+            )
+        )
+
+        client = AzureOpenAIClient(
+            api_key="test",
+            endpoint="https://azure.example.openai.azure.com",
+            api_version="2024-10-21",
+        )
+        client._client = SimpleNamespace(
+            chat=SimpleNamespace(completions=fake_completions)
+        )
+
+        with self.assertRaises(LLMAuthenticationError) as context:
+            client.generate(
+                model="gpt-test",
+                messages=[UserMessage(content=text_parts("Hello"))],
+            )
+
+        self.assertEqual(context.exception.provider, "azure")
+
+    def test_vertex_init_uses_vertex_genai_client_configuration(self):
+        with patch("llmai.google.client.genai.Client") as genai_client_cls:
+            VertexAIClient(
+                api_key="vertex-key",
+                project="vertex-project",
+                location="us-central1",
+            )
+
+        genai_client_cls.assert_called_once_with(
+            vertexai=True,
+            api_key="vertex-key",
+            credentials=None,
+            project="vertex-project",
+            location="us-central1",
+        )
+
+    def test_vertex_init_uses_provider_specific_env_configuration(self):
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "VERTEX_PROJECT": "vertex-project",
+                    "VERTEX_LOCATION": "us-central1",
+                },
+                clear=True,
+            ),
+            patch("llmai.google.client.genai.Client") as genai_client_cls,
+        ):
+            VertexAIClient()
+
+        genai_client_cls.assert_called_once_with(
+            vertexai=True,
+            api_key=None,
+            credentials=None,
+            project="vertex-project",
+            location="us-central1",
+        )
+
+    def test_vertex_init_wraps_configuration_errors(self):
+        with patch(
+            "llmai.google.client.genai.Client",
+            side_effect=ValueError("Project or API key must be set when using the Vertex AI API."),
+        ):
+            with self.assertRaises(LLMConfigurationError) as context:
+                VertexAIClient()
+
+        self.assertEqual(context.exception.provider, "vertex")
+        self.assertIn("Project or API key", context.exception.message)
+
+    def test_vertex_generate_wraps_provider_auth_errors(self):
+        fake_models = FakeGoogleModels(
+            response=google_errors.ClientError(
+                401,
+                {"message": "bad credentials", "status": "UNAUTHENTICATED"},
+            )
+        )
+
+        client = VertexAIClient(api_key="test")
+        client._client = SimpleNamespace(models=fake_models)
+
+        with self.assertRaises(LLMAuthenticationError) as context:
+            client.generate(
+                model="gemini-test",
+                messages=[UserMessage(content=text_parts("Hello"))],
+            )
+
+        self.assertEqual(context.exception.status_code, 401)
+        self.assertEqual(context.exception.provider, "vertex")
+
     def test_deepseek_init_uses_deepseek_api_key_env_by_default(self):
         with (
             patch.dict(
@@ -1852,7 +2166,7 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(payload_chunks[0].chunk, '{"answer":"')
         self.assertEqual(payload_chunks[1].type, "content")
         self.assertEqual(payload_chunks[1].chunk, 'done"}')
-        self.assertEqual(payload_chunks[-1].type, "stream_completion")
+        self.assertEqual(payload_chunks[-1].type, "completion")
         self.assertEqual(payload_chunks[-1].content, {"answer": "done"})
         self.assertEqual(payload_chunks[-1].tool_calls, [])
         self.assertEqual(payload_chunks[-1].messages[-1].tool_calls, [])
@@ -1989,12 +2303,12 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(
             [chunk.type for chunk in chunks],
             [
-                "stream",
+                "event",
                 "tool",
                 "tool",
                 "tool_complete",
-                "stream",
-                "stream_completion",
+                "event",
+                "completion",
             ],
         )
         self.assertEqual(
@@ -2315,13 +2629,13 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(
             [chunk.type for chunk in chunks],
             [
-                "stream",
+                "event",
                 "thinking",
-                "stream",
-                "stream",
+                "event",
+                "event",
                 "content",
-                "stream",
-                "stream_completion",
+                "event",
+                "completion",
             ],
         )
         self.assertEqual(
@@ -2512,7 +2826,7 @@ class ClientBehaviorTests(unittest.TestCase):
 
         self.assertEqual(marker_chunks, [])
         self.assertEqual(len(payload_chunks), 1)
-        self.assertEqual(payload_chunks[0].type, "stream_completion")
+        self.assertEqual(payload_chunks[0].type, "completion")
         self.assertEqual(payload_chunks[0].content, {"answer": "done"})
         self.assertEqual(payload_chunks[0].tool_calls, [])
         self.assertEqual(payload_chunks[0].messages[-1].tool_calls, [])
@@ -2582,12 +2896,12 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(
             [chunk.type for chunk in chunks],
             [
-                "stream",
+                "event",
                 "tool",
                 "tool",
                 "tool_complete",
-                "stream",
-                "stream_completion",
+                "event",
+                "completion",
             ],
         )
         self.assertEqual(
@@ -3034,13 +3348,13 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(
             [chunk.type for chunk in chunks],
             [
-                "stream",
+                "event",
                 "thinking",
-                "stream",
-                "stream",
+                "event",
+                "event",
                 "content",
-                "stream",
-                "stream_completion",
+                "event",
+                "completion",
             ],
         )
         self.assertEqual(
@@ -3056,7 +3370,7 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(payload_chunks[0].chunk, "Plan")
         self.assertEqual(payload_chunks[1].type, "content")
         self.assertEqual(payload_chunks[1].chunk, "Hello")
-        self.assertEqual(payload_chunks[-1].type, "stream_completion")
+        self.assertEqual(payload_chunks[-1].type, "completion")
         self.assertEqual(payload_chunks[-1].thinking, ["Plan"])
         self.assertEqual(payload_chunks[-1].messages[-1].thinking, ["Plan"])
         self.assertIsInstance(payload_chunks[-1].content, list)
@@ -3639,18 +3953,18 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(
             [chunk.type for chunk in chunks],
             [
-                "stream",
+                "event",
                 "content",
-                "stream",
-                "stream",
+                "event",
+                "event",
                 "thinking",
-                "stream",
-                "stream",
+                "event",
+                "event",
                 "tool",
                 "tool",
                 "tool_complete",
-                "stream",
-                "stream_completion",
+                "event",
+                "completion",
             ],
         )
         self.assertEqual(

@@ -32,7 +32,7 @@ class BaseResponseStreamChunk(BaseModel):
 
 
 class ResponseStreamChunk(BaseResponseStreamChunk):
-    type: Literal["stream"] = "stream"
+    type: Literal["event"] = "event"
     chunk_type: ResponseStreamChunkType
     event: ResponseStreamChunkEvent
     tool: str | None = None
@@ -63,7 +63,7 @@ class ResponseStreamToolCompleteChunk(BaseResponseStreamChunk):
 
 
 class ResponseStreamCompletionChunk(BaseResponseStreamChunk):
-    type: Literal["stream_completion"] = "stream_completion"
+    type: Literal["completion"] = "completion"
     content: Any = None
     thinking: ThinkingContent = None
     messages: list[Message] = Field(default_factory=list)
