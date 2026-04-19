@@ -1,10 +1,12 @@
 from llmai.anthropic import AnthropicClient
+from llmai.azure import AzureOpenAIClient
 from llmai.bedrock import BedrockClient
 from llmai.chatgpt import ChatGPTClient
 from llmai.client import LLMProvider, get_client
 from llmai.deepseek import DeepSeekClient
 from llmai.google import GoogleClient
 from llmai.openai import OpenAIApiType, OpenAIClient
+from llmai.vertex import VertexAIClient
 from llmai.shared import (
     HostedToolType,
     LLMTool,
@@ -17,6 +19,7 @@ from llmai.shared import (
 
 __all__ = [
     "AnthropicClient",
+    "AzureOpenAIClient",
     "BedrockClient",
     "ChatGPTClient",
     "DeepSeekClient",
@@ -30,6 +33,7 @@ __all__ = [
     "ReasoningEffortValue",
     "ReasoningSummary",
     "ToolChoiceMode",
+    "VertexAIClient",
     "WebSearchTool",
     "get_client",
     "main",

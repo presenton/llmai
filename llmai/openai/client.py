@@ -122,6 +122,9 @@ class OpenAIApiType(str, Enum):
 
 
 class OpenAIClient(BaseClient):
+    PROVIDER_NAME = "openai"
+    PROVIDER_LABEL = "OpenAI"
+
     def __init__(
         self,
         *,
@@ -133,10 +136,10 @@ class OpenAIClient(BaseClient):
         try:
             self._client = OpenAI(base_url=base_url, api_key=api_key)
         except Exception as exc:
-            raise_llm_error(exc, provider="openai")
+            raise_llm_error(exc, provider=self.PROVIDER_NAME)
 
         if self._logger:
-            self._logger.info("OpenAI client created")
+            self._logger.info("%s client created", self.PROVIDER_LABEL)
             self._logger.info("Base URL: %s", base_url)
 
     def _chat_completion_message_to_assistant_message(
@@ -849,7 +852,7 @@ class OpenAIClient(BaseClient):
                 duration_seconds=duration_seconds,
             )
         except Exception as exc:
-            raise_llm_error(exc, provider="openai")
+            raise_llm_error(exc, provider=self.PROVIDER_NAME)
 
     def _generate_completions_stream(
         self,
@@ -1021,7 +1024,7 @@ class OpenAIClient(BaseClient):
                 duration_seconds=duration_seconds,
             )
         except Exception as exc:
-            raise_llm_error(exc, provider="openai")
+            raise_llm_error(exc, provider=self.PROVIDER_NAME)
 
     def _generate_responses_once(
         self,
@@ -1082,7 +1085,7 @@ class OpenAIClient(BaseClient):
                 duration_seconds=duration_seconds,
             )
         except Exception as exc:
-            raise_llm_error(exc, provider="openai")
+            raise_llm_error(exc, provider=self.PROVIDER_NAME)
 
     def _generate_responses_stream(
         self,
@@ -1377,4 +1380,4 @@ class OpenAIClient(BaseClient):
                 duration_seconds=duration_seconds,
             )
         except Exception as exc:
-            raise_llm_error(exc, provider="openai")
+            raise_llm_error(exc, provider=self.PROVIDER_NAME)

@@ -6,6 +6,8 @@ Today the repository includes adapters for:
 
 - ChatGPT
 - OpenAI
+- Azure OpenAI
+- Vertex AI
 - DeepSeek
 - Anthropic
 - Google Gemini
@@ -56,6 +58,55 @@ print(result.duration_seconds)
 For text-only prompts, `UserMessage(content="...")` is the simplest form. You can also pass explicit content parts like `TextContentPart` when you need mixed multimodal input or tighter control over message structure.
 
 If you want to swap providers, the overall call shape stays the same. In most cases you only need to change the client class, credentials, and model name.
+
+## Azure OpenAI
+
+```python
+from llmai import AzureOpenAIClient
+from llmai.shared import UserMessage
+
+
+client = AzureOpenAIClient(
+    api_key="AZURE_OPENAI_API_KEY",
+    endpoint="https://your-resource.openai.azure.com",
+    api_version="2024-10-21",
+)
+
+result = client.generate(
+    model="your-azure-deployment",
+    messages=[
+        UserMessage(content="Write a two-line poem about clean interfaces."),
+    ],
+)
+
+print(result.content)
+```
+
+`AzureOpenAIClient` uses the official OpenAI SDK's Azure client and supports either API-key auth or Entra token auth. It reads `AZURE_OPENAI_API_KEY` or `AZURE_OPENAI_AD_TOKEN`, `AZURE_OPENAI_ENDPOINT` or `AZURE_OPENAI_BASE_URL`, `AZURE_OPENAI_API_VERSION` or `OPENAI_API_VERSION`, and optional `AZURE_OPENAI_DEPLOYMENT` by default.
+
+## Vertex AI
+
+```python
+from llmai import VertexAIClient
+from llmai.shared import UserMessage
+
+
+client = VertexAIClient(
+    project="your-gcp-project",
+    location="us-central1",
+)
+
+result = client.generate(
+    model="gemini-2.5-flash",
+    messages=[
+        UserMessage(content="Write a two-line poem about clean interfaces."),
+    ],
+)
+
+print(result.content)
+```
+
+`VertexAIClient` uses the `google-genai` Vertex AI path internally. It supports ADC or explicit credentials, and also accepts provider-specific `VERTEX_PROJECT`, `VERTEX_LOCATION`, and `VERTEX_API_KEY` envs while still allowing the upstream SDK's standard `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`, and Google API-key env handling.
 
 ## ChatGPT
 
@@ -275,6 +326,8 @@ tool_choice = {
 Current `llmai` behavior:
 
 - OpenAI Responses: attaches built-in `web_search`
+- Azure OpenAI: follows the same OpenAI adapter surface; service support depends on your Azure API version and deployment
+- Vertex AI: attaches `google_search`
 - ChatGPT/Codex: attaches built-in `web_search`
 - Anthropic: attaches Anthropic's hosted web-search tool
 - Google Gemini: attaches `google_search`
@@ -308,6 +361,8 @@ for chunk in client.generate(
 ## Package Layout
 
 - `llmai/openai`: OpenAI adapter
+- `llmai/azure`: Azure OpenAI adapter
+- `llmai/vertex`: Vertex AI adapter
 - `llmai/deepseek`: DeepSeek adapter
 - `llmai/anthropic`: Anthropic adapter
 - `llmai/google`: Google Gemini adapter
