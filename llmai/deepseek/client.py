@@ -40,7 +40,13 @@ from llmai.shared.responses import (
     ResponseStreamToolCompleteChunk,
     ResponseStreamToolChunk,
 )
-from llmai.shared.tools import Tool, ToolChoice, resolve_tools
+from llmai.shared.tools import (
+    LLMTool,
+    Tool,
+    ToolChoice,
+    filter_resolved_tools_for_provider,
+    resolve_tools,
+)
 
 
 class DeepSeekClient(OpenAIClient):
@@ -140,12 +146,15 @@ class DeepSeekClient(OpenAIClient):
 
     def _get_deepseek_tools_and_tool_choice_or_omit(
         self,
-        tools: list[Tool] | None,
+        tools: list[LLMTool] | None,
         tool_choice: ToolChoice | None,
         response_format: ResponseFormat | None,
     ) -> tuple[list[ChatCompletionFunctionToolParam] | Omit, object | Omit, str | None]:
-        resolved = resolve_tools(tools, tool_choice)
-        deepseek_tools = self._llm_tools_to_openai_tools(resolved.tools)
+        resolved = filter_resolved_tools_for_provider(
+            resolve_tools(tools, tool_choice),
+            supports_web_search=False,
+        )
+        deepseek_tools = self._llm_tools_to_openai_tools(resolved.function_tools)
 
         response_schema_tool_name: str | None = None
         response_schema = self._get_deepseek_response_schema(response_format)
@@ -163,15 +172,15 @@ class DeepSeekClient(OpenAIClient):
 
         deepseek_tool_choice: object | Omit = Omit()
         if resolved.requires_tool:
-            if len(resolved.tools) == 1:
+            if len(resolved.function_tools) == 1:
                 deepseek_tool_choice = {
                     "type": "function",
-                    "function": {"name": resolved.tools[0].name},
+                    "function": {"name": resolved.function_tools[0].name},
                 }
             else:
                 deepseek_tool_choice = "required"
         elif response_schema_tool_name:
-            if resolved.is_explicit and resolved.tools:
+            if resolved.is_explicit and resolved.function_tools:
                 deepseek_tool_choice = "required"
             else:
                 deepseek_tool_choice = {
@@ -212,7 +221,7 @@ class DeepSeekClient(OpenAIClient):
         model: str,
         messages: list[Message],
         temperature: float | None = None,
-        tools: list[Tool] | None = None,
+        tools: list[LLMTool] | None = None,
         tool_choice: ToolChoice | None = None,
         response_format: ResponseFormat | None = None,
         max_tokens: int | None = None,
@@ -251,7 +260,7 @@ class DeepSeekClient(OpenAIClient):
         model: str,
         messages: list[Message],
         temperature: float | None = None,
-        tools: list[Tool] | None = None,
+        tools: list[LLMTool] | None = None,
         tool_choice: ToolChoice | None = None,
         response_format: ResponseFormat | None = None,
         max_tokens: int | None = None,
@@ -324,7 +333,7 @@ class DeepSeekClient(OpenAIClient):
         model: str,
         messages: list[Message],
         temperature: float | None = None,
-        tools: list[Tool] | None = None,
+        tools: list[LLMTool] | None = None,
         tool_choice: ToolChoice | None = None,
         response_format: ResponseFormat | None = None,
         max_tokens: int | None = None,

@@ -21,6 +21,7 @@ from llmai.shared.messages import (
     ToolResponseMessage,
     UserMessage,
     collapse_content_parts,
+    collapse_thinking_blocks,
     content_has_images,
     normalize_content_parts,
 )
@@ -44,7 +45,13 @@ from llmai.shared.responses import (
     ResponseUsage,
 )
 from llmai.shared.schema import cleanup_schema_dict, get_schema_as_dict
-from llmai.shared.tools import Tool, ToolChoice, resolve_tools
+from llmai.shared.tools import (
+    LLMTool,
+    Tool,
+    ToolChoice,
+    filter_resolved_tools_for_provider,
+    resolve_tools,
+)
 
 
 BEDROCK_SUPPORTED_RESPONSE_SCHEMA_KEYS = {
@@ -350,13 +357,16 @@ class BedrockClient(BaseClient):
 
     def _get_bedrock_tool_config(
         self,
-        tools: list[Tool] | None,
+        tools: list[LLMTool] | None,
         tool_choice: ToolChoice | None,
         response_format: ResponseFormat | None,
         use_tools_for_structured_output: bool | None,
     ) -> dict[str, object] | None:
-        resolved = resolve_tools(tools, tool_choice)
-        bedrock_tools = self._llm_tools_to_bedrock_tools(resolved.tools)
+        resolved = filter_resolved_tools_for_provider(
+            resolve_tools(tools, tool_choice),
+            supports_web_search=False,
+        )
+        bedrock_tools = self._llm_tools_to_bedrock_tools(resolved.function_tools)
 
         response_schema = self._get_bedrock_response_schema(response_format)
         if use_tools_for_structured_output and response_schema:
@@ -370,8 +380,10 @@ class BedrockClient(BaseClient):
         config: dict[str, object] = {"tools": bedrock_tools}
 
         if resolved.requires_tool:
-            if len(resolved.tools) == 1:
-                config["toolChoice"] = {"tool": {"name": resolved.tools[0].name}}
+            if len(resolved.function_tools) == 1:
+                config["toolChoice"] = {
+                    "tool": {"name": resolved.function_tools[0].name}
+                }
             else:
                 config["toolChoice"] = {"any": {}}
         elif use_tools_for_structured_output and response_schema:
@@ -449,7 +461,7 @@ class BedrockClient(BaseClient):
         block: dict[str, object],
         *,
         content_parts: list[TextContentPart | ImageContentPart],
-        thinking_chunks: list[str],
+        thinking_blocks: list[str],
         user_tool_calls: list[AssistantToolCall],
         response_schema_holder: list[dict | None],
         response_schema_tool_name: str,
@@ -466,7 +478,7 @@ class BedrockClient(BaseClient):
         if isinstance(reasoning_content, dict):
             reasoning_text = reasoning_content.get("reasoningText") or {}
             if isinstance(reasoning_text, dict) and reasoning_text.get("text"):
-                thinking_chunks.append(reasoning_text["text"])
+                thinking_blocks.append(reasoning_text["text"])
 
         citations_content = block.get("citationsContent") or {}
         if isinstance(citations_content, dict):
@@ -499,7 +511,7 @@ class BedrockClient(BaseClient):
         response_format: ResponseFormat | None,
     ) -> tuple[AssistantMessage, dict | None, list[AssistantToolCall]]:
         content_parts: list[TextContentPart | ImageContentPart] = []
-        thinking_chunks: list[str] = []
+        thinking_blocks: list[str] = []
         response_schema_holder: list[dict | None] = [None]
         response_schema_tool_name = get_response_format_name(
             response_format,
@@ -512,7 +524,7 @@ class BedrockClient(BaseClient):
                 self._append_generated_content_block(
                     block,
                     content_parts=content_parts,
-                    thinking_chunks=thinking_chunks,
+                    thinking_blocks=thinking_blocks,
                     user_tool_calls=user_tool_calls,
                     response_schema_holder=response_schema_holder,
                     response_schema_tool_name=response_schema_tool_name,
@@ -520,7 +532,7 @@ class BedrockClient(BaseClient):
 
         assistant_message = AssistantMessage(
             content=collapse_content_parts(content_parts),
-            thinking="".join(thinking_chunks) or None,
+            thinking=collapse_thinking_blocks(thinking_blocks),
             tool_calls=user_tool_calls,
         )
         return assistant_message, response_schema_holder[0], user_tool_calls
@@ -531,7 +543,7 @@ class BedrockClient(BaseClient):
         model: str,
         messages: list[Message],
         temperature: float | None,
-        tools: list[Tool] | None,
+        tools: list[LLMTool] | None,
         tool_choice: ToolChoice | None,
         response_format: ResponseFormat | None,
         max_tokens: int | None,
@@ -596,7 +608,7 @@ class BedrockClient(BaseClient):
         model: str,
         messages: list[Message],
         temperature: float | None = None,
-        tools: list[Tool] | None = None,
+        tools: list[LLMTool] | None = None,
         tool_choice: ToolChoice | None = None,
         response_format: ResponseFormat | None = None,
         max_tokens: int | None = None,
@@ -638,7 +650,7 @@ class BedrockClient(BaseClient):
         model: str,
         messages: list[Message],
         temperature: float | None = None,
-        tools: list[Tool] | None = None,
+        tools: list[LLMTool] | None = None,
         tool_choice: ToolChoice | None = None,
         response_format: ResponseFormat | None = None,
         max_tokens: int | None = None,
@@ -696,7 +708,7 @@ class BedrockClient(BaseClient):
         model: str,
         messages: list[Message],
         temperature: float | None = None,
-        tools: list[Tool] | None = None,
+        tools: list[LLMTool] | None = None,
         tool_choice: ToolChoice | None = None,
         response_format: ResponseFormat | None = None,
         max_tokens: int | None = None,
@@ -723,9 +735,11 @@ class BedrockClient(BaseClient):
             )
             current_chunk_type = None
             current_tool = None
+            active_thinking_index: int | None = None
             usage: ResponseUsage | None = None
             content_blocks: dict[int, dict[str, Any]] = {}
-            thinking_chunks: list[str] = []
+            thinking_blocks_by_index: dict[int, str] = {}
+            thinking_order: list[int] = []
             response_schema_tool_name = get_response_format_name(
                 response_format,
                 default="response",
@@ -772,6 +786,25 @@ class BedrockClient(BaseClient):
                         }
                     continue
 
+                content_block_stop = event.get("contentBlockStop")
+                if isinstance(content_block_stop, dict):
+                    index = content_block_stop.get("contentBlockIndex")
+                    if (
+                        isinstance(index, int)
+                        and current_chunk_type == "thinking"
+                        and active_thinking_index == index
+                    ):
+                        stream_chunk = self._close_stream_chunk(
+                            current_chunk_type=current_chunk_type,
+                            current_tool=current_tool,
+                        )
+                        if stream_chunk is not None:
+                            yield stream_chunk
+                        current_chunk_type = None
+                        current_tool = None
+                        active_thinking_index = None
+                    continue
+
                 content_block_delta = event.get("contentBlockDelta")
                 if not isinstance(content_block_delta, dict):
                     continue
@@ -784,6 +817,8 @@ class BedrockClient(BaseClient):
                 if delta.get("text"):
                     current = content_blocks.setdefault(index, {"text": ""})
                     current["text"] = f"{current.get('text', '')}{delta['text']}"
+                    if current_chunk_type == "thinking":
+                        active_thinking_index = None
                     current_chunk_type, current_tool, stream_chunks = (
                         self._transition_stream_chunk(
                             current_chunk_type=current_chunk_type,
@@ -797,7 +832,25 @@ class BedrockClient(BaseClient):
 
                 reasoning_content = delta.get("reasoningContent") or {}
                 if isinstance(reasoning_content, dict) and reasoning_content.get("text"):
-                    thinking_chunks.append(reasoning_content["text"])
+                    if index not in thinking_blocks_by_index:
+                        thinking_blocks_by_index[index] = ""
+                        thinking_order.append(index)
+
+                    if (
+                        current_chunk_type == "thinking"
+                        and active_thinking_index != index
+                    ):
+                        stream_chunk = self._close_stream_chunk(
+                            current_chunk_type=current_chunk_type,
+                            current_tool=current_tool,
+                        )
+                        if stream_chunk is not None:
+                            yield stream_chunk
+                        current_chunk_type = None
+                        current_tool = None
+
+                    active_thinking_index = index
+                    thinking_blocks_by_index[index] += reasoning_content["text"]
                     current_chunk_type, current_tool, stream_chunks = (
                         self._transition_stream_chunk(
                             current_chunk_type=current_chunk_type,
@@ -829,6 +882,8 @@ class BedrockClient(BaseClient):
                     )
 
                     tool_name = current_tool_use.get("name")
+                    if current_chunk_type == "thinking":
+                        active_thinking_index = None
                     current_chunk_type, current_tool, stream_chunks = (
                         self._transition_stream_chunk(
                             current_chunk_type=current_chunk_type,
@@ -873,7 +928,7 @@ class BedrockClient(BaseClient):
                 self._append_generated_content_block(
                     block,
                     content_parts=content_parts,
-                    thinking_chunks=thinking_chunks,
+                    thinking_blocks=[],
                     user_tool_calls=user_tool_calls,
                     response_schema_holder=response_schema_holder,
                     response_schema_tool_name=response_schema_tool_name,
@@ -882,7 +937,13 @@ class BedrockClient(BaseClient):
             response_schema_content = response_schema_holder[0]
             assistant_message = AssistantMessage(
                 content=collapse_content_parts(content_parts),
-                thinking="".join(thinking_chunks) or None,
+                thinking=collapse_thinking_blocks(
+                    [
+                        thinking_blocks_by_index[index]
+                        for index in thinking_order
+                        if thinking_blocks_by_index[index]
+                    ]
+                ),
                 tool_calls=user_tool_calls,
             )
             new_messages = [*messages, assistant_message]

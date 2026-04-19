@@ -1,4 +1,4 @@
-from llmai.shared.tools import Tool, ToolChoiceMode
+from llmai.shared.tools import Tool, ToolChoiceMode, WebSearchTool
 
 IMAGE_SCHEMA = {
     "type": "object",
@@ -81,3 +81,5 @@ TOOL_CHOICE = {
     "mode": ToolChoiceMode.REQUIRED,
     "tools": ["get_weather", "get_time", "get_timezone"],
 }
+
+WEB_SEARCH_TOOL = WebSearchTool()

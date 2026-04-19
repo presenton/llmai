@@ -60,7 +60,14 @@ from llmai.shared.schema import (
     filter_schema_dict,
     get_schema_as_dict,
 )
-from llmai.shared.tools import Tool, ToolChoice, ToolChoiceMode
+from llmai.shared.tools import (
+    HostedToolType,
+    LLMTool,
+    Tool,
+    ToolChoice,
+    ToolChoiceMode,
+    WebSearchTool,
+)
 
 __all__ = [
     "AssistantContent",
@@ -81,6 +88,7 @@ __all__ = [
     "Message",
     "MessageContent",
     "JSONObjectResponse",
+    "LLMTool",
     "ResponseContent",
     "ResponseResult",
     "ResponseFormat",
@@ -102,12 +110,14 @@ __all__ = [
     "TextContentPart",
     "TextMessageContent",
     "TextResponse",
+    "HostedToolType",
     "Tool",
     "ToolChoice",
     "ToolChoiceMode",
     "ToolError",
     "ToolResponseMessage",
     "UserMessage",
+    "WebSearchTool",
     "collapse_content_parts",
     "cleanup_schema_dict",
     "content_from_text",

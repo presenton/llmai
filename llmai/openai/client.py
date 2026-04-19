@@ -45,6 +45,7 @@ from llmai.shared.messages import (
     SystemMessage,
     ToolResponseMessage,
     UserMessage,
+    collapse_thinking_blocks,
     content_from_text,
     content_has_images,
     normalize_content_parts,
@@ -70,7 +71,15 @@ from llmai.shared.responses import (
     ResponseUsage,
 )
 from llmai.shared.schema import get_schema_as_dict
-from llmai.shared.tools import Tool, ToolChoice, resolve_tools
+from llmai.shared.tools import (
+    LLMTool,
+    Tool,
+    ToolChoice,
+    WEB_SEARCH_TOOL_NAME,
+    WebSearchTool,
+    filter_resolved_tools_for_provider,
+    resolve_tools,
+)
 
 OPENAI_SUPPORTED_STRING_FORMATS = {
     "date-time",
@@ -264,7 +273,7 @@ class OpenAIClient(BaseClient):
     ) -> list[dict[str, object]]:
         input_items: list[dict[str, object]] = []
 
-        if message.thinking:
+        for thinking_block in message.thinking or []:
             input_items.append(
                 {
                     "id": self._response_item_id("reasoning"),
@@ -273,7 +282,7 @@ class OpenAIClient(BaseClient):
                     "summary": [
                         {
                             "type": "summary_text",
-                            "text": message.thinking,
+                            "text": thinking_block,
                         }
                     ],
                 }
@@ -503,44 +512,72 @@ class OpenAIClient(BaseClient):
             for tool in tools
         ]
 
+    def _web_search_tool_to_openai_responses_tool(
+        self,
+        tool: WebSearchTool,
+    ) -> dict[str, object]:
+        del tool
+        return {"type": WEB_SEARCH_TOOL_NAME}
+
     def _get_openai_tools_and_tool_choice_or_omit(
         self,
-        tools: list[Tool] | None,
+        tools: list[LLMTool] | None,
         tool_choice: ToolChoice | None,
     ) -> tuple[list[ChatCompletionFunctionToolParam] | Omit, object | Omit]:
-        resolved = resolve_tools(tools, tool_choice)
-        openai_tools = self._llm_tools_to_openai_tools(resolved.tools)
+        resolved = filter_resolved_tools_for_provider(
+            resolve_tools(tools, tool_choice),
+            supports_web_search=False,
+        )
+        openai_tools = self._llm_tools_to_openai_tools(resolved.function_tools)
         if not openai_tools:
             return Omit(), Omit()
 
         if not resolved.requires_tool:
             return openai_tools, Omit()
 
-        if len(resolved.tools) == 1:
+        if len(resolved.function_tools) == 1:
             return openai_tools, {
                 "type": "function",
-                "function": {"name": resolved.tools[0].name},
+                "function": {"name": resolved.function_tools[0].name},
             }
 
         return openai_tools, "required"
 
     def _get_openai_responses_tools_and_tool_choice_or_omit(
         self,
-        tools: list[Tool] | None,
+        tools: list[LLMTool] | None,
         tool_choice: ToolChoice | None,
     ) -> tuple[list[dict[str, object]] | Omit, object | Omit]:
-        resolved = resolve_tools(tools, tool_choice)
-        openai_tools = self._llm_tools_to_openai_responses_tools(resolved.tools)
+        resolved = filter_resolved_tools_for_provider(
+            resolve_tools(tools, tool_choice),
+            supports_web_search=True,
+        )
+        openai_tools = self._llm_tools_to_openai_responses_tools(
+            resolved.function_tools
+        )
+        if resolved.web_search_tool is not None:
+            openai_tools.append(
+                self._web_search_tool_to_openai_responses_tool(
+                    resolved.web_search_tool
+                )
+            )
         if not openai_tools:
             return Omit(), Omit()
+
+        if resolved.has_web_search and (resolved.is_explicit or resolved.requires_tool):
+            return openai_tools, {
+                "type": "allowed_tools",
+                "mode": "required" if resolved.requires_tool else "auto",
+                "tools": openai_tools,
+            }
 
         if not resolved.requires_tool:
             return openai_tools, Omit()
 
-        if len(resolved.tools) == 1:
+        if len(resolved.function_tools) == 1:
             return openai_tools, {
                 "type": "function",
-                "name": resolved.tools[0].name,
+                "name": resolved.function_tools[0].name,
             }
 
         return openai_tools, "required"
@@ -629,7 +666,7 @@ class OpenAIClient(BaseClient):
         output: list[object],
     ) -> AssistantMessage:
         text_chunks: list[str] = []
-        thinking_chunks: list[str] = []
+        thinking_blocks: list[str] = []
         tool_calls: list[AssistantToolCall] = []
 
         for item in output:
@@ -645,9 +682,12 @@ class OpenAIClient(BaseClient):
                     ):
                         text_chunks.append(content.refusal)
             elif item_type == "reasoning":
+                block_parts: list[str] = []
                 for summary in getattr(item, "summary", []) or []:
                     if getattr(summary, "text", None):
-                        thinking_chunks.append(summary.text)
+                        block_parts.append(summary.text)
+                if block_parts:
+                    thinking_blocks.append("".join(block_parts))
             elif item_type == "function_call":
                 tool_calls.append(
                     AssistantToolCall(
@@ -659,7 +699,7 @@ class OpenAIClient(BaseClient):
 
         return AssistantMessage(
             content=content_from_text("".join(text_chunks) or None),
-            thinking="".join(thinking_chunks) or None,
+            thinking=collapse_thinking_blocks(thinking_blocks),
             tool_calls=tool_calls,
         )
 
@@ -669,7 +709,7 @@ class OpenAIClient(BaseClient):
         model: str,
         messages: list[Message],
         temperature: float | None = None,
-        tools: list[Tool] | None = None,
+        tools: list[LLMTool] | None = None,
         tool_choice: ToolChoice | None = None,
         response_format: ResponseFormat | None = None,
         max_tokens: int | None = None,
@@ -756,7 +796,7 @@ class OpenAIClient(BaseClient):
         model: str,
         messages: list[Message],
         temperature: float | None = None,
-        tools: list[Tool] | None = None,
+        tools: list[LLMTool] | None = None,
         tool_choice: ToolChoice | None = None,
         response_format: ResponseFormat | None = None,
         max_tokens: int | None = None,
@@ -816,7 +856,7 @@ class OpenAIClient(BaseClient):
         model: str,
         messages: list[Message],
         temperature: float | None = None,
-        tools: list[Tool] | None = None,
+        tools: list[LLMTool] | None = None,
         tool_choice: ToolChoice | None = None,
         response_format: ResponseFormat | None = None,
         max_tokens: int | None = None,
@@ -987,7 +1027,7 @@ class OpenAIClient(BaseClient):
         model: str,
         messages: list[Message],
         temperature: float | None = None,
-        tools: list[Tool] | None = None,
+        tools: list[LLMTool] | None = None,
         tool_choice: ToolChoice | None = None,
         response_format: ResponseFormat | None = None,
         max_tokens: int | None = None,
@@ -1047,7 +1087,7 @@ class OpenAIClient(BaseClient):
         model: str,
         messages: list[Message],
         temperature: float | None = None,
-        tools: list[Tool] | None = None,
+        tools: list[LLMTool] | None = None,
         tool_choice: ToolChoice | None = None,
         response_format: ResponseFormat | None = None,
         max_tokens: int | None = None,
@@ -1086,7 +1126,9 @@ class OpenAIClient(BaseClient):
             current_chunk_type = None
             current_tool = None
             content = ""
-            thinking = ""
+            active_thinking_key: tuple[str, int] | None = None
+            thinking_blocks_by_key: dict[tuple[str, int], str] = {}
+            thinking_order: list[tuple[str, int]] = []
             partial_tool_calls: dict[str, dict[str, str | None]] = {}
             tool_order: list[str] = []
             completed_tool_ids: set[str] = set()
@@ -1096,6 +1138,8 @@ class OpenAIClient(BaseClient):
                 event_type = getattr(event, "type", None)
 
                 if event_type == "response.output_text.delta":
+                    if current_chunk_type == "thinking":
+                        active_thinking_key = None
                     content += event.delta
                     current_chunk_type, current_tool, stream_chunks = (
                         self._transition_stream_chunk(
@@ -1110,7 +1154,26 @@ class OpenAIClient(BaseClient):
                     continue
 
                 if event_type == "response.reasoning_summary_text.delta":
-                    thinking += event.delta
+                    thinking_key = (event.item_id, event.summary_index)
+                    if thinking_key not in thinking_blocks_by_key:
+                        thinking_blocks_by_key[thinking_key] = ""
+                        thinking_order.append(thinking_key)
+
+                    if (
+                        current_chunk_type == "thinking"
+                        and active_thinking_key != thinking_key
+                    ):
+                        stream_chunk = self._close_stream_chunk(
+                            current_chunk_type=current_chunk_type,
+                            current_tool=current_tool,
+                        )
+                        if stream_chunk is not None:
+                            yield stream_chunk
+                        current_chunk_type = None
+                        current_tool = None
+
+                    active_thinking_key = thinking_key
+                    thinking_blocks_by_key[thinking_key] += event.delta
                     current_chunk_type, current_tool, stream_chunks = (
                         self._transition_stream_chunk(
                             current_chunk_type=current_chunk_type,
@@ -1121,6 +1184,34 @@ class OpenAIClient(BaseClient):
                     for stream_chunk in stream_chunks:
                         yield stream_chunk
                     yield ResponseStreamThinkingChunk(chunk=event.delta)
+                    continue
+
+                if event_type in {
+                    "response.reasoning_summary_text.done",
+                    "response.reasoning_summary_part.done",
+                }:
+                    thinking_key = (event.item_id, event.summary_index)
+                    if thinking_key not in thinking_blocks_by_key:
+                        thinking_blocks_by_key[thinking_key] = ""
+                        thinking_order.append(thinking_key)
+
+                    text = getattr(event, "text", None)
+                    if text is not None:
+                        thinking_blocks_by_key[thinking_key] = text
+
+                    if (
+                        current_chunk_type == "thinking"
+                        and active_thinking_key == thinking_key
+                    ):
+                        stream_chunk = self._close_stream_chunk(
+                            current_chunk_type=current_chunk_type,
+                            current_tool=current_tool,
+                        )
+                        if stream_chunk is not None:
+                            yield stream_chunk
+                        current_chunk_type = None
+                        current_tool = None
+                        active_thinking_key = None
                     continue
 
                 if event_type == "response.output_item.added":
@@ -1190,6 +1281,8 @@ class OpenAIClient(BaseClient):
                     else:
                         current["arguments"] += event.delta
 
+                    if current_chunk_type == "thinking":
+                        active_thinking_key = None
                     current_chunk_type, current_tool, stream_chunks = (
                         self._transition_stream_chunk(
                             current_chunk_type=current_chunk_type,
@@ -1217,6 +1310,11 @@ class OpenAIClient(BaseClient):
                 tool_calls = assistant_message.tool_calls
                 usage = self._response_usage(getattr(final_response, "usage", None))
             else:
+                thinking_blocks = [
+                    thinking_blocks_by_key[key]
+                    for key in thinking_order
+                    if thinking_blocks_by_key[key]
+                ]
                 tool_calls = [
                     AssistantToolCall(
                         id=partial_tool_calls[tool_key]["id"]
@@ -1230,7 +1328,7 @@ class OpenAIClient(BaseClient):
                 ]
                 assistant_message = AssistantMessage(
                     content=content_from_text(content or None),
-                    thinking=thinking or None,
+                    thinking=collapse_thinking_blocks(thinking_blocks),
                     tool_calls=tool_calls,
                 )
                 usage = None

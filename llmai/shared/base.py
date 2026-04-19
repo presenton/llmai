@@ -12,7 +12,7 @@ from llmai.shared.responses import (
     ResponseStreamChunk,
     ResponseStreamChunkType,
 )
-from llmai.shared.tools import Tool, ToolChoice
+from llmai.shared.tools import LLMTool, ToolChoice
 
 
 class BaseClient(ABC):
@@ -118,7 +118,7 @@ class BaseClient(ABC):
         model: str,
         messages: list[Message],
         temperature: float | None = None,
-        tools: list[Tool] | None = None,
+        tools: list[LLMTool] | None = None,
         tool_choice: ToolChoice | None = None,
         response_format: ResponseFormat | None = None,
         max_tokens: int | None = None,

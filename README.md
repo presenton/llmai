@@ -37,14 +37,14 @@ pip install -e .
 
 ```python
 from llmai import OpenAIClient
-from llmai.shared import TextContentPart, UserMessage
+from llmai.shared import UserMessage
 
 client = OpenAIClient(api_key="OPENAI_API_KEY")
 
 result = client.generate(
     model="your-openai-model",
     messages=[
-        UserMessage(content=[TextContentPart(text="Write a two-line poem about clean interfaces.")]),
+        UserMessage(content="Write a two-line poem about clean interfaces."),
     ],
 )
 
@@ -53,13 +53,15 @@ print(result.usage)
 print(result.duration_seconds)
 ```
 
+For text-only prompts, `UserMessage(content="...")` is the simplest form. You can also pass explicit content parts like `TextContentPart` when you need mixed multimodal input or tighter control over message structure.
+
 If you want to swap providers, the overall call shape stays the same. In most cases you only need to change the client class, credentials, and model name.
 
 ## ChatGPT
 
 ```python
 from llmai import ChatGPTClient
-from llmai.shared import TextContentPart, UserMessage
+from llmai.shared import UserMessage
 
 
 client = ChatGPTClient(access_token="CHATGPT_ACCESS_TOKEN")
@@ -67,9 +69,7 @@ client = ChatGPTClient(access_token="CHATGPT_ACCESS_TOKEN")
 result = client.generate(
     model="chatgpt-4o-latest",
     messages=[
-        UserMessage(
-            content=[TextContentPart(text="Write a two-line poem about clean interfaces.")]
-        ),
+        UserMessage(content="Write a two-line poem about clean interfaces."),
     ],
 )
 
@@ -82,7 +82,7 @@ print(result.content)
 
 ```python
 from llmai import DeepSeekClient
-from llmai.shared import JSONSchemaResponse, TextContentPart, UserMessage
+from llmai.shared import JSONSchemaResponse, UserMessage
 
 
 client = DeepSeekClient()
@@ -90,7 +90,7 @@ client = DeepSeekClient()
 result = client.generate(
     model="deepseek-chat",
     messages=[
-        UserMessage(content=[TextContentPart(text="Return a JSON object with one field named answer.")]),
+        UserMessage(content="Return a JSON object with one field named answer."),
     ],
     response_format=JSONSchemaResponse(
         name="final_answer",
@@ -112,7 +112,7 @@ result = client.generate(
 
 ```python
 from llmai import BedrockClient
-from llmai.shared import TextContentPart, UserMessage
+from llmai.shared import UserMessage
 
 
 client = BedrockClient(
@@ -127,7 +127,7 @@ client = BedrockClient(
 result = client.generate(
     model="us.anthropic.claude-3-5-haiku-20241022-v1:0",
     messages=[
-        UserMessage(content=[TextContentPart(text="Say hello.")]),
+        UserMessage(content="Say hello."),
     ],
 )
 
@@ -140,7 +140,7 @@ print(result.content)
 from pydantic import BaseModel
 
 from llmai import GoogleClient
-from llmai.shared import JSONSchemaResponse, TextContentPart, UserMessage
+from llmai.shared import JSONSchemaResponse, UserMessage
 
 
 class Summary(BaseModel):
@@ -153,13 +153,7 @@ client = GoogleClient(api_key="GOOGLE_API_KEY")
 result = client.generate(
     model="your-google-model",
     messages=[
-        UserMessage(
-            content=[
-                TextContentPart(
-                    text="Summarize retrieval-augmented generation in simple terms."
-                )
-            ]
-        ),
+        UserMessage(content="Summarize retrieval-augmented generation in simple terms."),
     ],
     response_format=JSONSchemaResponse(json_schema=Summary),
 )
@@ -194,7 +188,7 @@ print(result.content)
 print(result.messages[-1].thinking)
 ```
 
-Request messages can mix text and image parts. Normal completion content is surfaced as `list[TextContentPart | ImageContentPart]` when the provider returns message content, including text-only replies.
+Use explicit content parts when you need multimodal inputs or want to mix text with images in one message. Normal completion content is surfaced as `list[TextContentPart | ImageContentPart]` when the provider returns message content, including text-only replies. `AssistantMessage.thinking` is returned as `list[str]` when the provider exposes one or more reasoning blocks.
 
 ## Tool Calling
 
@@ -202,7 +196,7 @@ Request messages can mix text and image parts. Normal completion content is surf
 from pydantic import BaseModel
 
 from llmai import OpenAIClient
-from llmai.shared import TextContentPart, Tool, ToolResponseMessage, UserMessage
+from llmai.shared import Tool, ToolResponseMessage, UserMessage
 
 
 class WeatherArgs(BaseModel):
@@ -220,9 +214,7 @@ client = OpenAIClient(api_key="OPENAI_API_KEY")
 first = client.generate(
     model="your-openai-model",
     messages=[
-        UserMessage(
-            content=[TextContentPart(text="What is the weather in Kathmandu?")]
-        ),
+        UserMessage(content="What is the weather in Kathmandu?"),
     ],
     tools=[weather_tool],
     tool_choice={"tools": ["get_weather"]},
@@ -238,7 +230,7 @@ for tool_call in first.tool_calls:
             *first.messages,
             ToolResponseMessage(
                 id=tool_call.id,
-                content=[TextContentPart(text="It is sunny in Kathmandu.")],
+                content=["It is sunny in Kathmandu."],
             ),
         ],
         tools=[weather_tool],
@@ -248,20 +240,62 @@ for tool_call in first.tool_calls:
 
 `llmai` returns tool calls in `first.tool_calls` and leaves execution to the caller.
 
+## Hosted Web Search
+
+`llmai` also supports a provider-hosted web search tool that is not a function tool:
+
+```python
+from llmai import OpenAIClient
+from llmai.shared import UserMessage, WebSearchTool
+
+client = OpenAIClient(api_key="OPENAI_API_KEY")
+
+result = client.generate(
+    model="your-openai-model",
+    messages=[
+        UserMessage(content="What was a positive news story from today? Cite sources."),
+    ],
+    tools=[WebSearchTool()],
+    api_type="responses",
+)
+
+print(result.content)
+print(result.messages[-1].thinking)
+```
+
+You can also target it explicitly in `tool_choice`:
+
+```python
+tool_choice = {
+    "mode": "required",
+    "tools": ["web_search"],
+}
+```
+
+Current `llmai` behavior:
+
+- OpenAI Responses: attaches built-in `web_search`
+- ChatGPT/Codex: attaches built-in `web_search`
+- Anthropic: attaches Anthropic's hosted web-search tool
+- Google Gemini: attaches `google_search`
+- OpenAI Chat Completions: ignores hosted `web_search`
+- DeepSeek: ignores hosted `web_search`
+- Amazon Bedrock: ignores hosted `web_search`
+
+`web_search` can be mixed with normal function tools in the same request.
+
 ## Streaming
 
 ```python
 from llmai import AnthropicClient
-from llmai.shared import TextContentPart, UserMessage
+from llmai.shared import UserMessage
 
 client = AnthropicClient(api_key="ANTHROPIC_API_KEY")
 
 for chunk in client.generate(
     model="your-anthropic-model",
     messages=[
-        UserMessage(
-            content=[TextContentPart(text="Explain recursion in one paragraph.")]
-        ),
+        UserMessage(content="Explain recursion in one paragraph."),
     ],
     stream=True,
 ):
@@ -269,7 +303,7 @@ for chunk in client.generate(
         print(chunk.chunk, end="")
 ```
 
-`generate(..., stream=True)` yields `ResponseStreamChunk` markers with `event="start"` and `event="end"` around each `content`, `thinking`, and `tool` section. `ResponseStreamCompletionChunk` is emitted bare at the end.
+`generate(..., stream=True)` yields `ResponseStreamChunk` markers with `event="start"` and `event="end"` around each `content`, `thinking`, and `tool` section. If a provider returns multiple reasoning blocks, each block gets its own `thinking` start/end pair. `ResponseStreamCompletionChunk` is emitted bare at the end.
 
 ## Package Layout
 
@@ -286,7 +320,7 @@ The shared layer includes the main primitives you will use across providers:
 
 - `UserMessage`, `SystemMessage`, `AssistantMessage`
 - `TextContentPart`, `ImageContentPart`
-- `Tool`, `ToolResponseMessage`
+- `Tool`, `WebSearchTool`, `ToolResponseMessage`
 - `JSONSchemaResponse`, `JSONObjectResponse`, `TextResponse`
-- `ResponseContent`, `ResponseStreamChunk`, `ResponseStreamContentChunk`, `ResponseStreamThinkingChunk`, `ResponseStreamToolChunk`, `ResponseStreamCompletionChunk`
+- `ResponseContent`, `ResponseStreamChunk`, `ResponseStreamContentChunk`, `ResponseStreamThinkingChunk`, `ResponseStreamToolChunk`, `ResponseStreamToolCompleteChunk`, `ResponseStreamCompletionChunk`
 - `ResponseUsage`

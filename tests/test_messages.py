@@ -35,12 +35,12 @@ class AssistantMessageTests(unittest.TestCase):
     def test_supports_optional_thinking_field(self):
         message = AssistantMessage(
             content=[TextContentPart(text="final answer")],
-            thinking="hidden chain summary",
+            thinking=["hidden chain summary"],
         )
 
         self.assertEqual(message.content[0].text, "final answer")
-        self.assertEqual(message.thinking, "hidden chain summary")
-        self.assertEqual(message.model_dump()["thinking"], "hidden chain summary")
+        self.assertEqual(message.thinking, ["hidden chain summary"])
+        self.assertEqual(message.model_dump()["thinking"], ["hidden chain summary"])
 
     def test_supports_multimodal_user_content(self):
         message = UserMessage(

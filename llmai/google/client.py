@@ -10,6 +10,7 @@ from google.genai.types import (
     FunctionCallingConfig as GoogleFunctionCallingConfig,
     FunctionCallingConfigMode as GoogleFunctionCallingConfigMode,
     GenerateContentConfig,
+    GoogleSearch,
     Part as GooglePart,
     ThinkingConfig as GoogleThinkingConfig,
     ThinkingLevel as GoogleThinkingLevel,
@@ -29,6 +30,7 @@ from llmai.shared.messages import (
     ToolResponseMessage,
     UserMessage,
     collapse_content_parts,
+    collapse_thinking_blocks,
     normalize_content_parts,
 )
 from llmai.shared.reasoning import ReasoningEffort
@@ -51,7 +53,14 @@ from llmai.shared.responses import (
     ResponseUsage,
 )
 from llmai.shared.schema import get_schema_as_dict
-from llmai.shared.tools import Tool, ToolChoice, resolve_tools
+from llmai.shared.tools import (
+    LLMTool,
+    Tool,
+    ToolChoice,
+    WebSearchTool,
+    filter_resolved_tools_for_provider,
+    resolve_tools,
+)
 
 GOOGLE_SUPPORTED_RESPONSE_SCHEMA_KEYS = {
     "$anchor",
@@ -169,14 +178,14 @@ class GoogleClient(BaseClient):
 
     def _content_to_assistant_message(self, content: GoogleContent) -> AssistantMessage:
         content_parts: list[TextContentPart | ImageContentPart] = []
-        thinking_chunks: list[str] = []
+        thinking_blocks: list[str] = []
         tool_calls: list[AssistantToolCall] = []
 
         for each_part in content.parts or []:
             text = getattr(each_part, "text", None)
             if text:
                 if getattr(each_part, "thought", False):
-                    thinking_chunks.append(text)
+                    thinking_blocks.append(text)
                 else:
                     content_parts.append(TextContentPart(text=text))
 
@@ -220,7 +229,7 @@ class GoogleClient(BaseClient):
 
         return AssistantMessage(
             content=collapse_content_parts(content_parts),
-            thinking="".join(thinking_chunks) or None,
+            thinking=collapse_thinking_blocks(thinking_blocks),
             tool_calls=tool_calls,
         )
 
@@ -351,6 +360,13 @@ class GoogleClient(BaseClient):
             for tool in tools
         ]
 
+    def _web_search_tool_to_google_tool(
+        self,
+        tool: WebSearchTool,
+    ) -> GoogleTool:
+        del tool
+        return GoogleTool(google_search=GoogleSearch())
+
     def _response_schema_tool(
         self,
         response_format: ResponseFormat | None,
@@ -368,13 +384,20 @@ class GoogleClient(BaseClient):
 
     def _get_google_tools_and_tool_config(
         self,
-        tools: list[Tool] | None,
+        tools: list[LLMTool] | None,
         tool_choice: ToolChoice | None,
         response_format: ResponseFormat | None,
         use_tools_for_structured_output: bool | None,
     ) -> tuple[list[GoogleTool] | None, GoogleToolConfig | None]:
-        resolved = resolve_tools(tools, tool_choice)
-        google_tools = self._llm_tools_to_google_tools(resolved.tools)
+        resolved = filter_resolved_tools_for_provider(
+            resolve_tools(tools, tool_choice),
+            supports_web_search=True,
+        )
+        google_tools = self._llm_tools_to_google_tools(resolved.function_tools)
+        if resolved.web_search_tool is not None:
+            google_tools.append(
+                self._web_search_tool_to_google_tool(resolved.web_search_tool)
+            )
 
         response_schema = get_response_schema(
             response_format,
@@ -394,12 +417,19 @@ class GoogleClient(BaseClient):
         if not google_tools:
             return None, None
 
+        function_tools_present = bool(
+            resolved.function_tools
+            or (use_tools_for_structured_output and response_schema)
+        )
+        if not function_tools_present:
+            return google_tools, None
+
         mode = GoogleFunctionCallingConfigMode.AUTO
         allowed_function_names: list[str] | None = None
         if use_tools_for_structured_output or resolved.requires_tool:
             mode = GoogleFunctionCallingConfigMode.ANY
-            if resolved.requires_tool and len(resolved.tools) == 1:
-                allowed_function_names = resolved.tool_names
+            if resolved.requires_tool and len(resolved.function_tools) == 1:
+                allowed_function_names = [resolved.function_tools[0].name]
 
         tool_config = GoogleToolConfig(
             function_calling_config=GoogleFunctionCallingConfig(
@@ -477,7 +507,7 @@ class GoogleClient(BaseClient):
         model: str,
         messages: list[Message],
         temperature: float | None = None,
-        tools: list[Tool] | None = None,
+        tools: list[LLMTool] | None = None,
         tool_choice: ToolChoice | None = None,
         response_format: ResponseFormat | None = None,
         max_tokens: int | None = None,
@@ -519,7 +549,7 @@ class GoogleClient(BaseClient):
         model: str,
         messages: list[Message],
         temperature: float | None = None,
-        tools: list[Tool] | None = None,
+        tools: list[LLMTool] | None = None,
         tool_choice: ToolChoice | None = None,
         response_format: ResponseFormat | None = None,
         max_tokens: int | None = None,
@@ -612,7 +642,7 @@ class GoogleClient(BaseClient):
         model: str,
         messages: list[Message],
         temperature: float | None = None,
-        tools: list[Tool] | None = None,
+        tools: list[LLMTool] | None = None,
         tool_choice: ToolChoice | None = None,
         response_format: ResponseFormat | None = None,
         max_tokens: int | None = None,
@@ -648,8 +678,10 @@ class GoogleClient(BaseClient):
         try:
             current_chunk_type = None
             current_tool = None
+            active_thinking_part_index: int | None = None
             content_parts: list[TextContentPart | ImageContentPart] = []
-            thinking_chunks: list[str] = []
+            thinking_blocks_by_part_index: dict[int, str] = {}
+            thinking_order: list[int] = []
             response_schema_content: dict | None = None
             response_schema_tool_name = get_response_format_name(
                 response_format,
@@ -683,7 +715,25 @@ class GoogleClient(BaseClient):
                     text = getattr(each_part, "text", None)
                     if text:
                         if getattr(each_part, "thought", False):
-                            thinking_chunks.append(text)
+                            if part_index not in thinking_blocks_by_part_index:
+                                thinking_blocks_by_part_index[part_index] = ""
+                                thinking_order.append(part_index)
+
+                            if (
+                                current_chunk_type == "thinking"
+                                and active_thinking_part_index != part_index
+                            ):
+                                stream_chunk = self._close_stream_chunk(
+                                    current_chunk_type=current_chunk_type,
+                                    current_tool=current_tool,
+                                )
+                                if stream_chunk is not None:
+                                    yield stream_chunk
+                                current_chunk_type = None
+                                current_tool = None
+
+                            active_thinking_part_index = part_index
+                            thinking_blocks_by_part_index[part_index] += text
                             current_chunk_type, current_tool, stream_chunks = (
                                 self._transition_stream_chunk(
                                     current_chunk_type=current_chunk_type,
@@ -695,6 +745,8 @@ class GoogleClient(BaseClient):
                                 yield stream_chunk
                             yield ResponseStreamThinkingChunk(chunk=text)
                         else:
+                            if current_chunk_type == "thinking":
+                                active_thinking_part_index = None
                             content_parts.append(TextContentPart(text=text))
                             if not use_tools_for_structured_output:
                                 current_chunk_type, current_tool, stream_chunks = (
@@ -774,6 +826,8 @@ class GoogleClient(BaseClient):
 
                     if last_emitted_chunks.get(tool_id) != arguments:
                         last_emitted_chunks[tool_id] = arguments
+                        if current_chunk_type == "thinking":
+                            active_thinking_part_index = None
                         current_chunk_type, current_tool, stream_chunks = (
                             self._transition_stream_chunk(
                                 current_chunk_type=current_chunk_type,
@@ -793,7 +847,13 @@ class GoogleClient(BaseClient):
             user_tool_calls = [tool_calls_by_id[tool_id] for tool_id in tool_call_order]
             assistant_message = AssistantMessage(
                 content=collapse_content_parts(content_parts),
-                thinking="".join(thinking_chunks) or None,
+                thinking=collapse_thinking_blocks(
+                    [
+                        thinking_blocks_by_part_index[part_index]
+                        for part_index in thinking_order
+                        if thinking_blocks_by_part_index[part_index]
+                    ]
+                ),
                 tool_calls=user_tool_calls,
             )
             new_messages = [*messages, assistant_message]

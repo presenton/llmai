@@ -26,6 +26,7 @@ from llmai.shared.messages import (
     SystemMessage,
     ToolResponseMessage,
     UserMessage,
+    collapse_thinking_blocks,
     content_from_text,
     normalize_content_parts,
 )
@@ -47,7 +48,15 @@ from llmai.shared.responses import (
     ResponseUsage,
 )
 from llmai.shared.schema import get_schema_as_dict
-from llmai.shared.tools import Tool, ToolChoice, resolve_tools
+from llmai.shared.tools import (
+    LLMTool,
+    Tool,
+    ToolChoice,
+    WEB_SEARCH_TOOL_NAME,
+    WebSearchTool,
+    filter_resolved_tools_for_provider,
+    resolve_tools,
+)
 
 ANTHROPIC_SUPPORTED_SCHEMA_KEYS = {
     "$defs",
@@ -222,6 +231,16 @@ class AnthropicClient(BaseClient):
             for tool in tools
         ]
 
+    def _web_search_tool_to_anthropic_tool(
+        self,
+        tool: WebSearchTool,
+    ) -> dict[str, object]:
+        del tool
+        return {
+            "type": "web_search_20250305",
+            "name": WEB_SEARCH_TOOL_NAME,
+        }
+
     def _anthropic_input_schema(
         self,
         schema: object,
@@ -249,15 +268,22 @@ class AnthropicClient(BaseClient):
 
     def _get_anthropic_tools_and_tool_choice_or_omit(
         self,
-        tools: list[Tool] | None,
+        tools: list[LLMTool] | None,
         tool_choice: ToolChoice | None,
         response_format: ResponseFormat | None,
         use_tools_for_structured_output: bool | None,
     ) -> tuple[list[dict[str, object]] | Omit, dict[str, object] | Omit]:
-        resolved = resolve_tools(tools, tool_choice)
-        anthropic_tools: list[dict[str, object]] = list(
-            self._llm_tools_to_anthropic_tools(resolved.tools)
+        resolved = filter_resolved_tools_for_provider(
+            resolve_tools(tools, tool_choice),
+            supports_web_search=True,
         )
+        anthropic_tools: list[dict[str, object]] = list(
+            self._llm_tools_to_anthropic_tools(resolved.function_tools)
+        )
+        if resolved.web_search_tool is not None:
+            anthropic_tools.append(
+                self._web_search_tool_to_anthropic_tool(resolved.web_search_tool)
+            )
 
         response_schema = get_response_schema(
             response_format,
@@ -280,7 +306,7 @@ class AnthropicClient(BaseClient):
             if len(resolved.tools) == 1:
                 anthropic_tool_choice = {
                     "type": "tool",
-                    "name": resolved.tools[0].name,
+                    "name": resolved.tool_names[0],
                 }
             else:
                 anthropic_tool_choice = {"type": "any"}
@@ -338,7 +364,7 @@ class AnthropicClient(BaseClient):
         model: str,
         messages: list[Message],
         temperature: float | None = None,
-        tools: list[Tool] | None = None,
+        tools: list[LLMTool] | None = None,
         tool_choice: ToolChoice | None = None,
         response_format: ResponseFormat | None = None,
         max_tokens: int | None = None,
@@ -380,7 +406,7 @@ class AnthropicClient(BaseClient):
         model: str,
         messages: list[Message],
         temperature: float | None = None,
-        tools: list[Tool] | None = None,
+        tools: list[LLMTool] | None = None,
         tool_choice: ToolChoice | None = None,
         response_format: ResponseFormat | None = None,
         max_tokens: int | None = None,
@@ -413,7 +439,7 @@ class AnthropicClient(BaseClient):
             duration_seconds = perf_counter() - start_time
 
             text_chunks: list[str] = []
-            thinking_chunks: list[str] = []
+            thinking_blocks: list[str] = []
             response_schema_content: dict | None = None
             response_schema_tool_name = get_response_format_name(
                 response_format,
@@ -424,7 +450,7 @@ class AnthropicClient(BaseClient):
                 if content.type == "text":
                     text_chunks.append(content.text)
                 elif content.type == "thinking":
-                    thinking_chunks.append(content.thinking)
+                    thinking_blocks.append(content.thinking)
                 elif content.type == "tool_use":
                     tool_call = AssistantToolCall(
                         id=content.id,
@@ -440,7 +466,7 @@ class AnthropicClient(BaseClient):
 
             assistant_message = AssistantMessage(
                 content=content_from_text("".join(text_chunks) or None),
-                thinking="".join(thinking_chunks) or None,
+                thinking=collapse_thinking_blocks(thinking_blocks),
                 tool_calls=user_tool_calls,
             )
             new_messages = [*messages, assistant_message]
@@ -467,7 +493,7 @@ class AnthropicClient(BaseClient):
         model: str,
         messages: list[Message],
         temperature: float | None = None,
-        tools: list[Tool] | None = None,
+        tools: list[LLMTool] | None = None,
         tool_choice: ToolChoice | None = None,
         response_format: ResponseFormat | None = None,
         max_tokens: int | None = None,
@@ -487,7 +513,7 @@ class AnthropicClient(BaseClient):
         current_chunk_type = None
         current_tool = None
         text_chunks: list[str] = []
-        thinking_chunks: list[str] = []
+        thinking_blocks: list[str] = []
         response_schema_content: dict | None = None
         response_schema_tool_name = get_response_format_name(
             response_format,
@@ -496,6 +522,7 @@ class AnthropicClient(BaseClient):
         user_tool_calls: list[AssistantToolCall] = []
         active_tool_name: str | None = None
         active_tool_id: str | None = None
+        active_thinking_block: list[str] | None = None
         start_time = perf_counter()
         usage: ResponseUsage | None = None
 
@@ -516,6 +543,8 @@ class AnthropicClient(BaseClient):
                         if event.content_block.type == "tool_use":
                             active_tool_name = event.content_block.name
                             active_tool_id = event.content_block.id
+                        elif event.content_block.type == "thinking":
+                            active_thinking_block = []
                         continue
 
                     if event.type == "content_block_delta":
@@ -535,7 +564,9 @@ class AnthropicClient(BaseClient):
                                     chunk=event.delta.text,
                                 )
                         elif event.delta.type == "thinking_delta":
-                            thinking_chunks.append(event.delta.thinking)
+                            if active_thinking_block is None:
+                                active_thinking_block = []
+                            active_thinking_block.append(event.delta.thinking)
                             current_chunk_type, current_tool, stream_chunks = (
                                 self._transition_stream_chunk(
                                     current_chunk_type=current_chunk_type,
@@ -571,6 +602,24 @@ class AnthropicClient(BaseClient):
 
                     if (
                         event.type == "content_block_stop"
+                        and event.content_block.type == "thinking"
+                    ):
+                        if active_thinking_block:
+                            thinking_blocks.append("".join(active_thinking_block))
+                        active_thinking_block = None
+                        if current_chunk_type == "thinking":
+                            stream_chunk = self._close_stream_chunk(
+                                current_chunk_type=current_chunk_type,
+                                current_tool=current_tool,
+                            )
+                            if stream_chunk is not None:
+                                yield stream_chunk
+                            current_chunk_type = None
+                            current_tool = None
+                        continue
+
+                    if (
+                        event.type == "content_block_stop"
                         and event.content_block.type == "tool_use"
                     ):
                         tool_call = AssistantToolCall(
@@ -598,7 +647,12 @@ class AnthropicClient(BaseClient):
 
             assistant_message = AssistantMessage(
                 content=content_from_text("".join(text_chunks) or None),
-                thinking="".join(thinking_chunks) or None,
+                thinking=collapse_thinking_blocks(
+                    [
+                        *thinking_blocks,
+                        *(["".join(active_thinking_block)] if active_thinking_block else []),
+                    ]
+                ),
                 tool_calls=user_tool_calls,
             )
             new_messages = [*messages, assistant_message]

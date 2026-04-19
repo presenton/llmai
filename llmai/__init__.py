@@ -5,7 +5,15 @@ from llmai.client import LLMProvider, get_client
 from llmai.deepseek import DeepSeekClient
 from llmai.google import GoogleClient
 from llmai.openai import OpenAIApiType, OpenAIClient
-from llmai.shared import ReasoningEffort, ReasoningEffortValue, ReasoningSummary, ToolChoiceMode
+from llmai.shared import (
+    HostedToolType,
+    LLMTool,
+    ReasoningEffort,
+    ReasoningEffortValue,
+    ReasoningSummary,
+    ToolChoiceMode,
+    WebSearchTool,
+)
 
 __all__ = [
     "AnthropicClient",
@@ -13,6 +21,8 @@ __all__ = [
     "ChatGPTClient",
     "DeepSeekClient",
     "GoogleClient",
+    "HostedToolType",
+    "LLMTool",
     "LLMProvider",
     "OpenAIApiType",
     "OpenAIClient",
@@ -20,6 +30,7 @@ __all__ = [
     "ReasoningEffortValue",
     "ReasoningSummary",
     "ToolChoiceMode",
+    "WebSearchTool",
     "get_client",
     "main",
 ]

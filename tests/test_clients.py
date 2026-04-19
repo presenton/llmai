@@ -37,11 +37,16 @@ from llmai.shared import (
     TextContentPart,
     Tool,
     UserMessage,
+    WebSearchTool,
 )
 
 
 def make_tool(name: str) -> Tool:
     return Tool(name=name, description=f"{name} description")
+
+
+def make_web_search_tool() -> WebSearchTool:
+    return WebSearchTool()
 
 
 def text_parts(text: str) -> list[TextContentPart]:
@@ -462,6 +467,49 @@ class ClientBehaviorTests(unittest.TestCase):
             },
         )
 
+    def test_openai_responses_web_search_uses_allowed_tools_wrapper(self):
+        client = OpenAIClient(api_key="test")
+
+        openai_tools, tool_choice = (
+            client._get_openai_responses_tools_and_tool_choice_or_omit(
+                [make_tool("weather"), make_web_search_tool()],
+                {"mode": "required", "tools": ["web_search", "weather"]},
+            )
+        )
+
+        self.assertEqual(len(openai_tools), 2)
+        self.assertEqual(
+            {tool["type"] for tool in openai_tools},
+            {"function", "web_search"},
+        )
+        self.assertEqual(tool_choice["type"], "allowed_tools")
+        self.assertEqual(tool_choice["mode"], "required")
+        self.assertEqual(tool_choice["tools"], openai_tools)
+
+    def test_openai_responses_web_search_defaults_to_auto_without_tool_choice_wrapper(self):
+        client = OpenAIClient(api_key="test")
+
+        openai_tools, tool_choice = (
+            client._get_openai_responses_tools_and_tool_choice_or_omit(
+                [make_web_search_tool()],
+                None,
+            )
+        )
+
+        self.assertEqual(openai_tools, [{"type": "web_search"}])
+        self.assertIsInstance(tool_choice, openai.Omit)
+
+    def test_openai_completions_ignore_web_search_when_unsupported(self):
+        client = OpenAIClient(api_key="test")
+
+        openai_tools, tool_choice = client._get_openai_tools_and_tool_choice_or_omit(
+            [make_web_search_tool()],
+            {"mode": "required", "tools": ["web_search"]},
+        )
+
+        self.assertIsInstance(openai_tools, openai.Omit)
+        self.assertIsInstance(tool_choice, openai.Omit)
+
     def test_openai_strict_tool_schemas_strip_unsupported_keywords(self):
         client = OpenAIClient(api_key="test")
 
@@ -672,6 +720,40 @@ class ClientBehaviorTests(unittest.TestCase):
             {"verbosity": "medium"},
         )
         self.assertFalse(fake_completions.calls)
+
+    def test_chatgpt_generate_attaches_web_search_tool(self):
+        fake_response = SimpleNamespace(
+            output=[
+                SimpleNamespace(
+                    type="message",
+                    content=[
+                        SimpleNamespace(
+                            type="output_text",
+                            text="final answer",
+                        )
+                    ],
+                )
+            ]
+        )
+        fake_responses = FakeOpenAIResponses(fake_response)
+
+        client = ChatGPTClient(api_key="test")
+        client._client = SimpleNamespace(
+            responses=fake_responses,
+            chat=SimpleNamespace(completions=FakeOpenAICompletions(None)),
+        )
+
+        client.generate(
+            model="chatgpt-4o-latest",
+            messages=[UserMessage(content=text_parts("Hello"))],
+            tools=[make_web_search_tool()],
+        )
+
+        self.assertEqual(
+            fake_responses.calls[0]["tools"],
+            [{"type": "web_search"}],
+        )
+        self.assertIsInstance(fake_responses.calls[0]["tool_choice"], openai.Omit)
 
     def test_chatgpt_generate_does_not_expose_api_type(self):
         self.assertNotIn(
@@ -1268,7 +1350,7 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(result.content, {"answer": "pong"})
         self.assertEqual(
             result.messages[-1].thinking,
-            "Compare speed and creativity.",
+            ["Compare speed and creativity."],
         )
         self.assertEqual(result.usage.input_tokens, 11)
         self.assertEqual(result.usage.output_tokens, 7)
@@ -1287,6 +1369,41 @@ class ClientBehaviorTests(unittest.TestCase):
             {"summary": "auto"},
         )
         self.assertEqual(fake_responses.calls[0]["input"][0]["role"], "user")
+
+    def test_openai_responses_generate_preserves_multiple_thinking_blocks(self):
+        fake_response = SimpleNamespace(
+            output=[
+                SimpleNamespace(
+                    type="reasoning",
+                    summary=[SimpleNamespace(text="Plan")],
+                ),
+                SimpleNamespace(
+                    type="reasoning",
+                    summary=[SimpleNamespace(text="Reflect")],
+                ),
+                SimpleNamespace(
+                    type="message",
+                    content=[
+                        SimpleNamespace(
+                            type="output_text",
+                            text="done",
+                        )
+                    ],
+                ),
+            ],
+        )
+        fake_responses = FakeOpenAIResponses(fake_response)
+
+        client = OpenAIClient(api_key="test")
+        client._client = SimpleNamespace(responses=fake_responses)
+
+        result = client.generate(
+            model="gpt-test",
+            messages=[UserMessage(content=text_parts("Hello"))],
+            api_type=OpenAIApiType.RESPONSES,
+        )
+
+        self.assertEqual(result.messages[-1].thinking, ["Plan", "Reflect"])
 
     def test_openai_responses_generate_passes_reasoning_effort_model(self):
         fake_response = SimpleNamespace(
@@ -1463,7 +1580,7 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(payload_chunks[4].type, "tool_complete")
         self.assertEqual(payload_chunks[4].tool, "get_weather")
         self.assertEqual(payload_chunks[4].arguments, '{"city":"Kathmandu"}')
-        self.assertEqual(payload_chunks[-1].messages[-1].thinking, "Plan")
+        self.assertEqual(payload_chunks[-1].messages[-1].thinking, ["Plan"])
         self.assertEqual(
             payload_chunks[-1].tool_calls[0].arguments,
             '{"city":"Kathmandu"}',
@@ -1476,6 +1593,110 @@ class ClientBehaviorTests(unittest.TestCase):
             2,
         )
         self.assertTrue(fake_responses.calls[0]["stream"])
+
+    def test_openai_responses_stream_wraps_multiple_thinking_blocks(self):
+        completed_response = SimpleNamespace(
+            output=[
+                SimpleNamespace(
+                    type="reasoning",
+                    summary=[SimpleNamespace(text="Plan")],
+                ),
+                SimpleNamespace(
+                    type="reasoning",
+                    summary=[SimpleNamespace(text="Reflect")],
+                ),
+                SimpleNamespace(
+                    type="message",
+                    content=[
+                        SimpleNamespace(
+                            type="output_text",
+                            text="Hello",
+                        )
+                    ],
+                ),
+            ],
+        )
+        events = iter(
+            [
+                SimpleNamespace(
+                    type="response.reasoning_summary_text.delta",
+                    delta="Plan",
+                    item_id="rs_1",
+                    output_index=0,
+                    sequence_number=1,
+                    summary_index=0,
+                ),
+                SimpleNamespace(
+                    type="response.reasoning_summary_text.done",
+                    text="Plan",
+                    item_id="rs_1",
+                    output_index=0,
+                    sequence_number=2,
+                    summary_index=0,
+                ),
+                SimpleNamespace(
+                    type="response.reasoning_summary_text.delta",
+                    delta="Reflect",
+                    item_id="rs_1",
+                    output_index=0,
+                    sequence_number=3,
+                    summary_index=1,
+                ),
+                SimpleNamespace(
+                    type="response.reasoning_summary_text.done",
+                    text="Reflect",
+                    item_id="rs_1",
+                    output_index=0,
+                    sequence_number=4,
+                    summary_index=1,
+                ),
+                SimpleNamespace(
+                    type="response.output_text.delta",
+                    delta="Hello",
+                    item_id="msg_1",
+                    content_index=0,
+                    output_index=1,
+                    logprobs=[],
+                    sequence_number=5,
+                ),
+                SimpleNamespace(
+                    type="response.completed",
+                    response=completed_response,
+                    sequence_number=6,
+                ),
+            ]
+        )
+        fake_responses = FakeOpenAIResponses(events)
+
+        client = OpenAIClient(api_key="test")
+        client._client = SimpleNamespace(responses=fake_responses)
+
+        chunks = list(
+            client.generate(
+                model="gpt-test",
+                messages=[UserMessage(content=text_parts("Hi"))],
+                stream=True,
+                api_type=OpenAIApiType.RESPONSES,
+            )
+        )
+
+        payload_chunks = stream_payload_chunks(chunks)
+
+        self.assertEqual(
+            stream_marker_events(chunks),
+            [
+                ("start", "thinking", None),
+                ("end", "thinking", None),
+                ("start", "thinking", None),
+                ("end", "thinking", None),
+                ("start", "content", None),
+                ("end", "content", None),
+            ],
+        )
+        self.assertEqual(payload_chunks[0].chunk, "Plan")
+        self.assertEqual(payload_chunks[1].chunk, "Reflect")
+        self.assertEqual(payload_chunks[2].chunk, "Hello")
+        self.assertEqual(payload_chunks[-1].messages[-1].thinking, ["Plan", "Reflect"])
         self.assertEqual(
             fake_responses.calls[0]["reasoning"],
             {"summary": "auto"},
@@ -1809,6 +2030,20 @@ class ClientBehaviorTests(unittest.TestCase):
         )
         self.assertEqual(deepseek_tool_choice, "required")
 
+    def test_deepseek_ignores_web_search_tool(self):
+        client = DeepSeekClient(api_key="test")
+
+        deepseek_tools, deepseek_tool_choice, _ = (
+            client._get_deepseek_tools_and_tool_choice_or_omit(
+                [make_web_search_tool()],
+                {"mode": "required", "tools": ["web_search"]},
+                None,
+            )
+        )
+
+        self.assertIsInstance(deepseek_tools, openai.Omit)
+        self.assertIsInstance(deepseek_tool_choice, openai.Omit)
+
     def test_anthropic_required_tool_choice_uses_any_for_multiple_visible_tools(self):
         client = AnthropicClient(api_key="test")
 
@@ -1823,6 +2058,24 @@ class ClientBehaviorTests(unittest.TestCase):
 
         self.assertEqual([tool["name"] for tool in anthropic_tools], ["weather", "time"])
         self.assertEqual(tool_choice, {"type": "any"})
+
+    def test_anthropic_web_search_maps_to_server_tool(self):
+        client = AnthropicClient(api_key="test")
+
+        anthropic_tools, tool_choice = (
+            client._get_anthropic_tools_and_tool_choice_or_omit(
+                [make_web_search_tool()],
+                {"mode": "required", "tools": ["web_search"]},
+                None,
+                None,
+            )
+        )
+
+        self.assertEqual(
+            anthropic_tools,
+            [{"type": "web_search_20250305", "name": "web_search"}],
+        )
+        self.assertEqual(tool_choice, {"type": "tool", "name": "web_search"})
 
     def test_anthropic_tool_schemas_strip_max_items(self):
         client = AnthropicClient(api_key="test")
@@ -1921,7 +2174,27 @@ class ClientBehaviorTests(unittest.TestCase):
         )
 
         self.assertEqual(result.content[0].text, "final answer")
-        self.assertEqual(result.messages[-1].thinking, "internal")
+        self.assertEqual(result.messages[-1].thinking, ["internal"])
+
+    def test_anthropic_generate_preserves_multiple_thinking_blocks(self):
+        fake_response = SimpleNamespace(
+            content=[
+                SimpleNamespace(type="thinking", thinking="internal-1"),
+                SimpleNamespace(type="thinking", thinking="internal-2"),
+                SimpleNamespace(type="text", text="final answer"),
+            ]
+        )
+        fake_messages = FakeAnthropicMessages(fake_response)
+
+        client = AnthropicClient(api_key="test")
+        client._client = SimpleNamespace(messages=fake_messages)
+
+        result = client.generate(
+            model="claude-test",
+            messages=[UserMessage(content=text_parts("Answer me"))],
+        )
+
+        self.assertEqual(result.messages[-1].thinking, ["internal-1", "internal-2"])
 
     def test_anthropic_generate_returns_usage_and_duration(self):
         fake_response = SimpleNamespace(
@@ -2055,13 +2328,77 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(payload_chunks[0].chunk, "Plan")
         self.assertEqual(payload_chunks[1].type, "content")
         self.assertEqual(payload_chunks[1].chunk, "Hello")
-        self.assertEqual(payload_chunks[-1].messages[-1].thinking, "Plan")
+        self.assertEqual(payload_chunks[-1].messages[-1].thinking, ["Plan"])
         self.assertEqual(payload_chunks[-1].usage.input_tokens, 9)
         self.assertEqual(payload_chunks[-1].usage.output_tokens, 2)
         self.assertEqual(payload_chunks[-1].usage.total_tokens, 11)
         self.assertEqual(payload_chunks[-1].usage.details["cache_creation_input_tokens"], 1)
         self.assertIsNotNone(payload_chunks[-1].duration_seconds)
         self.assertGreaterEqual(payload_chunks[-1].duration_seconds, 0)
+
+    def test_anthropic_stream_wraps_multiple_thinking_blocks(self):
+        fake_stream = FakeAnthropicStream(
+            events=[
+                SimpleNamespace(
+                    type="content_block_start",
+                    content_block=SimpleNamespace(type="thinking"),
+                ),
+                SimpleNamespace(
+                    type="content_block_delta",
+                    delta=SimpleNamespace(type="thinking_delta", thinking="Plan"),
+                ),
+                SimpleNamespace(
+                    type="content_block_stop",
+                    content_block=SimpleNamespace(type="thinking"),
+                ),
+                SimpleNamespace(
+                    type="content_block_start",
+                    content_block=SimpleNamespace(type="thinking"),
+                ),
+                SimpleNamespace(
+                    type="content_block_delta",
+                    delta=SimpleNamespace(type="thinking_delta", thinking="Reflect"),
+                ),
+                SimpleNamespace(
+                    type="content_block_stop",
+                    content_block=SimpleNamespace(type="thinking"),
+                ),
+                SimpleNamespace(
+                    type="content_block_delta",
+                    delta=SimpleNamespace(type="text_delta", text="Hello"),
+                ),
+            ]
+        )
+        fake_messages = FakeAnthropicMessages(stream_response=fake_stream)
+
+        client = AnthropicClient(api_key="test")
+        client._client = SimpleNamespace(messages=fake_messages)
+
+        chunks = list(
+            client.generate(
+                model="claude-test",
+                messages=[UserMessage(content=text_parts("Stream please"))],
+                stream=True,
+            )
+        )
+
+        payload_chunks = stream_payload_chunks(chunks)
+
+        self.assertEqual(
+            stream_marker_events(chunks),
+            [
+                ("start", "thinking", None),
+                ("end", "thinking", None),
+                ("start", "thinking", None),
+                ("end", "thinking", None),
+                ("start", "content", None),
+                ("end", "content", None),
+            ],
+        )
+        self.assertEqual(payload_chunks[0].chunk, "Plan")
+        self.assertEqual(payload_chunks[1].chunk, "Reflect")
+        self.assertEqual(payload_chunks[2].chunk, "Hello")
+        self.assertEqual(payload_chunks[-1].messages[-1].thinking, ["Plan", "Reflect"])
 
     def test_anthropic_generate_hides_internal_response_schema_tool(self):
         fake_response = SimpleNamespace(
@@ -2267,6 +2604,38 @@ class ClientBehaviorTests(unittest.TestCase):
         )
 
         self.assertEqual(len(google_tools), 1)
+        self.assertEqual(tool_config.function_calling_config.mode, "ANY")
+        self.assertEqual(
+            tool_config.function_calling_config.allowed_function_names,
+            ["weather"],
+        )
+
+    def test_google_web_search_attaches_without_function_tool_config(self):
+        client = GoogleClient(api_key="test")
+
+        google_tools, tool_config = client._get_google_tools_and_tool_config(
+            [make_web_search_tool()],
+            {"mode": "required", "tools": ["web_search"]},
+            None,
+            None,
+        )
+
+        self.assertEqual(len(google_tools), 1)
+        self.assertIsNotNone(google_tools[0].google_search)
+        self.assertIsNone(tool_config)
+
+    def test_google_required_web_search_keeps_function_targeting_best_effort(self):
+        client = GoogleClient(api_key="test")
+
+        google_tools, tool_config = client._get_google_tools_and_tool_config(
+            [make_tool("weather"), make_web_search_tool()],
+            {"mode": "required", "tools": ["web_search", "weather"]},
+            None,
+            None,
+        )
+
+        self.assertEqual(len(google_tools), 2)
+        self.assertIsNotNone(google_tools[1].google_search)
         self.assertEqual(tool_config.function_calling_config.mode, "ANY")
         self.assertEqual(
             tool_config.function_calling_config.allowed_function_names,
@@ -2480,7 +2849,7 @@ class ClientBehaviorTests(unittest.TestCase):
             messages=[UserMessage(content=text_parts("Show me something"))],
         )
 
-        self.assertEqual(result.messages[-1].thinking, "hidden reasoning")
+        self.assertEqual(result.messages[-1].thinking, ["hidden reasoning"])
         self.assertIsInstance(result.content, list)
         self.assertEqual(result.content[0].text, "I found an image.")
         self.assertEqual(result.content[1].mime_type, "image/png")
@@ -2492,6 +2861,50 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(result.usage.details["thoughts_token_count"], 3)
         self.assertIsNotNone(result.duration_seconds)
         self.assertGreaterEqual(result.duration_seconds, 0)
+
+    def test_google_generate_preserves_multiple_thinking_blocks(self):
+        fake_response = SimpleNamespace(
+            candidates=[
+                SimpleNamespace(
+                    content=SimpleNamespace(
+                        parts=[
+                            SimpleNamespace(
+                                text="Plan",
+                                thought=True,
+                                inline_data=None,
+                                file_data=None,
+                                function_call=None,
+                            ),
+                            SimpleNamespace(
+                                text="Hello",
+                                thought=False,
+                                inline_data=None,
+                                file_data=None,
+                                function_call=None,
+                            ),
+                            SimpleNamespace(
+                                text="Reflect",
+                                thought=True,
+                                inline_data=None,
+                                file_data=None,
+                                function_call=None,
+                            ),
+                        ]
+                    )
+                )
+            ]
+        )
+        fake_models = FakeGoogleModels(response=fake_response)
+
+        client = GoogleClient(api_key="test")
+        client._client = SimpleNamespace(models=fake_models)
+
+        result = client.generate(
+            model="gemini-test",
+            messages=[UserMessage(content=text_parts("Show me something"))],
+        )
+
+        self.assertEqual(result.messages[-1].thinking, ["Plan", "Reflect"])
 
     def test_google_generate_passes_reasoning_effort_to_thinking_config(self):
         fake_response = SimpleNamespace(
@@ -2631,7 +3044,7 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(payload_chunks[1].type, "content")
         self.assertEqual(payload_chunks[1].chunk, "Hello")
         self.assertEqual(payload_chunks[-1].type, "stream_completion")
-        self.assertEqual(payload_chunks[-1].messages[-1].thinking, "Plan")
+        self.assertEqual(payload_chunks[-1].messages[-1].thinking, ["Plan"])
         self.assertIsInstance(payload_chunks[-1].content, list)
         self.assertEqual(payload_chunks[-1].content[0].text, "Hello")
         self.assertEqual(payload_chunks[-1].content[1].mime_type, "image/png")
@@ -2640,6 +3053,74 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(payload_chunks[-1].usage.total_tokens, 8)
         self.assertIsNotNone(payload_chunks[-1].duration_seconds)
         self.assertGreaterEqual(payload_chunks[-1].duration_seconds, 0)
+
+    def test_google_stream_wraps_multiple_thinking_blocks(self):
+        fake_models = FakeGoogleModels(
+            stream_response=iter(
+                [
+                    SimpleNamespace(
+                        candidates=[
+                            SimpleNamespace(
+                                content=SimpleNamespace(
+                                    parts=[
+                                        SimpleNamespace(
+                                            text="Plan",
+                                            thought=True,
+                                            inline_data=None,
+                                            file_data=None,
+                                            function_call=None,
+                                        ),
+                                        SimpleNamespace(
+                                            text="Reflect",
+                                            thought=True,
+                                            inline_data=None,
+                                            file_data=None,
+                                            function_call=None,
+                                        ),
+                                        SimpleNamespace(
+                                            text="Hello",
+                                            thought=False,
+                                            inline_data=None,
+                                            file_data=None,
+                                            function_call=None,
+                                        ),
+                                    ]
+                                )
+                            )
+                        ]
+                    )
+                ]
+            )
+        )
+
+        client = GoogleClient(api_key="test")
+        client._client = SimpleNamespace(models=fake_models)
+
+        chunks = list(
+            client.generate(
+                model="gemini-test",
+                messages=[UserMessage(content=text_parts("Show me something"))],
+                stream=True,
+            )
+        )
+
+        payload_chunks = stream_payload_chunks(chunks)
+
+        self.assertEqual(
+            stream_marker_events(chunks),
+            [
+                ("start", "thinking", None),
+                ("end", "thinking", None),
+                ("start", "thinking", None),
+                ("end", "thinking", None),
+                ("start", "content", None),
+                ("end", "content", None),
+            ],
+        )
+        self.assertEqual(payload_chunks[0].chunk, "Plan")
+        self.assertEqual(payload_chunks[1].chunk, "Reflect")
+        self.assertEqual(payload_chunks[2].chunk, "Hello")
+        self.assertEqual(payload_chunks[-1].messages[-1].thinking, ["Plan", "Reflect"])
 
     def test_google_generate_hides_internal_response_schema_tool(self):
         fake_response = SimpleNamespace(
@@ -2959,6 +3440,24 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(tool_config["tools"][0]["toolSpec"]["name"], "final_answer")
         self.assertFalse(tool_config["tools"][0]["toolSpec"]["strict"])
 
+    def test_bedrock_ignores_web_search_tool(self):
+        fake_runtime = FakeBedrockRuntimeClient(response={})
+        client, _, _ = self.make_bedrock_client(
+            fake_runtime,
+            region="us-east-1",
+            aws_access_key_id="aws-id",
+            aws_secret_access_key="aws-secret",
+        )
+
+        tool_config = client._get_bedrock_tool_config(
+            [make_web_search_tool()],
+            {"mode": "required", "tools": ["web_search"]},
+            None,
+            None,
+        )
+
+        self.assertIsNone(tool_config)
+
     def test_bedrock_generate_returns_tool_calls(self):
         fake_runtime = FakeBedrockRuntimeClient(
             response={
@@ -3161,7 +3660,7 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(payload_chunks[4].type, "tool_complete")
         self.assertEqual(payload_chunks[4].tool, "get_weather")
         self.assertEqual(payload_chunks[4].arguments, '{"city":"Kathmandu"}')
-        self.assertEqual(payload_chunks[-1].messages[-1].thinking, "Plan")
+        self.assertEqual(payload_chunks[-1].messages[-1].thinking, ["Plan"])
         self.assertEqual(payload_chunks[-1].tool_calls[0].name, "get_weather")
         self.assertEqual(
             payload_chunks[-1].tool_calls[0].arguments,
@@ -3172,6 +3671,80 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(payload_chunks[-1].usage.total_tokens, 14)
         self.assertIsNotNone(payload_chunks[-1].duration_seconds)
         self.assertGreaterEqual(payload_chunks[-1].duration_seconds, 0)
+
+    def test_bedrock_stream_wraps_multiple_thinking_blocks(self):
+        fake_runtime = FakeBedrockRuntimeClient(
+            stream_response={
+                "stream": iter(
+                    [
+                        {
+                            "contentBlockDelta": {
+                                "contentBlockIndex": 0,
+                                "delta": {
+                                    "reasoningContent": {"text": "Plan"}
+                                },
+                            }
+                        },
+                        {
+                            "contentBlockStop": {
+                                "contentBlockIndex": 0,
+                            }
+                        },
+                        {
+                            "contentBlockDelta": {
+                                "contentBlockIndex": 1,
+                                "delta": {
+                                    "reasoningContent": {"text": "Reflect"}
+                                },
+                            }
+                        },
+                        {
+                            "contentBlockStop": {
+                                "contentBlockIndex": 1,
+                            }
+                        },
+                        {
+                            "contentBlockDelta": {
+                                "contentBlockIndex": 2,
+                                "delta": {"text": "Hello"},
+                            }
+                        },
+                    ]
+                )
+            }
+        )
+        client, _, _ = self.make_bedrock_client(
+            fake_runtime,
+            region="us-east-1",
+            aws_access_key_id="aws-id",
+            aws_secret_access_key="aws-secret",
+        )
+
+        chunks = list(
+            client.generate(
+                model="anthropic.claude-3-5-haiku",
+                messages=[UserMessage(content=text_parts("Weather?"))],
+                stream=True,
+            )
+        )
+
+        payload_chunks = stream_payload_chunks(chunks)
+
+        self.assertEqual(
+            stream_marker_events(chunks),
+            [
+                ("start", "thinking", None),
+                ("end", "thinking", None),
+                ("start", "thinking", None),
+                ("end", "thinking", None),
+                ("start", "content", None),
+                ("end", "content", None),
+            ],
+        )
+        self.assertEqual(payload_chunks[0].chunk, "Plan")
+        self.assertEqual(payload_chunks[1].chunk, "Reflect")
+        self.assertEqual(payload_chunks[2].chunk, "Hello")
+        self.assertEqual(payload_chunks[-1].messages[-1].thinking, ["Plan", "Reflect"])
 
     def test_bedrock_stream_generates_tool_id_when_missing(self):
         fake_runtime = FakeBedrockRuntimeClient(

@@ -1,4 +1,4 @@
-from dev.shared import SLIDE_SCHEMA, TOOL_CHOICE, TOOL_DEFINITIONS
+from dev.shared import SLIDE_SCHEMA, TOOL_CHOICE, TOOL_DEFINITIONS, WEB_SEARCH_TOOL
 from llmai.google import GoogleClient
 from llmai.shared.messages import UserMessage
 from llmai.shared.reasoning import (
@@ -65,6 +65,22 @@ def test_generate_tool_calls():
     print("-" * 50)
 
 
+def test_generate_web_search():
+    client = GoogleClient()
+
+    response = client.generate(
+        model=MODEL,
+        messages=[
+            UserMessage(content="What was a positive news story from today? Cite sources."),
+        ],
+        tools=[WEB_SEARCH_TOOL],
+        reasoning_effort=ReasoningEffort(summary=ReasoningSummary.DETAILED),
+    )
+    print("Google web-search generation")
+    print(response)
+    print("-" * 50)
+
+
 def test_stream():
     client = GoogleClient()
 
@@ -117,9 +133,28 @@ def test_stream_tool_calls():
     print("-" * 50)
 
 
+def test_stream_web_search():
+    client = GoogleClient()
+
+    print("Google web-search stream")
+    for chunk in client.generate(
+        model=MODEL,
+        messages=[
+            UserMessage(content="What was a positive news story from today? Cite sources."),
+        ],
+        tools=[WEB_SEARCH_TOOL],
+        reasoning_effort=ReasoningEffort(summary=ReasoningSummary.DETAILED),
+        stream=True,
+    ):
+        print(chunk)
+    print("-" * 50)
+
+
 # test_generate()
 # test_generate_structured()
 # test_generate_tool_calls()
+# test_generate_web_search()
 # test_stream()
 # test_stream_structured()
 # test_stream_tool_calls()
+# test_stream_web_search()

@@ -36,6 +36,7 @@ TextMessageContentPart: TypeAlias = TextContentPart | str
 MessageContent: TypeAlias = List[MessageContentPart] | str
 AssistantContent: TypeAlias = List[MessageContentPart] | None
 TextMessageContent: TypeAlias = List[TextMessageContentPart]
+ThinkingContent: TypeAlias = list[str] | None
 
 
 def normalize_content_parts(
@@ -68,6 +69,10 @@ def content_from_text(text: str | None) -> AssistantContent:
     return [TextContentPart(text=text)]
 
 
+def collapse_thinking_blocks(blocks: list[str]) -> ThinkingContent:
+    return blocks or None
+
+
 def content_has_images(content: AssistantContent) -> bool:
     return any(
         isinstance(part, ImageContentPart) for part in normalize_content_parts(content)
@@ -97,7 +102,7 @@ class AssistantToolCall(BaseModel):
 class AssistantMessage(Message):
     role: Literal["assistant"] = "assistant"
     content: AssistantContent = None
-    thinking: str | None = None
+    thinking: ThinkingContent = None
     tool_calls: list[AssistantToolCall] = Field(default_factory=list)
 
 

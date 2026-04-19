@@ -1,13 +1,17 @@
 import unittest
 
-from llmai.shared import Tool
+from llmai.shared import Tool, WebSearchTool
 from llmai.shared.errors import ToolError
 from llmai.shared.schema import get_schema_as_dict
-from llmai.shared.tools import resolve_tools
+from llmai.shared.tools import filter_resolved_tools_for_provider, resolve_tools
 
 
 def make_tool(name: str) -> Tool:
     return Tool(name=name, description=f"{name} description")
+
+
+def make_web_search_tool() -> WebSearchTool:
+    return WebSearchTool()
 
 
 class ResolveToolsTests(unittest.TestCase):
@@ -104,6 +108,47 @@ class ResolveToolsTests(unittest.TestCase):
             resolve_tools(tools, None)
 
         self.assertIn("defined multiple times", str(context.exception))
+
+    def test_rejects_function_tool_named_web_search(self):
+        with self.assertRaises(ToolError) as context:
+            resolve_tools([make_tool("web_search")], None)
+
+        self.assertIn("reserved for the hosted web search tool", str(context.exception))
+
+    def test_rejects_duplicate_web_search_tools(self):
+        with self.assertRaises(ToolError) as context:
+            resolve_tools([make_web_search_tool(), make_web_search_tool()], None)
+
+        self.assertIn("defined multiple times", str(context.exception))
+
+    def test_resolves_hosted_web_search_tool(self):
+        resolved = resolve_tools([make_tool("weather"), make_web_search_tool()], None)
+
+        self.assertEqual(resolved.tool_names, ["weather", "web_search"])
+        self.assertEqual([tool.name for tool in resolved.function_tools], ["weather"])
+        self.assertTrue(resolved.has_web_search)
+
+    def test_filters_tools_for_selected_web_search_and_function(self):
+        resolved = resolve_tools(
+            [make_tool("weather"), make_tool("time"), make_web_search_tool()],
+            {"tools": ["web_search", "weather"]},
+        )
+
+        self.assertEqual(resolved.tool_names, ["web_search", "weather"])
+        self.assertEqual([tool.name for tool in resolved.function_tools], ["weather"])
+        self.assertTrue(resolved.has_web_search)
+        self.assertTrue(resolved.is_explicit)
+
+    def test_filters_hosted_web_search_for_unsupported_provider(self):
+        resolved = resolve_tools([make_web_search_tool()], {"mode": "required"})
+        filtered = filter_resolved_tools_for_provider(
+            resolved,
+            supports_web_search=False,
+        )
+
+        self.assertEqual(filtered.tools, [])
+        self.assertFalse(filtered.requires_tool)
+        self.assertFalse(filtered.is_explicit)
 
 
 class SchemaTests(unittest.TestCase):

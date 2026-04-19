@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import TypedDict
+from typing import TypeAlias, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from llmai.shared.errors import ToolError
 from llmai.shared.schema import SchemaLike
+
+WEB_SEARCH_TOOL_NAME = "web_search"
 
 
 class Tool(BaseModel):
@@ -23,6 +25,21 @@ class Tool(BaseModel):
     )
 
 
+class HostedToolType(str, Enum):
+    WEB_SEARCH = WEB_SEARCH_TOOL_NAME
+
+
+class WebSearchTool(BaseModel):
+    type: HostedToolType = HostedToolType.WEB_SEARCH
+
+    @property
+    def name(self) -> str:
+        return WEB_SEARCH_TOOL_NAME
+
+
+LLMTool: TypeAlias = Tool | WebSearchTool
+
+
 class ToolChoiceMode(str, Enum):
     AUTO = "auto"
     REQUIRED = "required"
@@ -35,21 +52,36 @@ class ToolChoice(TypedDict, total=False):
 
 @dataclass(frozen=True)
 class ResolvedToolChoice:
-    tools: list[Tool]
+    tools: list[LLMTool]
     mode: ToolChoiceMode = ToolChoiceMode.AUTO
     is_explicit: bool = False
 
     @property
     def tool_names(self) -> list[str]:
-        return [tool.name for tool in self.tools]
+        return [_tool_identifier(tool) for tool in self.tools]
+
+    @property
+    def function_tools(self) -> list[Tool]:
+        return [tool for tool in self.tools if isinstance(tool, Tool)]
+
+    @property
+    def web_search_tool(self) -> WebSearchTool | None:
+        for tool in self.tools:
+            if isinstance(tool, WebSearchTool):
+                return tool
+        return None
+
+    @property
+    def has_web_search(self) -> bool:
+        return self.web_search_tool is not None
 
     @property
     def requires_tool(self) -> bool:
-        return self.mode == ToolChoiceMode.REQUIRED
+        return self.mode == ToolChoiceMode.REQUIRED and bool(self.tools)
 
 
 def resolve_tools(
-    tools: list[Tool] | None,
+    tools: list[LLMTool] | None,
     tool_choice: ToolChoice | None,
 ) -> ResolvedToolChoice:
     available_tools = tools or []
@@ -105,13 +137,41 @@ def resolve_tools(
     )
 
 
-def _tool_map(tools: list[Tool]) -> dict[str, Tool]:
-    tool_by_name: dict[str, Tool] = {}
+def filter_resolved_tools_for_provider(
+    resolved: ResolvedToolChoice,
+    *,
+    supports_web_search: bool,
+) -> ResolvedToolChoice:
+    filtered_tools = [
+        tool
+        for tool in resolved.tools
+        if isinstance(tool, Tool)
+        or (supports_web_search and isinstance(tool, WebSearchTool))
+    ]
+    if not filtered_tools:
+        return ResolvedToolChoice(tools=[])
+
+    return ResolvedToolChoice(
+        tools=filtered_tools,
+        mode=resolved.mode,
+        is_explicit=resolved.is_explicit,
+    )
+
+
+def _tool_map(tools: list[LLMTool]) -> dict[str, LLMTool]:
+    tool_by_name: dict[str, LLMTool] = {}
 
     for tool in tools:
-        if tool.name in tool_by_name:
-            raise ToolError(400, f"Tool {tool.name} is defined multiple times")
-        tool_by_name[tool.name] = tool
+        if isinstance(tool, Tool) and tool.name == WEB_SEARCH_TOOL_NAME:
+            raise ToolError(
+                400,
+                f"Tool name {WEB_SEARCH_TOOL_NAME} is reserved for the hosted web search tool",
+            )
+
+        tool_name = _tool_identifier(tool)
+        if tool_name in tool_by_name:
+            raise ToolError(400, f"Tool {tool_name} is defined multiple times")
+        tool_by_name[tool_name] = tool
 
     return tool_by_name
 
@@ -145,3 +205,10 @@ def _coerce_tool_choice_mode(
         return ToolChoiceMode(value)
     except ValueError:
         return None
+
+
+def _tool_identifier(tool: LLMTool) -> str:
+    if isinstance(tool, WebSearchTool):
+        return WEB_SEARCH_TOOL_NAME
+
+    return tool.name
