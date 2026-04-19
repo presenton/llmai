@@ -1,11 +1,9 @@
 [project]
 name = "llmai"
-version = "0.0.1"
+version = "0.1.0"
 description = "Coming soon..."
 readme = "README.md"
-authors = [
-    { name = "sauravniraula", email = "developmentsaurav@gmail.com" }
-]
+authors = [{ name = "sauravniraula", email = "developmentsaurav@gmail.com" }]
 requires-python = ">=3.11"
 dependencies = [
     "anthropic>=0.79.0",
