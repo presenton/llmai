@@ -1,7 +1,7 @@
 [project]
 name = "llmai"
-version = "0.1.0"
-description = "Coming soon..."
+version = "0.1.1"
+description = "Unified Python client for OpenAI, Anthropic, Gemini, DeepSeek, Bedrock, and ChatGPT."
 readme = "README.md"
 authors = [{ name = "sauravniraula", email = "developmentsaurav@gmail.com" }]
 requires-python = ">=3.11"
