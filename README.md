@@ -1,6 +1,6 @@
 # llmai
 
-`llmai` is a Python library for working with multiple LLM providers through a shared set of message, tool, schema, and response primitives.
+`llmai` is a Python library for working with OpenAI, Azure OpenAI, Vertex AI, Anthropic, Google Gemini, DeepSeek, Bedrock, and ChatGPT through a shared set of message, tool, schema, and response primitives.
 
 Today the repository includes adapters for:
 
@@ -153,11 +153,12 @@ result = client.generate(
             "required": ["answer"],
         },
     ),
-    stream=True,
 )
+
+print(result.content)
 ```
 
-`DeepSeekClient` uses the OpenAI SDK against DeepSeek's OpenAI-compatible API and reads `DEEPSEEK_API_KEY` by default. For structured output, it always uses an internal function-tool schema because DeepSeek does not support `response_format={"type":"json_schema"}`. During streaming, the internal response tool is surfaced as incremental JSON `content` chunks, and the stream still ends with parsed JSON in `ResponseStreamCompletionChunk.content`. If you need DeepSeek's server-side `strict` tool enforcement, point `base_url` at `https://api.deepseek.com/beta`.
+`DeepSeekClient` uses the OpenAI SDK against DeepSeek's OpenAI-compatible API and reads `DEEPSEEK_API_KEY` by default. For structured output, it always uses an internal function-tool schema because DeepSeek does not support `response_format={"type":"json_schema"}`. During streaming, the internal response tool is surfaced as incremental JSON `content` chunks, and the stream still ends with parsed JSON on the final completion chunk's `content`. If you need DeepSeek's server-side `strict` tool enforcement, point `base_url` at `https://api.deepseek.com/beta`.
 
 ## Amazon Bedrock
 
@@ -354,9 +355,11 @@ for chunk in client.generate(
 ):
     if chunk.type == "content":
         print(chunk.chunk, end="")
+    elif chunk.type == "completion":
+        print("\nDone:", chunk.usage)
 ```
 
-`generate(..., stream=True)` yields `ResponseStreamChunk` markers with `event="start"` and `event="end"` around each `content`, `thinking`, and `tool` section. If a provider returns multiple reasoning blocks, each block gets its own `thinking` start/end pair. The final `ResponseStreamCompletionChunk` also includes top-level `content` and `thinking`.
+`generate(..., stream=True)` yields marker chunks with `type="event"` and `event="start"` / `event="end"` around each `content`, `thinking`, and `tool` section. If a provider returns multiple reasoning blocks, each block gets its own `thinking` start/end pair. The final chunk has `type="completion"` and includes top-level `content`, `thinking`, usage, and accumulated messages.
 
 ## Package Layout
 

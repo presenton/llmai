@@ -1,7 +1,7 @@
 [project]
 name = "llmai"
-version = "0.1.1"
-description = "Unified Python client for OpenAI, Azure OpenAI, Anthropic, Gemini, Vertex AI, DeepSeek, Bedrock, and ChatGPT."
+version = "0.1.2"
+description = "Unified Python client for OpenAI, Azure OpenAI, Vertex AI, Anthropic, Gemini, DeepSeek, Bedrock, and ChatGPT."
 readme = "README.md"
 authors = [{ name = "sauravniraula", email = "developmentsaurav@gmail.com" }]
 requires-python = ">=3.11"
