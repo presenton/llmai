@@ -1,6 +1,5 @@
 import inspect
 import json
-import os
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -9,20 +8,28 @@ import anthropic
 import httpx
 import openai
 from botocore import exceptions as botocore_exceptions
+from google.genai.types import HttpOptions
 from google.genai import errors as google_errors
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from llmai import (
     AnthropicClient,
+    AnthropicClientConfig,
     AzureOpenAIClient,
+    AzureOpenAIClientConfig,
     BedrockClient,
+    BedrockClientConfig,
     ChatGPTClient,
+    ChatGPTClientConfig,
     DeepSeekClient,
+    DeepSeekClientConfig,
     GoogleClient,
-    LLMProvider,
+    GoogleClientConfig,
     OpenAIApiType,
     OpenAIClient,
+    OpenAIClientConfig,
     VertexAIClient,
+    VertexAIClientConfig,
     get_client,
 )
 from llmai.shared import (
@@ -188,394 +195,115 @@ class AnswerSchema(BaseModel):
 
 
 class ClientBehaviorTests(unittest.TestCase):
-    def test_get_client_chatgpt_uses_chatgpt_env_configuration(self):
-        with (
-            patch.dict(
-                os.environ,
-                {
-                    "CHATGPT_ACCESS_TOKEN": "chatgpt-token",
-                    "CHATGPT_ACCOUNT_ID": "account-123",
-                    "CHATGPT_BASE_URL": "https://chatgpt.example/codex",
-                },
-                clear=True,
-            ),
-            patch("llmai.client.ChatGPTClient") as chatgpt_client_cls,
-        ):
-            client = get_client(LLMProvider.CHATGPT)
-
-        self.assertIs(client, chatgpt_client_cls.return_value)
-        chatgpt_client_cls.assert_called_once_with(
-            api_key="chatgpt-token",
-            account_id="account-123",
-            base_url="https://chatgpt.example/codex",
-            logger=None,
-        )
-
-    def test_get_client_chatgpt_falls_back_to_codex_env_configuration(self):
-        with (
-            patch.dict(
-                os.environ,
-                {
-                    "CODEX_ACCESS_TOKEN": "codex-token",
-                    "CODEX_ACCOUNT_ID": "codex-account",
-                    "CODEX_BASE_URL": "https://codex.example/backend-api/codex",
-                },
-                clear=True,
-            ),
-            patch("llmai.client.ChatGPTClient") as chatgpt_client_cls,
-        ):
-            client = get_client("chatgpt")
-
-        self.assertIs(client, chatgpt_client_cls.return_value)
-        chatgpt_client_cls.assert_called_once_with(
-            api_key="codex-token",
-            account_id="codex-account",
-            base_url="https://codex.example/backend-api/codex",
-            logger=None,
-        )
-
-    def test_get_client_chatgpt_requires_chatgpt_or_codex_access_token_env(self):
-        with patch.dict(os.environ, {}, clear=True):
-            with self.assertRaises(LLMConfigurationError) as context:
-                get_client(LLMProvider.CHATGPT)
-
-        self.assertEqual(context.exception.provider, "chatgpt")
-        self.assertIn("CHATGPT_ACCESS_TOKEN", context.exception.message)
-        self.assertIn("CODEX_ACCESS_TOKEN", context.exception.message)
-
-    def test_get_client_openai_uses_env_configuration(self):
-        with (
-            patch.dict(
-                os.environ,
-                {
-                    "OPENAI_API_KEY": "openai-key",
-                    "OPENAI_BASE_URL": "https://openai.example/v1",
-                },
-                clear=True,
-            ),
-            patch("llmai.client.OpenAIClient") as openai_client_cls,
-        ):
-            client = get_client(LLMProvider.OPENAI)
-
-        self.assertIs(client, openai_client_cls.return_value)
-        openai_client_cls.assert_called_once_with(
+    def test_get_client_openai_uses_explicit_config(self):
+        config = OpenAIClientConfig(
             api_key="openai-key",
             base_url="https://openai.example/v1",
-            logger=None,
         )
 
-    def test_get_client_openai_requires_api_key_env(self):
-        with patch.dict(os.environ, {}, clear=True):
-            with self.assertRaises(LLMConfigurationError) as context:
-                get_client(LLMProvider.OPENAI)
+        with patch("llmai.client.OpenAIClient") as openai_client_cls:
+            client = get_client(config=config)
 
-        self.assertEqual(context.exception.provider, "openai")
-        self.assertIn("OPENAI_API_KEY", context.exception.message)
+        self.assertIs(client, openai_client_cls.return_value)
+        openai_client_cls.assert_called_once_with(config=config, logger=None)
 
-    def test_get_client_azure_uses_api_key_env_configuration(self):
-        with (
-            patch.dict(
-                os.environ,
-                {
-                    "AZURE_OPENAI_API_KEY": "azure-key",
-                    "AZURE_OPENAI_ENDPOINT": "https://azure.example.openai.azure.com",
-                    "AZURE_OPENAI_API_VERSION": "2024-10-21",
-                    "AZURE_OPENAI_DEPLOYMENT": "gpt-4.1",
-                },
-                clear=True,
-            ),
-            patch("llmai.client.AzureOpenAIClient") as azure_client_cls,
-        ):
-            client = get_client(LLMProvider.AZURE)
-
-        self.assertIs(client, azure_client_cls.return_value)
-        azure_client_cls.assert_called_once_with(
+    def test_get_client_azure_uses_explicit_config(self):
+        config = AzureOpenAIClientConfig(
             api_key="azure-key",
-            azure_ad_token=None,
-            base_url=None,
             endpoint="https://azure.example.openai.azure.com",
             api_version="2024-10-21",
             deployment="gpt-4.1",
-            logger=None,
         )
 
-    def test_get_client_azure_accepts_ad_token_and_openai_api_version_envs(self):
-        with (
-            patch.dict(
-                os.environ,
-                {
-                    "AZURE_OPENAI_AD_TOKEN": "azure-ad-token",
-                    "AZURE_OPENAI_BASE_URL": "https://azure.example.openai.azure.com/openai/v1",
-                    "OPENAI_API_VERSION": "2024-08-01-preview",
-                },
-                clear=True,
-            ),
-            patch("llmai.client.AzureOpenAIClient") as azure_client_cls,
-        ):
-            client = get_client("azure")
+        with patch("llmai.client.AzureOpenAIClient") as azure_client_cls:
+            client = get_client(config=config)
 
         self.assertIs(client, azure_client_cls.return_value)
-        azure_client_cls.assert_called_once_with(
-            api_key=None,
-            azure_ad_token="azure-ad-token",
-            base_url="https://azure.example.openai.azure.com/openai/v1",
-            endpoint=None,
-            api_version="2024-08-01-preview",
-            deployment=None,
-            logger=None,
-        )
+        azure_client_cls.assert_called_once_with(config=config, logger=None)
 
-    def test_get_client_azure_rejects_ambiguous_auth_envs(self):
-        with patch.dict(
-            os.environ,
-            {
-                "AZURE_OPENAI_API_KEY": "azure-key",
-                "AZURE_OPENAI_AD_TOKEN": "azure-ad-token",
-                "AZURE_OPENAI_ENDPOINT": "https://azure.example.openai.azure.com",
-                "AZURE_OPENAI_API_VERSION": "2024-10-21",
-            },
-            clear=True,
-        ):
-            with self.assertRaises(LLMConfigurationError) as context:
-                get_client(LLMProvider.AZURE)
-
-        self.assertEqual(context.exception.provider, "azure")
-        self.assertIn("ambiguous", context.exception.message)
-
-    def test_get_client_azure_requires_endpoint_env(self):
-        with patch.dict(
-            os.environ,
-            {
-                "AZURE_OPENAI_API_KEY": "azure-key",
-                "AZURE_OPENAI_API_VERSION": "2024-10-21",
-            },
-            clear=True,
-        ):
-            with self.assertRaises(LLMConfigurationError) as context:
-                get_client(LLMProvider.AZURE)
-
-        self.assertEqual(context.exception.provider, "azure")
-        self.assertIn("AZURE_OPENAI_ENDPOINT", context.exception.message)
-
-    def test_get_client_azure_requires_api_version_env(self):
-        with patch.dict(
-            os.environ,
-            {
-                "AZURE_OPENAI_API_KEY": "azure-key",
-                "AZURE_OPENAI_ENDPOINT": "https://azure.example.openai.azure.com",
-            },
-            clear=True,
-        ):
-            with self.assertRaises(LLMConfigurationError) as context:
-                get_client(LLMProvider.AZURE)
-
-        self.assertEqual(context.exception.provider, "azure")
-        self.assertIn("AZURE_OPENAI_API_VERSION", context.exception.message)
-
-    def test_get_client_vertex_uses_provider_specific_env_configuration(self):
-        with (
-            patch.dict(
-                os.environ,
-                {
-                    "VERTEX_PROJECT": "vertex-project",
-                    "VERTEX_LOCATION": "us-central1",
-                },
-                clear=True,
-            ),
-            patch("llmai.client.VertexAIClient") as vertex_client_cls,
-        ):
-            client = get_client(LLMProvider.VERTEX)
-
-        self.assertIs(client, vertex_client_cls.return_value)
-        vertex_client_cls.assert_called_once_with(
-            api_key=None,
+    def test_get_client_vertex_uses_explicit_config(self):
+        config = VertexAIClientConfig(
+            api_key="vertex-key",
             project="vertex-project",
             location="us-central1",
-            logger=None,
         )
 
-    def test_get_client_vertex_supports_provider_specific_api_key_env(self):
-        with (
-            patch.dict(
-                os.environ,
-                {
-                    "VERTEX_API_KEY": "vertex-key",
-                },
-                clear=True,
-            ),
-            patch("llmai.client.VertexAIClient") as vertex_client_cls,
-        ):
-            client = get_client("vertex")
+        with patch("llmai.client.VertexAIClient") as vertex_client_cls:
+            client = get_client(config=config)
 
         self.assertIs(client, vertex_client_cls.return_value)
-        vertex_client_cls.assert_called_once_with(
-            api_key="vertex-key",
-            project=None,
-            location=None,
-            logger=None,
+        vertex_client_cls.assert_called_once_with(config=config, logger=None)
+
+    def test_get_client_chatgpt_uses_explicit_config(self):
+        config = ChatGPTClientConfig(
+            access_token="chatgpt-token",
+            account_id="account-123",
+            base_url="https://chatgpt.example/codex",
         )
 
-    def test_get_client_deepseek_uses_env_configuration(self):
-        with (
-            patch.dict(
-                os.environ,
-                {
-                    "DEEPSEEK_API_KEY": "deepseek-key",
-                    "DEEPSEEK_BASE_URL": "https://api.deepseek.com/beta",
-                },
-                clear=True,
-            ),
-            patch("llmai.client.DeepSeekClient") as deepseek_client_cls,
-        ):
-            client = get_client(LLMProvider.DEEPSEEK)
+        with patch("llmai.client.ChatGPTClient") as chatgpt_client_cls:
+            client = get_client(config=config)
 
-        self.assertIs(client, deepseek_client_cls.return_value)
-        deepseek_client_cls.assert_called_once_with(
+        self.assertIs(client, chatgpt_client_cls.return_value)
+        chatgpt_client_cls.assert_called_once_with(config=config, logger=None)
+
+    def test_get_client_deepseek_uses_explicit_config(self):
+        config = DeepSeekClientConfig(
             api_key="deepseek-key",
             base_url="https://api.deepseek.com/beta",
-            logger=None,
         )
 
-    def test_get_client_google_accepts_google_and_gemini_env_names(self):
-        with (
-            patch.dict(
-                os.environ,
-                {
-                    "GEMINI_API_KEY": "google-key",
-                },
-                clear=True,
-            ),
-            patch("llmai.client.GoogleClient") as google_client_cls,
-        ):
-            client = get_client(LLMProvider.GOOGLE)
+        with patch("llmai.client.DeepSeekClient") as deepseek_client_cls:
+            client = get_client(config=config)
+
+        self.assertIs(client, deepseek_client_cls.return_value)
+        deepseek_client_cls.assert_called_once_with(config=config, logger=None)
+
+    def test_get_client_google_uses_explicit_config(self):
+        config = GoogleClientConfig(api_key="google-key")
+
+        with patch("llmai.client.GoogleClient") as google_client_cls:
+            client = get_client(config=config)
 
         self.assertIs(client, google_client_cls.return_value)
-        google_client_cls.assert_called_once_with(
-            api_key="google-key",
-            logger=None,
-        )
+        google_client_cls.assert_called_once_with(config=config, logger=None)
 
-    def test_get_client_anthropic_uses_env_configuration(self):
-        with (
-            patch.dict(
-                os.environ,
-                {
-                    "ANTHROPIC_API_KEY": "anthropic-key",
-                },
-                clear=True,
-            ),
-            patch("llmai.client.AnthropicClient") as anthropic_client_cls,
-        ):
-            client = get_client(LLMProvider.ANTHROPIC)
+    def test_get_client_anthropic_uses_explicit_config(self):
+        config = AnthropicClientConfig(api_key="anthropic-key")
+
+        with patch("llmai.client.AnthropicClient") as anthropic_client_cls:
+            client = get_client(config=config)
 
         self.assertIs(client, anthropic_client_cls.return_value)
-        anthropic_client_cls.assert_called_once_with(
-            api_key="anthropic-key",
-            logger=None,
-        )
+        anthropic_client_cls.assert_called_once_with(config=config, logger=None)
 
-    def test_get_client_bedrock_supports_api_key_envs(self):
-        with (
-            patch.dict(
-                os.environ,
-                {
-                    "BEDROCK_API_KEY": "bedrock-key",
-                    "BEDROCK_REGION": "us-east-1",
-                },
-                clear=True,
-            ),
-            patch("llmai.client.BedrockClient") as bedrock_client_cls,
-        ):
-            client = get_client(LLMProvider.BEDROCK)
-
-        self.assertIs(client, bedrock_client_cls.return_value)
-        bedrock_client_cls.assert_called_once_with(
+    def test_get_client_bedrock_uses_explicit_config(self):
+        config = BedrockClientConfig(
             api_key="bedrock-key",
             region="us-east-1",
-            logger=None,
         )
 
-    def test_get_client_bedrock_supports_aws_credentials_envs(self):
-        with (
-            patch.dict(
-                os.environ,
-                {
-                    "AWS_ACCESS_KEY_ID": "aws-id",
-                    "AWS_SECRET_ACCESS_KEY": "aws-secret",
-                    "AWS_SESSION_TOKEN": "aws-session",
-                    "AWS_REGION": "us-west-2",
-                },
-                clear=True,
-            ),
-            patch("llmai.client.BedrockClient") as bedrock_client_cls,
-        ):
-            client = get_client(LLMProvider.BEDROCK)
+        with patch("llmai.client.BedrockClient") as bedrock_client_cls:
+            client = get_client(config=config)
 
         self.assertIs(client, bedrock_client_cls.return_value)
-        bedrock_client_cls.assert_called_once_with(
-            region="us-west-2",
-            aws_access_key_id="aws-id",
-            aws_secret_access_key="aws-secret",
-            aws_session_token="aws-session",
-            logger=None,
-        )
+        bedrock_client_cls.assert_called_once_with(config=config, logger=None)
 
-    def test_get_client_bedrock_supports_profile_env(self):
-        with (
-            patch.dict(
-                os.environ,
-                {
-                    "AWS_PROFILE": "dev-profile",
-                    "AWS_DEFAULT_REGION": "us-west-2",
-                },
-                clear=True,
-            ),
-            patch("llmai.client.BedrockClient") as bedrock_client_cls,
-        ):
-            client = get_client(LLMProvider.BEDROCK)
+    def test_get_client_rejects_mismatched_config_type(self):
+        config = OpenAIClientConfig(api_key="openai-key")
+        config.provider = "google"  # type: ignore[assignment]
 
-        self.assertIs(client, bedrock_client_cls.return_value)
-        bedrock_client_cls.assert_called_once_with(
-            region="us-west-2",
-            profile_name="dev-profile",
-            logger=None,
-        )
+        with self.assertRaises(LLMConfigurationError) as context:
+            get_client(config=config)
 
-    def test_get_client_bedrock_rejects_ambiguous_auth_envs(self):
-        with patch.dict(
-            os.environ,
-            {
-                "BEDROCK_API_KEY": "bedrock-key",
-                "AWS_ACCESS_KEY_ID": "aws-id",
-                "AWS_SECRET_ACCESS_KEY": "aws-secret",
-                "BEDROCK_REGION": "us-east-1",
-            },
-            clear=True,
-        ):
-            with self.assertRaises(LLMConfigurationError) as context:
-                get_client(LLMProvider.BEDROCK)
+        self.assertEqual(context.exception.provider, "google")
+        self.assertIn("GoogleClientConfig", context.exception.message)
 
-        self.assertEqual(context.exception.provider, "bedrock")
-        self.assertIn("ambiguous", context.exception.message)
-
-    def test_get_client_accepts_string_provider_names(self):
-        with (
-            patch.dict(
-                os.environ,
-                {
-                    "OPENAI_API_KEY": "openai-key",
-                },
-                clear=True,
-            ),
-            patch("llmai.client.OpenAIClient") as openai_client_cls,
-        ):
-            client = get_client("openai")
-
-        self.assertIs(client, openai_client_cls.return_value)
-        openai_client_cls.assert_called_once_with(
-            api_key="openai-key",
-            base_url=None,
-            logger=None,
+    def test_get_client_uses_provider_literal_from_config(self):
+        self.assertEqual(OpenAIClientConfig(api_key="openai-key").provider, "openai")
+        self.assertEqual(
+            ChatGPTClientConfig(access_token="chatgpt-token").provider,
+            "chatgpt",
         )
 
     def make_bedrock_client(self, runtime_client, **client_kwargs):
@@ -586,14 +314,17 @@ class ClientBehaviorTests(unittest.TestCase):
             captured_sessions.append(session)
             return session
 
-        patcher = patch("llmai.bedrock.client.boto3.Session", side_effect=fake_session_factory)
+        patcher = patch(
+            "llmai.bedrock.client.boto3.Session",
+            side_effect=fake_session_factory,
+        )
         mocked = patcher.start()
         self.addCleanup(patcher.stop)
-        client = BedrockClient(**client_kwargs)
+        client = BedrockClient(config=BedrockClientConfig(**client_kwargs))
         return client, captured_sessions, mocked
 
     def test_openai_required_tool_choice_uses_standard_function_selector(self):
-        client = OpenAIClient(api_key="test")
+        client = OpenAIClient(config=OpenAIClientConfig(api_key="test"))
 
         openai_tools, tool_choice = client._get_openai_tools_and_tool_choice_or_omit(
             [make_tool("weather"), make_tool("time")],
@@ -613,7 +344,7 @@ class ClientBehaviorTests(unittest.TestCase):
         )
 
     def test_openai_responses_web_search_uses_allowed_tools_wrapper(self):
-        client = OpenAIClient(api_key="test")
+        client = OpenAIClient(config=OpenAIClientConfig(api_key="test"))
 
         openai_tools, tool_choice = (
             client._get_openai_responses_tools_and_tool_choice_or_omit(
@@ -632,7 +363,7 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(tool_choice["tools"], openai_tools)
 
     def test_openai_responses_web_search_defaults_to_auto_without_tool_choice_wrapper(self):
-        client = OpenAIClient(api_key="test")
+        client = OpenAIClient(config=OpenAIClientConfig(api_key="test"))
 
         openai_tools, tool_choice = (
             client._get_openai_responses_tools_and_tool_choice_or_omit(
@@ -645,7 +376,7 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertIsInstance(tool_choice, openai.Omit)
 
     def test_openai_completions_ignore_web_search_when_unsupported(self):
-        client = OpenAIClient(api_key="test")
+        client = OpenAIClient(config=OpenAIClientConfig(api_key="test"))
 
         openai_tools, tool_choice = client._get_openai_tools_and_tool_choice_or_omit(
             [make_web_search_tool()],
@@ -656,7 +387,7 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertIsInstance(tool_choice, openai.Omit)
 
     def test_openai_strict_tool_schemas_strip_unsupported_keywords(self):
-        client = OpenAIClient(api_key="test")
+        client = OpenAIClient(config=OpenAIClientConfig(api_key="test"))
 
         openai_tools = client._llm_tools_to_openai_tools(
             [
@@ -706,7 +437,7 @@ class ClientBehaviorTests(unittest.TestCase):
         )
         fake_completions = FakeOpenAICompletions(fake_response)
 
-        client = OpenAIClient(api_key="test")
+        client = OpenAIClient(config=OpenAIClientConfig(api_key="test"))
         client._client = SimpleNamespace(
             chat=SimpleNamespace(completions=fake_completions)
         )
@@ -746,7 +477,7 @@ class ClientBehaviorTests(unittest.TestCase):
         )
         fake_completions = FakeOpenAICompletions(fake_response)
 
-        client = OpenAIClient(api_key="test")
+        client = OpenAIClient(config=OpenAIClientConfig(api_key="test"))
         client._client = SimpleNamespace(
             chat=SimpleNamespace(completions=fake_completions)
         )
@@ -777,7 +508,7 @@ class ClientBehaviorTests(unittest.TestCase):
         )
         fake_completions = FakeOpenAICompletions(fake_response)
 
-        client = OpenAIClient(api_key="test")
+        client = OpenAIClient(config=OpenAIClientConfig(api_key="test"))
         client._client = SimpleNamespace(
             chat=SimpleNamespace(completions=fake_completions)
         )
@@ -797,8 +528,10 @@ class ClientBehaviorTests(unittest.TestCase):
     def test_chatgpt_init_uses_codex_base_url_and_headers(self):
         with patch("llmai.chatgpt.client.OpenAI") as openai_cls:
             ChatGPTClient(
-                api_key="token-123",
-                account_id="account-123",
+                config=ChatGPTClientConfig(
+                    access_token="token-123",
+                    account_id="account-123",
+                )
             )
 
         openai_cls.assert_called_once()
@@ -838,7 +571,9 @@ class ClientBehaviorTests(unittest.TestCase):
             Exception("chat completions should not be used")
         )
 
-        client = ChatGPTClient(api_key="test")
+        client = ChatGPTClient(
+            config=ChatGPTClientConfig(access_token="test")
+        )
         client._client = SimpleNamespace(
             responses=fake_responses,
             chat=SimpleNamespace(completions=fake_completions),
@@ -882,7 +617,9 @@ class ClientBehaviorTests(unittest.TestCase):
         )
         fake_responses = FakeOpenAIResponses(fake_response)
 
-        client = ChatGPTClient(api_key="test")
+        client = ChatGPTClient(
+            config=ChatGPTClientConfig(access_token="test")
+        )
         client._client = SimpleNamespace(
             responses=fake_responses,
             chat=SimpleNamespace(completions=FakeOpenAICompletions(None)),
@@ -917,7 +654,7 @@ class ClientBehaviorTests(unittest.TestCase):
             )
         )
 
-        client = OpenAIClient(api_key="test")
+        client = OpenAIClient(config=OpenAIClientConfig(api_key="test"))
         client._client = SimpleNamespace(
             chat=SimpleNamespace(completions=fake_completions)
         )
@@ -932,7 +669,7 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(context.exception.provider, "openai")
 
     def test_openai_serializes_user_image_parts(self):
-        client = OpenAIClient(api_key="test")
+        client = OpenAIClient(config=OpenAIClientConfig(api_key="test"))
 
         messages = client._messages_to_openai_messages(
             [
@@ -955,7 +692,7 @@ class ClientBehaviorTests(unittest.TestCase):
         )
 
     def test_openai_rejects_assistant_image_history(self):
-        client = OpenAIClient(api_key="test")
+        client = OpenAIClient(config=OpenAIClientConfig(api_key="test"))
 
         with self.assertRaises(LLMError):
             client._messages_to_openai_messages(
@@ -1028,7 +765,7 @@ class ClientBehaviorTests(unittest.TestCase):
         )
         fake_completions = FakeOpenAICompletions(events)
 
-        client = OpenAIClient(api_key="test")
+        client = OpenAIClient(config=OpenAIClientConfig(api_key="test"))
         client._client = SimpleNamespace(
             chat=SimpleNamespace(completions=fake_completions)
         )
@@ -1106,7 +843,7 @@ class ClientBehaviorTests(unittest.TestCase):
         )
         fake_completions = FakeOpenAICompletions(fake_response)
 
-        client = OpenAIClient(api_key="test")
+        client = OpenAIClient(config=OpenAIClientConfig(api_key="test"))
         client._client = SimpleNamespace(
             chat=SimpleNamespace(completions=fake_completions)
         )
@@ -1129,7 +866,7 @@ class ClientBehaviorTests(unittest.TestCase):
         )
         fake_completions = FakeOpenAICompletions(fake_response)
 
-        client = OpenAIClient(api_key="test")
+        client = OpenAIClient(config=OpenAIClientConfig(api_key="test"))
         client._client = SimpleNamespace(
             chat=SimpleNamespace(completions=fake_completions)
         )
@@ -1216,7 +953,7 @@ class ClientBehaviorTests(unittest.TestCase):
             ],
         }
 
-        client = OpenAIClient(api_key="test")
+        client = OpenAIClient(config=OpenAIClientConfig(api_key="test"))
         client._client = SimpleNamespace(
             chat=SimpleNamespace(completions=fake_completions)
         )
@@ -1258,7 +995,7 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(schema["properties"]["title"]["minLength"], 20)
 
     def test_openai_tools_sanitize_unsupported_json_schema_keywords(self):
-        client = OpenAIClient(api_key="test")
+        client = OpenAIClient(config=OpenAIClientConfig(api_key="test"))
         schema = {
             "type": "object",
             "properties": {
@@ -1306,7 +1043,7 @@ class ClientBehaviorTests(unittest.TestCase):
         )
         fake_completions = FakeOpenAICompletions(fake_response)
 
-        client = OpenAIClient(api_key="test")
+        client = OpenAIClient(config=OpenAIClientConfig(api_key="test"))
         client._client = SimpleNamespace(
             chat=SimpleNamespace(completions=fake_completions)
         )
@@ -1353,7 +1090,7 @@ class ClientBehaviorTests(unittest.TestCase):
         )
 
     def test_openai_tools_keep_non_strict_json_schema_keywords(self):
-        client = OpenAIClient(api_key="test")
+        client = OpenAIClient(config=OpenAIClientConfig(api_key="test"))
         schema = {
             "type": "object",
             "properties": {
@@ -1387,7 +1124,7 @@ class ClientBehaviorTests(unittest.TestCase):
     def test_openai_generate_raises_configuration_error_for_bare_basemodel_schema(self):
         fake_completions = FakeOpenAICompletions(response=None)
 
-        client = OpenAIClient(api_key="test")
+        client = OpenAIClient(config=OpenAIClientConfig(api_key="test"))
         client._client = SimpleNamespace(
             chat=SimpleNamespace(completions=fake_completions)
         )
@@ -1425,7 +1162,7 @@ class ClientBehaviorTests(unittest.TestCase):
         )
         fake_completions = FakeOpenAICompletions(events)
 
-        client = OpenAIClient(api_key="test")
+        client = OpenAIClient(config=OpenAIClientConfig(api_key="test"))
         client._client = SimpleNamespace(
             chat=SimpleNamespace(completions=fake_completions)
         )
@@ -1482,7 +1219,7 @@ class ClientBehaviorTests(unittest.TestCase):
         )
         fake_responses = FakeOpenAIResponses(fake_response)
 
-        client = OpenAIClient(api_key="test")
+        client = OpenAIClient(config=OpenAIClientConfig(api_key="test"))
         client._client = SimpleNamespace(responses=fake_responses)
 
         result = client.generate(
@@ -1543,7 +1280,7 @@ class ClientBehaviorTests(unittest.TestCase):
         )
         fake_responses = FakeOpenAIResponses(fake_response)
 
-        client = OpenAIClient(api_key="test")
+        client = OpenAIClient(config=OpenAIClientConfig(api_key="test"))
         client._client = SimpleNamespace(responses=fake_responses)
 
         result = client.generate(
@@ -1571,7 +1308,7 @@ class ClientBehaviorTests(unittest.TestCase):
         )
         fake_responses = FakeOpenAIResponses(fake_response)
 
-        client = OpenAIClient(api_key="test")
+        client = OpenAIClient(config=OpenAIClientConfig(api_key="test"))
         client._client = SimpleNamespace(responses=fake_responses)
 
         client.generate(
@@ -1676,7 +1413,7 @@ class ClientBehaviorTests(unittest.TestCase):
         )
         fake_responses = FakeOpenAIResponses(events)
 
-        client = OpenAIClient(api_key="test")
+        client = OpenAIClient(config=OpenAIClientConfig(api_key="test"))
         client._client = SimpleNamespace(responses=fake_responses)
 
         chunks = list(
@@ -1819,7 +1556,7 @@ class ClientBehaviorTests(unittest.TestCase):
         )
         fake_responses = FakeOpenAIResponses(events)
 
-        client = OpenAIClient(api_key="test")
+        client = OpenAIClient(config=OpenAIClientConfig(api_key="test"))
         client._client = SimpleNamespace(responses=fake_responses)
 
         chunks = list(
@@ -1856,7 +1593,7 @@ class ClientBehaviorTests(unittest.TestCase):
 
     def test_deepseek_init_uses_official_default_base_url(self):
         with patch("llmai.deepseek.client.OpenAI") as openai_cls:
-            DeepSeekClient(api_key="test")
+            DeepSeekClient(config=DeepSeekClientConfig(api_key="test"))
 
         openai_cls.assert_called_once_with(
             base_url="https://api.deepseek.com",
@@ -1866,10 +1603,12 @@ class ClientBehaviorTests(unittest.TestCase):
     def test_azure_init_uses_endpoint_api_key_and_api_version(self):
         with patch("llmai.azure.client.AzureOpenAI") as azure_openai_cls:
             AzureOpenAIClient(
-                api_key="test",
-                endpoint="https://azure.example.openai.azure.com",
-                api_version="2024-10-21",
-                deployment="gpt-4.1",
+                config=AzureOpenAIClientConfig(
+                    api_key="test",
+                    endpoint="https://azure.example.openai.azure.com",
+                    api_version="2024-10-21",
+                    deployment="gpt-4.1",
+                )
             )
 
         azure_openai_cls.assert_called_once_with(
@@ -1882,20 +1621,15 @@ class ClientBehaviorTests(unittest.TestCase):
             azure_deployment="gpt-4.1",
         )
 
-    def test_azure_init_uses_env_configuration_by_default(self):
-        with (
-            patch.dict(
-                os.environ,
-                {
-                    "AZURE_OPENAI_AD_TOKEN": "azure-ad-token",
-                    "AZURE_OPENAI_BASE_URL": "https://azure.example.openai.azure.com/openai/v1",
-                    "AZURE_OPENAI_API_VERSION": "2024-10-21",
-                },
-                clear=True,
-            ),
-            patch("llmai.azure.client.AzureOpenAI") as azure_openai_cls,
-        ):
-            AzureOpenAIClient()
+    def test_azure_init_uses_base_url_ad_token_and_api_version(self):
+        with patch("llmai.azure.client.AzureOpenAI") as azure_openai_cls:
+            AzureOpenAIClient(
+                config=AzureOpenAIClientConfig(
+                    azure_ad_token="azure-ad-token",
+                    base_url="https://azure.example.openai.azure.com/openai/v1",
+                    api_version="2024-10-21",
+                )
+            )
 
         azure_openai_cls.assert_called_once_with(
             api_version="2024-10-21",
@@ -1906,31 +1640,26 @@ class ClientBehaviorTests(unittest.TestCase):
         )
 
     def test_azure_init_requires_credentials(self):
-        with patch.dict(
-            os.environ,
-            {
-                "AZURE_OPENAI_ENDPOINT": "https://azure.example.openai.azure.com",
-                "AZURE_OPENAI_API_VERSION": "2024-10-21",
-            },
-            clear=True,
-        ):
-            with self.assertRaises(LLMConfigurationError) as context:
-                AzureOpenAIClient()
-
-        self.assertEqual(context.exception.provider, "azure")
-        self.assertIn("AZURE_OPENAI_API_KEY", context.exception.message)
-
-    def test_azure_init_rejects_ambiguous_endpoint_aliases(self):
         with self.assertRaises(LLMConfigurationError) as context:
-            AzureOpenAIClient(
-                api_key="test",
-                endpoint="https://first.azure.com",
-                azure_endpoint="https://second.azure.com",
+            AzureOpenAIClientConfig(
+                endpoint="https://azure.example.openai.azure.com",
                 api_version="2024-10-21",
             )
 
         self.assertEqual(context.exception.provider, "azure")
-        self.assertIn("endpoint or azure_endpoint", context.exception.message)
+        self.assertIn("credentials", context.exception.message)
+
+    def test_azure_init_rejects_ambiguous_endpoint_values(self):
+        with self.assertRaises(LLMConfigurationError) as context:
+            AzureOpenAIClientConfig(
+                api_key="test",
+                endpoint="https://first.azure.com",
+                base_url="https://second.azure.com/openai/v1",
+                api_version="2024-10-21",
+            )
+
+        self.assertEqual(context.exception.provider, "azure")
+        self.assertIn("base_url or endpoint", context.exception.message)
 
     def test_azure_generate_wraps_provider_auth_errors(self):
         request = httpx.Request(
@@ -1947,9 +1676,11 @@ class ClientBehaviorTests(unittest.TestCase):
         )
 
         client = AzureOpenAIClient(
-            api_key="test",
-            endpoint="https://azure.example.openai.azure.com",
-            api_version="2024-10-21",
+            config=AzureOpenAIClientConfig(
+                api_key="test",
+                endpoint="https://azure.example.openai.azure.com",
+                api_version="2024-10-21",
+            )
         )
         client._client = SimpleNamespace(
             chat=SimpleNamespace(completions=fake_completions)
@@ -1966,9 +1697,11 @@ class ClientBehaviorTests(unittest.TestCase):
     def test_vertex_init_uses_vertex_genai_client_configuration(self):
         with patch("llmai.google.client.genai.Client") as genai_client_cls:
             VertexAIClient(
-                api_key="vertex-key",
-                project="vertex-project",
-                location="us-central1",
+                config=VertexAIClientConfig(
+                    api_key="vertex-key",
+                    project="vertex-project",
+                    location="us-central1",
+                )
             )
 
         genai_client_cls.assert_called_once_with(
@@ -1977,28 +1710,29 @@ class ClientBehaviorTests(unittest.TestCase):
             credentials=None,
             project="vertex-project",
             location="us-central1",
+            http_options=None,
         )
 
-    def test_vertex_init_uses_provider_specific_env_configuration(self):
-        with (
-            patch.dict(
-                os.environ,
-                {
-                    "VERTEX_PROJECT": "vertex-project",
-                    "VERTEX_LOCATION": "us-central1",
-                },
-                clear=True,
-            ),
-            patch("llmai.google.client.genai.Client") as genai_client_cls,
-        ):
-            VertexAIClient()
+    def test_vertex_init_uses_base_url_when_provided(self):
+        with patch("llmai.google.client.genai.Client") as genai_client_cls:
+            VertexAIClient(
+                config=VertexAIClientConfig(
+                    api_key="vertex-key",
+                    project="vertex-project",
+                    location="us-central1",
+                    base_url="https://vertex.example",
+                )
+            )
 
-        genai_client_cls.assert_called_once_with(
-            vertexai=True,
-            api_key=None,
-            credentials=None,
-            project="vertex-project",
-            location="us-central1",
+        genai_client_cls.assert_called_once()
+        self.assertEqual(genai_client_cls.call_args.kwargs["vertexai"], True)
+        self.assertEqual(genai_client_cls.call_args.kwargs["api_key"], "vertex-key")
+        self.assertEqual(genai_client_cls.call_args.kwargs["project"], "vertex-project")
+        self.assertEqual(genai_client_cls.call_args.kwargs["location"], "us-central1")
+        self.assertIsInstance(genai_client_cls.call_args.kwargs["http_options"], HttpOptions)
+        self.assertEqual(
+            genai_client_cls.call_args.kwargs["http_options"].base_url,
+            "https://vertex.example",
         )
 
     def test_vertex_init_wraps_configuration_errors(self):
@@ -2007,7 +1741,7 @@ class ClientBehaviorTests(unittest.TestCase):
             side_effect=ValueError("Project or API key must be set when using the Vertex AI API."),
         ):
             with self.assertRaises(LLMConfigurationError) as context:
-                VertexAIClient()
+                VertexAIClient(config=VertexAIClientConfig(api_key="test"))
 
         self.assertEqual(context.exception.provider, "vertex")
         self.assertIn("Project or API key", context.exception.message)
@@ -2020,7 +1754,7 @@ class ClientBehaviorTests(unittest.TestCase):
             )
         )
 
-        client = VertexAIClient(api_key="test")
+        client = VertexAIClient(config=VertexAIClientConfig(api_key="test"))
         client._client = SimpleNamespace(models=fake_models)
 
         with self.assertRaises(LLMAuthenticationError) as context:
@@ -2032,55 +1766,20 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(context.exception.status_code, 401)
         self.assertEqual(context.exception.provider, "vertex")
 
-    def test_deepseek_init_uses_deepseek_api_key_env_by_default(self):
+    def test_deepseek_init_uses_explicit_api_key(self):
         with (
-            patch.dict(
-                os.environ,
-                {
-                    "DEEPSEEK_API_KEY": "deepseek-env-key",
-                },
-                clear=True,
-            ),
             patch("llmai.deepseek.client.OpenAI") as openai_cls,
         ):
-            DeepSeekClient()
-
-        openai_cls.assert_called_once_with(
-            base_url="https://api.deepseek.com",
-            api_key="deepseek-env-key",
-        )
-
-    def test_deepseek_init_prefers_explicit_api_key_over_env(self):
-        with (
-            patch.dict(
-                os.environ,
-                {
-                    "DEEPSEEK_API_KEY": "deepseek-env-key",
-                },
-                clear=True,
-            ),
-            patch("llmai.deepseek.client.OpenAI") as openai_cls,
-        ):
-            DeepSeekClient(api_key="explicit-key")
+            DeepSeekClient(config=DeepSeekClientConfig(api_key="explicit-key"))
 
         openai_cls.assert_called_once_with(
             base_url="https://api.deepseek.com",
             api_key="explicit-key",
         )
 
-    def test_deepseek_init_requires_deepseek_api_key_env_or_explicit_key(self):
-        with patch.dict(
-            os.environ,
-            {
-                "OPENAI_API_KEY": "openai-key",
-            },
-            clear=True,
-        ):
-            with self.assertRaises(LLMConfigurationError) as context:
-                DeepSeekClient()
-
-        self.assertEqual(context.exception.provider, "deepseek")
-        self.assertIn("DEEPSEEK_API_KEY", context.exception.message)
+    def test_deepseek_init_requires_explicit_api_key(self):
+        with self.assertRaises(ValidationError):
+            DeepSeekClientConfig(api_key="")
 
     def test_deepseek_stream_uses_internal_response_schema_tool(self):
         events = iter(
@@ -2135,7 +1834,7 @@ class ClientBehaviorTests(unittest.TestCase):
         )
         fake_completions = FakeOpenAICompletions(events)
 
-        client = DeepSeekClient(api_key="test")
+        client = DeepSeekClient(config=DeepSeekClientConfig(api_key="test"))
         client._client = SimpleNamespace(
             chat=SimpleNamespace(completions=fake_completions)
         )
@@ -2209,7 +1908,7 @@ class ClientBehaviorTests(unittest.TestCase):
         )
         fake_completions = FakeOpenAICompletions(fake_response)
 
-        client = DeepSeekClient(api_key="test")
+        client = DeepSeekClient(config=DeepSeekClientConfig(api_key="test"))
         client._client = SimpleNamespace(
             chat=SimpleNamespace(completions=fake_completions)
         )
@@ -2284,7 +1983,7 @@ class ClientBehaviorTests(unittest.TestCase):
         )
         fake_completions = FakeOpenAICompletions(events)
 
-        client = DeepSeekClient(api_key="test")
+        client = DeepSeekClient(config=DeepSeekClientConfig(api_key="test"))
         client._client = SimpleNamespace(
             chat=SimpleNamespace(completions=fake_completions)
         )
@@ -2332,7 +2031,7 @@ class ClientBehaviorTests(unittest.TestCase):
         )
 
     def test_deepseek_tool_structured_output_keeps_selected_user_tools_visible(self):
-        client = DeepSeekClient(api_key="test")
+        client = DeepSeekClient(config=DeepSeekClientConfig(api_key="test"))
 
         deepseek_tools, deepseek_tool_choice, _ = (
             client._get_deepseek_tools_and_tool_choice_or_omit(
@@ -2352,7 +2051,7 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(deepseek_tool_choice, "required")
 
     def test_deepseek_ignores_web_search_tool(self):
-        client = DeepSeekClient(api_key="test")
+        client = DeepSeekClient(config=DeepSeekClientConfig(api_key="test"))
 
         deepseek_tools, deepseek_tool_choice, _ = (
             client._get_deepseek_tools_and_tool_choice_or_omit(
@@ -2366,7 +2065,7 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertIsInstance(deepseek_tool_choice, openai.Omit)
 
     def test_anthropic_required_tool_choice_uses_any_for_multiple_visible_tools(self):
-        client = AnthropicClient(api_key="test")
+        client = AnthropicClient(config=AnthropicClientConfig(api_key="test"))
 
         anthropic_tools, tool_choice = (
             client._get_anthropic_tools_and_tool_choice_or_omit(
@@ -2381,7 +2080,7 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(tool_choice, {"type": "any"})
 
     def test_anthropic_web_search_maps_to_server_tool(self):
-        client = AnthropicClient(api_key="test")
+        client = AnthropicClient(config=AnthropicClientConfig(api_key="test"))
 
         anthropic_tools, tool_choice = (
             client._get_anthropic_tools_and_tool_choice_or_omit(
@@ -2399,7 +2098,7 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(tool_choice, {"type": "tool", "name": "web_search"})
 
     def test_anthropic_tool_schemas_strip_max_items(self):
-        client = AnthropicClient(api_key="test")
+        client = AnthropicClient(config=AnthropicClientConfig(api_key="test"))
 
         anthropic_tools, _ = client._get_anthropic_tools_and_tool_choice_or_omit(
             [
@@ -2429,7 +2128,7 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertNotIn("maxItems", input_schema["properties"]["cities"])
 
     def test_anthropic_tool_schemas_keep_non_strict_keywords(self):
-        client = AnthropicClient(api_key="test")
+        client = AnthropicClient(config=AnthropicClientConfig(api_key="test"))
 
         anthropic_tools, _ = client._get_anthropic_tools_and_tool_choice_or_omit(
             [
@@ -2459,7 +2158,7 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(input_schema["properties"]["cities"]["maxItems"], 3)
 
     def test_anthropic_serializes_user_image_parts(self):
-        client = AnthropicClient(api_key="test")
+        client = AnthropicClient(config=AnthropicClientConfig(api_key="test"))
 
         messages = client._messages_to_anthropic_messages(
             [
@@ -2486,7 +2185,7 @@ class ClientBehaviorTests(unittest.TestCase):
         )
         fake_messages = FakeAnthropicMessages(fake_response)
 
-        client = AnthropicClient(api_key="test")
+        client = AnthropicClient(config=AnthropicClientConfig(api_key="test"))
         client._client = SimpleNamespace(messages=fake_messages)
 
         result = client.generate(
@@ -2508,7 +2207,7 @@ class ClientBehaviorTests(unittest.TestCase):
         )
         fake_messages = FakeAnthropicMessages(fake_response)
 
-        client = AnthropicClient(api_key="test")
+        client = AnthropicClient(config=AnthropicClientConfig(api_key="test"))
         client._client = SimpleNamespace(messages=fake_messages)
 
         result = client.generate(
@@ -2531,7 +2230,7 @@ class ClientBehaviorTests(unittest.TestCase):
         )
         fake_messages = FakeAnthropicMessages(fake_response)
 
-        client = AnthropicClient(api_key="test")
+        client = AnthropicClient(config=AnthropicClientConfig(api_key="test"))
         client._client = SimpleNamespace(messages=fake_messages)
 
         result = client.generate(
@@ -2553,7 +2252,7 @@ class ClientBehaviorTests(unittest.TestCase):
         )
         fake_messages = FakeAnthropicMessages(fake_response)
 
-        client = AnthropicClient(api_key="test")
+        client = AnthropicClient(config=AnthropicClientConfig(api_key="test"))
         client._client = SimpleNamespace(messages=fake_messages)
 
         client.generate(
@@ -2578,7 +2277,7 @@ class ClientBehaviorTests(unittest.TestCase):
             )
         )
 
-        client = AnthropicClient(api_key="test")
+        client = AnthropicClient(config=AnthropicClientConfig(api_key="test"))
         client._client = SimpleNamespace(messages=fake_messages)
 
         with self.assertRaises(LLMRateLimitError) as context:
@@ -2612,7 +2311,7 @@ class ClientBehaviorTests(unittest.TestCase):
         )
         fake_messages = FakeAnthropicMessages(stream_response=fake_stream)
 
-        client = AnthropicClient(api_key="test")
+        client = AnthropicClient(config=AnthropicClientConfig(api_key="test"))
         client._client = SimpleNamespace(messages=fake_messages)
 
         chunks = list(
@@ -2695,7 +2394,7 @@ class ClientBehaviorTests(unittest.TestCase):
         )
         fake_messages = FakeAnthropicMessages(stream_response=fake_stream)
 
-        client = AnthropicClient(api_key="test")
+        client = AnthropicClient(config=AnthropicClientConfig(api_key="test"))
         client._client = SimpleNamespace(messages=fake_messages)
 
         chunks = list(
@@ -2738,7 +2437,7 @@ class ClientBehaviorTests(unittest.TestCase):
         )
         fake_messages = FakeAnthropicMessages(fake_response)
 
-        client = AnthropicClient(api_key="test")
+        client = AnthropicClient(config=AnthropicClientConfig(api_key="test"))
         client._client = SimpleNamespace(messages=fake_messages)
 
         result = client.generate(
@@ -2805,7 +2504,7 @@ class ClientBehaviorTests(unittest.TestCase):
         )
         fake_messages = FakeAnthropicMessages(stream_response=fake_stream)
 
-        client = AnthropicClient(api_key="test")
+        client = AnthropicClient(config=AnthropicClientConfig(api_key="test"))
         client._client = SimpleNamespace(messages=fake_messages)
 
         chunks = list(
@@ -2879,7 +2578,7 @@ class ClientBehaviorTests(unittest.TestCase):
         )
         fake_messages = FakeAnthropicMessages(stream_response=fake_stream)
 
-        client = AnthropicClient(api_key="test")
+        client = AnthropicClient(config=AnthropicClientConfig(api_key="test"))
         client._client = SimpleNamespace(messages=fake_messages)
 
         chunks = list(
@@ -2919,7 +2618,7 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(payload_chunks[-1].tool_calls[0].arguments, '{"city": "Kathmandu"}')
 
     def test_google_required_tool_choice_uses_any_mode_with_allowed_names(self):
-        client = GoogleClient(api_key="test")
+        client = GoogleClient(config=GoogleClientConfig(api_key="test"))
 
         google_tools, tool_config = client._get_google_tools_and_tool_config(
             [make_tool("weather"), make_tool("time")],
@@ -2936,7 +2635,7 @@ class ClientBehaviorTests(unittest.TestCase):
         )
 
     def test_google_web_search_attaches_without_function_tool_config(self):
-        client = GoogleClient(api_key="test")
+        client = GoogleClient(config=GoogleClientConfig(api_key="test"))
 
         google_tools, tool_config = client._get_google_tools_and_tool_config(
             [make_web_search_tool()],
@@ -2950,7 +2649,7 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertIsNone(tool_config)
 
     def test_google_required_web_search_keeps_function_targeting_best_effort(self):
-        client = GoogleClient(api_key="test")
+        client = GoogleClient(config=GoogleClientConfig(api_key="test"))
 
         google_tools, tool_config = client._get_google_tools_and_tool_config(
             [make_tool("weather"), make_web_search_tool()],
@@ -2968,7 +2667,7 @@ class ClientBehaviorTests(unittest.TestCase):
         )
 
     def test_google_tool_schemas_strip_unsupported_keywords_when_strict(self):
-        client = GoogleClient(api_key="test")
+        client = GoogleClient(config=GoogleClientConfig(api_key="test"))
 
         google_tools, _ = client._get_google_tools_and_tool_config(
             [
@@ -3006,7 +2705,7 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertNotIn("additional_properties", payload)
 
     def test_google_tool_schemas_keep_non_strict_keywords(self):
-        client = GoogleClient(api_key="test")
+        client = GoogleClient(config=GoogleClientConfig(api_key="test"))
 
         google_tools, _ = client._get_google_tools_and_tool_config(
             [
@@ -3073,7 +2772,7 @@ class ClientBehaviorTests(unittest.TestCase):
             )
         )
 
-        client = GoogleClient(api_key="test")
+        client = GoogleClient(config=GoogleClientConfig(api_key="test"))
         client._client = SimpleNamespace(models=fake_models)
 
         chunks = list(
@@ -3102,7 +2801,7 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(completion_chunk.messages[-1].tool_calls[0].id, tool_chunk.id)
 
     def test_google_serializes_user_images(self):
-        client = GoogleClient(api_key="test")
+        client = GoogleClient(config=GoogleClientConfig(api_key="test"))
 
         messages = client._messages_to_google_messages(
             [
@@ -3166,7 +2865,7 @@ class ClientBehaviorTests(unittest.TestCase):
         )
         fake_models = FakeGoogleModels(response=fake_response)
 
-        client = GoogleClient(api_key="test")
+        client = GoogleClient(config=GoogleClientConfig(api_key="test"))
         client._client = SimpleNamespace(models=fake_models)
 
         result = client.generate(
@@ -3222,7 +2921,7 @@ class ClientBehaviorTests(unittest.TestCase):
         )
         fake_models = FakeGoogleModels(response=fake_response)
 
-        client = GoogleClient(api_key="test")
+        client = GoogleClient(config=GoogleClientConfig(api_key="test"))
         client._client = SimpleNamespace(models=fake_models)
 
         result = client.generate(
@@ -3253,7 +2952,7 @@ class ClientBehaviorTests(unittest.TestCase):
         )
         fake_models = FakeGoogleModels(response=fake_response)
 
-        client = GoogleClient(api_key="test")
+        client = GoogleClient(config=GoogleClientConfig(api_key="test"))
         client._client = SimpleNamespace(models=fake_models)
 
         client.generate(
@@ -3331,7 +3030,7 @@ class ClientBehaviorTests(unittest.TestCase):
             )
         )
 
-        client = GoogleClient(api_key="test")
+        client = GoogleClient(config=GoogleClientConfig(api_key="test"))
         client._client = SimpleNamespace(models=fake_models)
 
         chunks = list(
@@ -3421,7 +3120,7 @@ class ClientBehaviorTests(unittest.TestCase):
             )
         )
 
-        client = GoogleClient(api_key="test")
+        client = GoogleClient(config=GoogleClientConfig(api_key="test"))
         client._client = SimpleNamespace(models=fake_models)
 
         chunks = list(
@@ -3475,7 +3174,7 @@ class ClientBehaviorTests(unittest.TestCase):
         )
         fake_models = FakeGoogleModels(response=fake_response)
 
-        client = GoogleClient(api_key="test")
+        client = GoogleClient(config=GoogleClientConfig(api_key="test"))
         client._client = SimpleNamespace(models=fake_models)
 
         result = client.generate(
@@ -3505,7 +3204,7 @@ class ClientBehaviorTests(unittest.TestCase):
             )
         )
 
-        client = GoogleClient(api_key="test")
+        client = GoogleClient(config=GoogleClientConfig(api_key="test"))
         client._client = SimpleNamespace(models=fake_models)
 
         with self.assertRaises(LLMAuthenticationError) as context:
@@ -3520,17 +3219,22 @@ class ClientBehaviorTests(unittest.TestCase):
     def test_bedrock_init_supports_api_key_auth(self):
         fake_runtime = FakeBedrockRuntimeClient(response={})
 
-        with patch.dict(os.environ, {}, clear=False):
-            client, sessions, _ = self.make_bedrock_client(
-                fake_runtime,
-                api_key="bedrock-api-key",
-                region="us-east-1",
-            )
-            self.assertEqual(os.environ["AWS_BEARER_TOKEN_BEDROCK"], "bedrock-api-key")
+        client, sessions, _ = self.make_bedrock_client(
+            fake_runtime,
+            api_key="bedrock-api-key",
+            region="us-east-1",
+        )
 
         self.assertIsNotNone(client)
         self.assertEqual(len(sessions), 1)
         self.assertEqual(sessions[0].kwargs["region_name"], "us-east-1")
+        self.assertEqual(
+            sessions[0]
+            .kwargs["botocore_session"]
+            .get_auth_token(signing_name="bedrock")
+            .token,
+            "bedrock-api-key",
+        )
         self.assertEqual(
             sessions[0].client_calls,
             [("bedrock-runtime", {"region_name": "us-east-1"})],

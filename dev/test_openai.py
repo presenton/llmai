@@ -1,5 +1,5 @@
 from dev.shared import SLIDE_SCHEMA, TOOL_CHOICE, TOOL_DEFINITIONS, WEB_SEARCH_TOOL
-from llmai.openai import OpenAIApiType, OpenAIClient
+from llmai.openai import OpenAIApiType, OpenAIClient, OpenAIClientConfig
 from llmai.shared.messages import UserMessage
 from llmai.shared.reasoning import (
     ReasoningEffort,
@@ -11,10 +11,11 @@ from llmai.shared.response_formats import JSONSchemaResponse
 
 MODEL = "gpt-5.4"
 API_TYPE = OpenAIApiType.RESPONSES
+CLIENT_CONFIG = OpenAIClientConfig(api_key="<your-openai-api-key>")
 
 
 def test_generate():
-    client = OpenAIClient()
+    client = OpenAIClient(config=CLIENT_CONFIG)
 
     response = client.generate(
         model=MODEL,
@@ -35,7 +36,7 @@ def test_generate():
 
 
 def test_generate_structured():
-    client = OpenAIClient()
+    client = OpenAIClient(config=CLIENT_CONFIG)
 
     response = client.generate(
         model=MODEL,
@@ -59,7 +60,7 @@ def test_generate_structured():
 
 
 def test_generate_tool_calls():
-    client = OpenAIClient()
+    client = OpenAIClient(config=CLIENT_CONFIG)
 
     response = client.generate(
         model=MODEL,
@@ -80,7 +81,7 @@ def test_generate_tool_calls():
 
 
 def test_generate_web_search():
-    client = OpenAIClient()
+    client = OpenAIClient(config=CLIENT_CONFIG)
 
     response = client.generate(
         model=MODEL,
@@ -101,7 +102,7 @@ def test_generate_web_search():
 
 
 def test_stream():
-    client = OpenAIClient()
+    client = OpenAIClient(config=CLIENT_CONFIG)
 
     print("OpenAI plain stream")
     for chunk in client.generate(
@@ -121,7 +122,7 @@ def test_stream():
 
 
 def test_stream_structured():
-    client = OpenAIClient()
+    client = OpenAIClient(config=CLIENT_CONFIG)
 
     print("OpenAI structured stream")
     for chunk in client.generate(
@@ -144,7 +145,7 @@ def test_stream_structured():
 
 
 def test_stream_tool_calls():
-    client = OpenAIClient()
+    client = OpenAIClient(config=CLIENT_CONFIG)
 
     print("OpenAI tool-call stream")
     for chunk in client.generate(
@@ -166,7 +167,7 @@ def test_stream_tool_calls():
 
 
 def test_stream_web_search():
-    client = OpenAIClient()
+    client = OpenAIClient(config=CLIENT_CONFIG)
 
     print("OpenAI web-search stream")
     for chunk in client.generate(

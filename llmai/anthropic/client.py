@@ -17,6 +17,7 @@ from anthropic.types import (
 )
 
 from llmai.shared.base import BaseClient
+from llmai.shared.configs import AnthropicClientConfig
 from llmai.shared.errors import raise_llm_error
 from llmai.shared.messages import (
     AssistantMessage,
@@ -76,12 +77,15 @@ class AnthropicClient(BaseClient):
     def __init__(
         self,
         *,
-        api_key: str | None = None,
+        config: AnthropicClientConfig,
         logger: Logger | None = None,
     ):
         super().__init__(logger=logger)
         try:
-            self._client = Anthropic(api_key=api_key)
+            self._client = Anthropic(
+                api_key=config.api_key,
+                base_url=config.base_url,
+            )
         except Exception as exc:
             raise_llm_error(exc, provider="anthropic")
 

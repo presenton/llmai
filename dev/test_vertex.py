@@ -5,14 +5,19 @@ from llmai.shared.reasoning import (
     ReasoningSummary,
 )
 from llmai.shared.response_formats import JSONSchemaResponse
-from llmai.vertex import VertexAIClient
+from llmai.vertex import VertexAIClient, VertexAIClientConfig
 
 
 MODEL = "gemini-2.5-flash"
+CLIENT_CONFIG = VertexAIClientConfig(
+    api_key="<your-vertex-api-key>",
+    project="your-gcp-project",
+    location="us-central1",
+)
 
 
 def test_generate():
-    client = VertexAIClient()
+    client = VertexAIClient(config=CLIENT_CONFIG)
 
     response = client.generate(
         model=MODEL,
@@ -30,7 +35,7 @@ def test_generate():
 
 
 def test_generate_structured():
-    client = VertexAIClient()
+    client = VertexAIClient(config=CLIENT_CONFIG)
 
     response = client.generate(
         model=MODEL,
@@ -49,7 +54,7 @@ def test_generate_structured():
 
 
 def test_generate_tool_calls():
-    client = VertexAIClient()
+    client = VertexAIClient(config=CLIENT_CONFIG)
 
     response = client.generate(
         model=MODEL,
@@ -65,7 +70,7 @@ def test_generate_tool_calls():
 
 
 def test_generate_web_search():
-    client = VertexAIClient()
+    client = VertexAIClient(config=CLIENT_CONFIG)
 
     response = client.generate(
         model=MODEL,
@@ -81,7 +86,7 @@ def test_generate_web_search():
 
 
 def test_stream():
-    client = VertexAIClient()
+    client = VertexAIClient(config=CLIENT_CONFIG)
 
     print("Vertex plain stream")
     for chunk in client.generate(
@@ -96,7 +101,7 @@ def test_stream():
 
 
 def test_stream_structured():
-    client = VertexAIClient()
+    client = VertexAIClient(config=CLIENT_CONFIG)
 
     print("Vertex structured stream")
     for chunk in client.generate(
@@ -115,7 +120,7 @@ def test_stream_structured():
 
 
 def test_stream_tool_calls():
-    client = VertexAIClient()
+    client = VertexAIClient(config=CLIENT_CONFIG)
 
     print("Vertex tool-call stream")
     for chunk in client.generate(
@@ -133,7 +138,7 @@ def test_stream_tool_calls():
 
 
 def test_stream_web_search():
-    client = VertexAIClient()
+    client = VertexAIClient(config=CLIENT_CONFIG)
 
     print("Vertex web-search stream")
     for chunk in client.generate(

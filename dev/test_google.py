@@ -1,5 +1,5 @@
 from dev.shared import SLIDE_SCHEMA, TOOL_CHOICE, TOOL_DEFINITIONS, WEB_SEARCH_TOOL
-from llmai.google import GoogleClient
+from llmai.google import GoogleClient, GoogleClientConfig
 from llmai.shared.messages import UserMessage
 from llmai.shared.reasoning import (
     ReasoningEffort,
@@ -10,10 +10,11 @@ from llmai.shared.response_formats import JSONSchemaResponse
 
 
 MODEL = "gemini-3.1-pro-preview"
+CLIENT_CONFIG = GoogleClientConfig(api_key="<your-google-api-key>")
 
 
 def test_generate():
-    client = GoogleClient()
+    client = GoogleClient(config=CLIENT_CONFIG)
 
     response = client.generate(
         model=MODEL,
@@ -31,7 +32,7 @@ def test_generate():
 
 
 def test_generate_structured():
-    client = GoogleClient()
+    client = GoogleClient(config=CLIENT_CONFIG)
 
     response = client.generate(
         model=MODEL,
@@ -50,7 +51,7 @@ def test_generate_structured():
 
 
 def test_generate_tool_calls():
-    client = GoogleClient()
+    client = GoogleClient(config=CLIENT_CONFIG)
 
     response = client.generate(
         model=MODEL,
@@ -66,7 +67,7 @@ def test_generate_tool_calls():
 
 
 def test_generate_web_search():
-    client = GoogleClient()
+    client = GoogleClient(config=CLIENT_CONFIG)
 
     response = client.generate(
         model=MODEL,
@@ -82,7 +83,7 @@ def test_generate_web_search():
 
 
 def test_stream():
-    client = GoogleClient()
+    client = GoogleClient(config=CLIENT_CONFIG)
 
     print("Google plain stream")
     for chunk in client.generate(
@@ -97,7 +98,7 @@ def test_stream():
 
 
 def test_stream_structured():
-    client = GoogleClient()
+    client = GoogleClient(config=CLIENT_CONFIG)
 
     print("Google structured stream")
     for chunk in client.generate(
@@ -116,7 +117,7 @@ def test_stream_structured():
 
 
 def test_stream_tool_calls():
-    client = GoogleClient()
+    client = GoogleClient(config=CLIENT_CONFIG)
 
     print("Google tool-call stream")
     for chunk in client.generate(
@@ -134,7 +135,7 @@ def test_stream_tool_calls():
 
 
 def test_stream_web_search():
-    client = GoogleClient()
+    client = GoogleClient(config=CLIENT_CONFIG)
 
     print("Google web-search stream")
     for chunk in client.generate(

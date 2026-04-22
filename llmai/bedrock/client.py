@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import json
-import os
 from logging import Logger
 from time import perf_counter
 from typing import Any
 
 import boto3
+from botocore.session import Session as BotocoreSession
+from botocore.tokens import FrozenAuthToken, TokenProviderChain
 
 from llmai.shared.base import BaseClient
+from llmai.shared.configs import BedrockClientConfig
 from llmai.shared.errors import LLMError, configuration_error, raise_llm_error
 from llmai.shared.messages import (
     AssistantMessage,
@@ -68,16 +70,22 @@ BEDROCK_SUPPORTED_RESPONSE_SCHEMA_KEYS = {
 }
 
 
+class _StaticBearerTokenProvider:
+    METHOD = "static"
+
+    def __init__(self, token: str):
+        self._token = token
+
+    def load_token(self, **kwargs) -> FrozenAuthToken:
+        del kwargs
+        return FrozenAuthToken(self._token)
+
+
 class BedrockClient(BaseClient):
     def __init__(
         self,
         *,
-        api_key: str | None = None,
-        region: str | None = None,
-        aws_access_key_id: str | None = None,
-        aws_secret_access_key: str | None = None,
-        aws_session_token: str | None = None,
-        profile_name: str | None = None,
+        config: BedrockClientConfig,
         logger: Logger | None = None,
     ):
         super().__init__(logger=logger)
@@ -85,37 +93,44 @@ class BedrockClient(BaseClient):
         explicit_aws_auth = any(
             value is not None
             for value in (
-                aws_access_key_id,
-                aws_secret_access_key,
-                aws_session_token,
-                profile_name,
+                config.aws_access_key_id,
+                config.aws_secret_access_key,
+                config.aws_session_token,
+                config.profile_name,
             )
         )
-        if api_key and explicit_aws_auth:
+        if config.api_key and explicit_aws_auth:
             raise configuration_error(
                 "Provide either api_key or AWS credentials/profile, not both",
                 provider="bedrock",
             )
 
-        if (aws_access_key_id is None) != (aws_secret_access_key is None):
+        if (config.aws_access_key_id is None) != (config.aws_secret_access_key is None):
             raise configuration_error(
                 "aws_access_key_id and aws_secret_access_key must be provided together",
                 provider="bedrock",
             )
 
         try:
-            if api_key is not None:
-                # Amazon Bedrock's Boto3 API key flow relies on the bearer token env var.
-                os.environ["AWS_BEARER_TOKEN_BEDROCK"] = api_key
+            session_kwargs: dict[str, object] = {
+                "aws_access_key_id": config.aws_access_key_id,
+                "aws_secret_access_key": config.aws_secret_access_key,
+                "aws_session_token": config.aws_session_token,
+                "region_name": config.region,
+                "profile_name": config.profile_name,
+            }
+            if config.api_key is not None:
+                botocore_session = BotocoreSession()
+                botocore_session.register_component(
+                    "token_provider",
+                    TokenProviderChain(
+                        providers=[_StaticBearerTokenProvider(config.api_key)]
+                    ),
+                )
+                session_kwargs["botocore_session"] = botocore_session
 
-            session = boto3.Session(
-                aws_access_key_id=aws_access_key_id,
-                aws_secret_access_key=aws_secret_access_key,
-                aws_session_token=aws_session_token,
-                region_name=region,
-                profile_name=profile_name,
-            )
-            self._client = session.client("bedrock-runtime", region_name=region)
+            session = boto3.Session(**session_kwargs)
+            self._client = session.client("bedrock-runtime", region_name=config.region)
         except Exception as exc:
             raise_llm_error(exc, provider="bedrock")
 

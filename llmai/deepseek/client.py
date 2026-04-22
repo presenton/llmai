@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 from logging import Logger
 from time import perf_counter
 
@@ -14,6 +13,7 @@ from llmai.openai.client import (
     OPENAI_SUPPORTED_STRING_FORMATS,
     OpenAIClient,
 )
+from llmai.shared.configs import DeepSeekClientConfig
 from llmai.shared.errors import LLMError, configuration_error, raise_llm_error
 from llmai.shared.messages import (
     AssistantContent,
@@ -55,17 +55,16 @@ class DeepSeekClient(OpenAIClient):
     def __init__(
         self,
         *,
-        base_url: str | None = None,
-        api_key: str | None = None,
+        config: DeepSeekClientConfig,
         logger: Logger | None = None,
     ):
         self._logger = logger
-        self._base_url = base_url or self.DEFAULT_BASE_URL
+        self._base_url = config.base_url or self.DEFAULT_BASE_URL
 
         try:
             self._client = OpenAI(
                 base_url=self._base_url,
-                api_key=self._resolve_api_key(api_key),
+                api_key=self._resolve_api_key(config.api_key),
             )
         except Exception as exc:
             raise_llm_error(exc, provider="deepseek")
@@ -80,14 +79,8 @@ class DeepSeekClient(OpenAIClient):
             if stripped:
                 return stripped
 
-        env_api_key = os.getenv("DEEPSEEK_API_KEY")
-        if env_api_key is not None:
-            stripped_env_api_key = env_api_key.strip()
-            if stripped_env_api_key:
-                return stripped_env_api_key
-
         raise configuration_error(
-            "Missing DeepSeek API key. Pass api_key or set DEEPSEEK_API_KEY",
+            "Missing DeepSeek API key. Provide config.api_key",
             provider="deepseek",
         )
 

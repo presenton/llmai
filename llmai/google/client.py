@@ -11,6 +11,7 @@ from google.genai.types import (
     FunctionCallingConfigMode as GoogleFunctionCallingConfigMode,
     GenerateContentConfig,
     GoogleSearch,
+    HttpOptions,
     Part as GooglePart,
     ThinkingConfig as GoogleThinkingConfig,
     ThinkingLevel as GoogleThinkingLevel,
@@ -19,6 +20,7 @@ from google.genai.types import (
 )
 
 from llmai.shared.base import BaseClient
+from llmai.shared.configs import GoogleClientConfig
 from llmai.shared.errors import LLMError, configuration_error, raise_llm_error
 from llmai.shared.messages import (
     AssistantMessage,
@@ -118,11 +120,20 @@ class GoogleClient(BaseClient):
     def __init__(
         self,
         *,
-        api_key: str | None = None,
+        config: GoogleClientConfig,
         logger: Logger | None = None,
     ):
         super().__init__(logger=logger)
-        self._client = self._create_genai_client(api_key=api_key)
+        self._client = self._create_genai_client(
+            api_key=config.api_key,
+            http_options=self._http_options(config.base_url),
+        )
+
+    def _http_options(self, base_url: str | None) -> HttpOptions | None:
+        if base_url is None:
+            return None
+
+        return HttpOptions(baseUrl=base_url)
 
     def _create_genai_client(self, **kwargs):
         try:

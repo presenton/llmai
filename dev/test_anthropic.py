@@ -1,14 +1,15 @@
 from dev.shared import SLIDE_SCHEMA, TOOL_CHOICE, TOOL_DEFINITIONS, WEB_SEARCH_TOOL
-from llmai.anthropic import AnthropicClient
+from llmai.anthropic import AnthropicClient, AnthropicClientConfig
 from llmai.shared.messages import UserMessage
 from llmai.shared.response_formats import JSONSchemaResponse
 
 
 MODEL = "claude-haiku-4-5"
+CLIENT_CONFIG = AnthropicClientConfig(api_key="<your-anthropic-api-key>")
 
 
 def test_generate():
-    client = AnthropicClient()
+    client = AnthropicClient(config=CLIENT_CONFIG)
 
     response = client.generate(
         model=MODEL,
@@ -22,7 +23,7 @@ def test_generate():
 
 
 def test_generate_structured():
-    client = AnthropicClient()
+    client = AnthropicClient(config=CLIENT_CONFIG)
 
     response = client.generate(
         model=MODEL,
@@ -41,7 +42,7 @@ def test_generate_structured():
 
 
 def test_generate_tool_calls():
-    client = AnthropicClient()
+    client = AnthropicClient(config=CLIENT_CONFIG)
 
     response = client.generate(
         model=MODEL,
@@ -57,7 +58,7 @@ def test_generate_tool_calls():
 
 
 def test_generate_web_search():
-    client = AnthropicClient()
+    client = AnthropicClient(config=CLIENT_CONFIG)
 
     response = client.generate(
         model=MODEL,
@@ -72,7 +73,7 @@ def test_generate_web_search():
 
 
 def test_stream():
-    client = AnthropicClient()
+    client = AnthropicClient(config=CLIENT_CONFIG)
 
     print("Anthropic plain stream")
     for chunk in client.generate(
@@ -87,7 +88,7 @@ def test_stream():
 
 
 def test_stream_structured():
-    client = AnthropicClient()
+    client = AnthropicClient(config=CLIENT_CONFIG)
 
     print("Anthropic structured stream")
     for chunk in client.generate(
@@ -105,7 +106,7 @@ def test_stream_structured():
 
 
 def test_stream_tool_calls():
-    client = AnthropicClient()
+    client = AnthropicClient(config=CLIENT_CONFIG)
 
     print("Anthropic tool-call stream")
     for chunk in client.generate(
@@ -122,7 +123,7 @@ def test_stream_tool_calls():
 
 
 def test_stream_web_search():
-    client = AnthropicClient()
+    client = AnthropicClient(config=CLIENT_CONFIG)
 
     print("Anthropic web-search stream")
     for chunk in client.generate(

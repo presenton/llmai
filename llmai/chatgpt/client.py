@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import os
 from logging import Logger
 
 from openai import OpenAI
 
 from llmai.openai.client import OpenAIApiType, OpenAIClient
+from llmai.shared.configs import ChatGPTClientConfig
 from llmai.shared.errors import configuration_error, raise_llm_error
 from llmai.shared.messages import Message
 from llmai.shared.reasoning import ReasoningEffort
@@ -20,25 +20,13 @@ class ChatGPTClient(OpenAIClient):
     def __init__(
         self,
         *,
-        base_url: str | None = None,
-        access_token: str | None = None,
-        api_key: str | None = None,
-        account_id: str | None = None,
+        config: ChatGPTClientConfig,
         logger: Logger | None = None,
     ):
         self._logger = logger
-        self._base_url = (
-            base_url
-            or _first_env("CHATGPT_BASE_URL", "CODEX_BASE_URL")
-            or self.DEFAULT_BASE_URL
-        )
-        resolved_access_token = self._resolve_access_token(
-            access_token or api_key,
-        )
-        resolved_account_id = _strip_or_none(
-            account_id
-            or _first_env("CHATGPT_ACCOUNT_ID", "CODEX_ACCOUNT_ID")
-        )
+        self._base_url = config.base_url or self.DEFAULT_BASE_URL
+        resolved_access_token = self._resolve_access_token(config.access_token)
+        resolved_account_id = _strip_or_none(config.account_id)
 
         default_headers = {
             "OpenAI-Beta": "responses=experimental",
@@ -62,15 +50,12 @@ class ChatGPTClient(OpenAIClient):
             self._logger.info("Base URL: %s", self._base_url)
 
     def _resolve_access_token(self, access_token: str | None) -> str:
-        resolved_access_token = _strip_or_none(
-            access_token
-            or _first_env("CHATGPT_ACCESS_TOKEN", "CODEX_ACCESS_TOKEN")
-        )
+        resolved_access_token = _strip_or_none(access_token)
         if resolved_access_token is not None:
             return resolved_access_token
 
         raise configuration_error(
-            "Missing ChatGPT access token. Pass access_token/api_key or set CHATGPT_ACCESS_TOKEN or CODEX_ACCESS_TOKEN",
+            "Missing ChatGPT access token. Provide config.access_token",
             provider="chatgpt",
         )
 
@@ -112,14 +97,6 @@ class ChatGPTClient(OpenAIClient):
             api_type=OpenAIApiType.RESPONSES,
             stream=stream,
         )
-
-
-def _first_env(*names: str) -> str | None:
-    for name in names:
-        value = _strip_or_none(os.getenv(name))
-        if value is not None:
-            return value
-    return None
 
 
 def _strip_or_none(value: str | None) -> str | None:

@@ -38,10 +38,12 @@ pip install -e .
 ## Quick Start
 
 ```python
-from llmai import OpenAIClient
+from llmai import OpenAIClient, OpenAIClientConfig
 from llmai.shared import UserMessage
 
-client = OpenAIClient(api_key="OPENAI_API_KEY")
+client = OpenAIClient(
+    config=OpenAIClientConfig(api_key="<your-openai-api-key>"),
+)
 
 result = client.generate(
     model="your-openai-model",
@@ -62,14 +64,16 @@ If you want to swap providers, the overall call shape stays the same. In most ca
 ## Azure OpenAI
 
 ```python
-from llmai import AzureOpenAIClient
+from llmai import AzureOpenAIClient, AzureOpenAIClientConfig
 from llmai.shared import UserMessage
 
 
 client = AzureOpenAIClient(
-    api_key="AZURE_OPENAI_API_KEY",
-    endpoint="https://your-resource.openai.azure.com",
-    api_version="2024-10-21",
+    config=AzureOpenAIClientConfig(
+        api_key="<your-azure-openai-api-key>",
+        endpoint="https://your-resource.openai.azure.com",
+        api_version="2024-10-21",
+    ),
 )
 
 result = client.generate(
@@ -82,18 +86,21 @@ result = client.generate(
 print(result.content)
 ```
 
-`AzureOpenAIClient` uses the official OpenAI SDK's Azure client and supports either API-key auth or Entra token auth. It reads `AZURE_OPENAI_API_KEY` or `AZURE_OPENAI_AD_TOKEN`, `AZURE_OPENAI_ENDPOINT` or `AZURE_OPENAI_BASE_URL`, `AZURE_OPENAI_API_VERSION` or `OPENAI_API_VERSION`, and optional `AZURE_OPENAI_DEPLOYMENT` by default.
+`AzureOpenAIClient` uses the official OpenAI SDK's Azure client and requires an explicit `AzureOpenAIClientConfig`. The config supports API-key auth or Entra token auth and accepts `endpoint` or `base_url`, `api_version`, and optional `deployment`.
 
 ## Vertex AI
 
 ```python
-from llmai import VertexAIClient
+from llmai import VertexAIClient, VertexAIClientConfig
 from llmai.shared import UserMessage
 
 
 client = VertexAIClient(
-    project="your-gcp-project",
-    location="us-central1",
+    config=VertexAIClientConfig(
+        api_key="<your-vertex-api-key>",
+        project="your-gcp-project",
+        location="us-central1",
+    ),
 )
 
 result = client.generate(
@@ -106,16 +113,18 @@ result = client.generate(
 print(result.content)
 ```
 
-`VertexAIClient` uses the `google-genai` Vertex AI path internally. It supports ADC or explicit credentials, and also accepts provider-specific `VERTEX_PROJECT`, `VERTEX_LOCATION`, and `VERTEX_API_KEY` envs while still allowing the upstream SDK's standard `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`, and Google API-key env handling.
+`VertexAIClient` uses the `google-genai` Vertex AI path internally and requires an explicit `VertexAIClientConfig`. In addition to `api_key`, the config can include `project`, `location`, `base_url`, and explicit Google credentials.
 
 ## ChatGPT
 
 ```python
-from llmai import ChatGPTClient
+from llmai import ChatGPTClient, ChatGPTClientConfig
 from llmai.shared import UserMessage
 
 
-client = ChatGPTClient(access_token="CHATGPT_ACCESS_TOKEN")
+client = ChatGPTClient(
+    config=ChatGPTClientConfig(access_token="<your-chatgpt-access-token>"),
+)
 
 result = client.generate(
     model="chatgpt-4o-latest",
@@ -127,16 +136,18 @@ result = client.generate(
 print(result.content)
 ```
 
-`ChatGPTClient` targets ChatGPT's Codex backend at `https://chatgpt.com/backend-api/codex`. It always uses the Responses API internally, and reads `CHATGPT_ACCESS_TOKEN` or `CODEX_ACCESS_TOKEN` by default, with optional `CHATGPT_ACCOUNT_ID` or `CODEX_ACCOUNT_ID`.
+`ChatGPTClient` targets ChatGPT's Codex backend at `https://chatgpt.com/backend-api/codex` and always uses the Responses API internally. Credentials and optional overrides are passed through `ChatGPTClientConfig`, which uses `access_token`.
 
 ## DeepSeek
 
 ```python
-from llmai import DeepSeekClient
+from llmai import DeepSeekClient, DeepSeekClientConfig
 from llmai.shared import JSONSchemaResponse, UserMessage
 
 
-client = DeepSeekClient()
+client = DeepSeekClient(
+    config=DeepSeekClientConfig(api_key="<your-deepseek-api-key>"),
+)
 
 result = client.generate(
     model="deepseek-chat",
@@ -158,23 +169,27 @@ result = client.generate(
 print(result.content)
 ```
 
-`DeepSeekClient` uses the OpenAI SDK against DeepSeek's OpenAI-compatible API and reads `DEEPSEEK_API_KEY` by default. For structured output, it always uses an internal function-tool schema because DeepSeek does not support `response_format={"type":"json_schema"}`. During streaming, the internal response tool is surfaced as incremental JSON `content` chunks, and the stream still ends with parsed JSON on the final completion chunk's `content`. If you need DeepSeek's server-side `strict` tool enforcement, point `base_url` at `https://api.deepseek.com/beta`.
+`DeepSeekClient` uses the OpenAI SDK against DeepSeek's OpenAI-compatible API and requires an explicit `DeepSeekClientConfig`. For structured output, it always uses an internal function-tool schema because DeepSeek does not support `response_format={"type":"json_schema"}`. During streaming, the internal response tool is surfaced as incremental JSON `content` chunks, and the stream still ends with parsed JSON on the final completion chunk's `content`. If you need DeepSeek's server-side `strict` tool enforcement, point `base_url` at `https://api.deepseek.com/beta`.
 
 ## Amazon Bedrock
 
 ```python
-from llmai import BedrockClient
+from llmai import BedrockClient, BedrockClientConfig
 from llmai.shared import UserMessage
 
 
 client = BedrockClient(
-    region="us-east-1",
-    aws_access_key_id="AWS_ACCESS_KEY_ID",
-    aws_secret_access_key="AWS_SECRET_ACCESS_KEY",
+    config=BedrockClientConfig(
+        region="us-east-1",
+        aws_access_key_id="<your-aws-access-key-id>",
+        aws_secret_access_key="<your-aws-secret-access-key>",
+    ),
 )
 
 # Or use Bedrock API-key auth:
-# client = BedrockClient(region="us-east-1", api_key="BEDROCK_API_KEY")
+# client = BedrockClient(
+#     config=BedrockClientConfig(region="us-east-1", api_key="<your-bedrock-api-key>")
+# )
 
 result = client.generate(
     model="us.anthropic.claude-3-5-haiku-20241022-v1:0",
@@ -191,7 +206,7 @@ print(result.content)
 ```python
 from pydantic import BaseModel
 
-from llmai import GoogleClient
+from llmai import GoogleClient, GoogleClientConfig
 from llmai.shared import JSONSchemaResponse, UserMessage
 
 
@@ -200,7 +215,7 @@ class Summary(BaseModel):
     bullets: list[str]
 
 
-client = GoogleClient(api_key="GOOGLE_API_KEY")
+client = GoogleClient(config=GoogleClientConfig(api_key="<your-google-api-key>"))
 
 result = client.generate(
     model="your-google-model",
@@ -218,11 +233,11 @@ Use `JSONSchemaResponse`, `JSONObjectResponse`, or `TextResponse` to request dif
 ## Multimodal Content
 
 ```python
-from llmai import GoogleClient
+from llmai import GoogleClient, GoogleClientConfig
 from llmai.shared import ImageContentPart, TextContentPart, UserMessage
 
 
-client = GoogleClient(api_key="GOOGLE_API_KEY")
+client = GoogleClient(config=GoogleClientConfig(api_key="<your-google-api-key>"))
 
 result = client.generate(
     model="your-google-model",
@@ -247,7 +262,7 @@ Use explicit content parts when you need multimodal inputs or want to mix text w
 ```python
 from pydantic import BaseModel
 
-from llmai import OpenAIClient
+from llmai import OpenAIClient, OpenAIClientConfig
 from llmai.shared import Tool, ToolResponseMessage, UserMessage
 
 
@@ -261,7 +276,7 @@ weather_tool = Tool(
     schema=WeatherArgs,
 )
 
-client = OpenAIClient(api_key="OPENAI_API_KEY")
+client = OpenAIClient(config=OpenAIClientConfig(api_key="<your-openai-api-key>"))
 
 first = client.generate(
     model="your-openai-model",
@@ -297,10 +312,10 @@ for tool_call in first.tool_calls:
 `llmai` also supports a provider-hosted web search tool that is not a function tool:
 
 ```python
-from llmai import OpenAIClient
+from llmai import OpenAIClient, OpenAIClientConfig
 from llmai.shared import UserMessage, WebSearchTool
 
-client = OpenAIClient(api_key="OPENAI_API_KEY")
+client = OpenAIClient(config=OpenAIClientConfig(api_key="<your-openai-api-key>"))
 
 result = client.generate(
     model="your-openai-model",
@@ -341,10 +356,12 @@ Current `llmai` behavior:
 ## Streaming
 
 ```python
-from llmai import AnthropicClient
+from llmai import AnthropicClient, AnthropicClientConfig
 from llmai.shared import UserMessage
 
-client = AnthropicClient(api_key="ANTHROPIC_API_KEY")
+client = AnthropicClient(
+    config=AnthropicClientConfig(api_key="<your-anthropic-api-key>"),
+)
 
 for chunk in client.generate(
     model="your-anthropic-model",

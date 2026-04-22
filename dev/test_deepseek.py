@@ -1,15 +1,16 @@
 from dev.shared import SLIDE_SCHEMA, TOOL_CHOICE, TOOL_DEFINITIONS, WEB_SEARCH_TOOL
-from llmai import DeepSeekClient
+from llmai import DeepSeekClient, DeepSeekClientConfig
 from llmai.shared.messages import UserMessage
 from llmai.shared.reasoning import ReasoningEffort, ReasoningSummary
 from llmai.shared.response_formats import JSONSchemaResponse
 
 
 MODEL = "deepseek-reasoner"
+CLIENT_CONFIG = DeepSeekClientConfig(api_key="<your-deepseek-api-key>")
 
 
 def make_client() -> DeepSeekClient:
-    return DeepSeekClient()
+    return DeepSeekClient(config=CLIENT_CONFIG)
 
 
 def test_generate():

@@ -33,6 +33,7 @@ from openai.types.shared_params.response_format_json_schema import (
 )
 from openai.types.shared_params.response_format_text import ResponseFormatText
 
+from llmai.shared.configs import OpenAIClientConfig
 from llmai.shared.base import BaseClient
 from llmai.shared.errors import LLMError, raise_llm_error
 from llmai.shared.messages import (
@@ -128,19 +129,21 @@ class OpenAIClient(BaseClient):
     def __init__(
         self,
         *,
-        base_url: str | None = None,
-        api_key: str | None = None,
+        config: OpenAIClientConfig,
         logger: Logger | None = None,
     ):
         super().__init__(logger=logger)
         try:
-            self._client = OpenAI(base_url=base_url, api_key=api_key)
+            self._client = OpenAI(
+                base_url=config.base_url,
+                api_key=config.api_key,
+            )
         except Exception as exc:
             raise_llm_error(exc, provider=self.PROVIDER_NAME)
 
         if self._logger:
             self._logger.info("%s client created", self.PROVIDER_LABEL)
-            self._logger.info("Base URL: %s", base_url)
+            self._logger.info("Base URL: %s", config.base_url)
 
     def _chat_completion_message_to_assistant_message(
         self,
