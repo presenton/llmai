@@ -687,6 +687,15 @@ class OpenAIClient(BaseClient):
 
         return reasoning_effort.effort
 
+    def _get_openai_responses_temperature_or_omit(
+        self,
+        temperature: float | None,
+    ) -> float | Omit:
+        if temperature is None:
+            return Omit()
+
+        return temperature
+
     def _get_openai_responses_max_output_tokens_or_omit(
         self,
         max_tokens: int | None,
@@ -1069,7 +1078,9 @@ class OpenAIClient(BaseClient):
         request_kwargs = {
             "model": model,
             "input": response_input,
-            "temperature": temperature,
+            "temperature": self._get_openai_responses_temperature_or_omit(
+                temperature
+            ),
             "text": self._get_openai_responses_text_or_omit(response_format),
             "tools": openai_tools,
             "tool_choice": openai_tool_choice,
@@ -1134,7 +1145,9 @@ class OpenAIClient(BaseClient):
         request_kwargs = {
             "model": model,
             "input": response_input,
-            "temperature": temperature,
+            "temperature": self._get_openai_responses_temperature_or_omit(
+                temperature
+            ),
             "text": self._get_openai_responses_text_or_omit(response_format),
             "tools": openai_tools,
             "tool_choice": openai_tool_choice,

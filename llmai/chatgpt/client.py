@@ -68,6 +68,13 @@ class ChatGPTClient(OpenAIClient):
         del max_tokens
         return Omit()
 
+    def _get_openai_responses_temperature_or_omit(
+        self,
+        temperature: float | None,
+    ) -> Omit:
+        del temperature
+        return Omit()
+
     def _resolve_access_token(self, access_token: str | None) -> str:
         resolved_access_token = _strip_or_none(access_token)
         if resolved_access_token is not None:

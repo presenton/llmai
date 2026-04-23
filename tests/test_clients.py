@@ -718,12 +718,17 @@ class ClientBehaviorTests(unittest.TestCase):
         client.generate(
             model="chatgpt-4o-latest",
             messages=[UserMessage(content=text_parts("Hello"))],
+            temperature=0.2,
             max_tokens=123,
         )
 
         self.assertEqual(
             fake_responses.calls[0]["instructions"],
             "Follow the prompt",
+        )
+        self.assertIsInstance(
+            fake_responses.calls[0]["temperature"],
+            openai.Omit,
         )
         self.assertIsInstance(
             fake_responses.calls[0]["max_output_tokens"],
