@@ -1,15 +1,24 @@
+import os
+
 from dev.shared import SLIDE_SCHEMA, TOOL_CHOICE, TOOL_DEFINITIONS, WEB_SEARCH_TOOL
 from llmai.anthropic import AnthropicClient, AnthropicClientConfig
 from llmai.shared.messages import UserMessage
 from llmai.shared.response_formats import JSONSchemaResponse
 
 
-MODEL = "claude-haiku-4-5"
-CLIENT_CONFIG = AnthropicClientConfig(api_key="<your-anthropic-api-key>")
+MODEL = os.getenv("ANTHROPIC_MODEL", "claude-haiku-4-5")
+
+
+def make_client() -> AnthropicClient:
+    return AnthropicClient(
+        config=AnthropicClientConfig(
+            api_key=os.getenv("ANTHROPIC_API_KEY"),
+        )
+    )
 
 
 def test_generate():
-    client = AnthropicClient(config=CLIENT_CONFIG)
+    client = make_client()
 
     response = client.generate(
         model=MODEL,
@@ -23,7 +32,7 @@ def test_generate():
 
 
 def test_generate_structured():
-    client = AnthropicClient(config=CLIENT_CONFIG)
+    client = make_client()
 
     response = client.generate(
         model=MODEL,
@@ -42,7 +51,7 @@ def test_generate_structured():
 
 
 def test_generate_tool_calls():
-    client = AnthropicClient(config=CLIENT_CONFIG)
+    client = make_client()
 
     response = client.generate(
         model=MODEL,
@@ -58,7 +67,7 @@ def test_generate_tool_calls():
 
 
 def test_generate_web_search():
-    client = AnthropicClient(config=CLIENT_CONFIG)
+    client = make_client()
 
     response = client.generate(
         model=MODEL,
@@ -73,7 +82,7 @@ def test_generate_web_search():
 
 
 def test_stream():
-    client = AnthropicClient(config=CLIENT_CONFIG)
+    client = make_client()
 
     print("Anthropic plain stream")
     for chunk in client.generate(
@@ -88,7 +97,7 @@ def test_stream():
 
 
 def test_stream_structured():
-    client = AnthropicClient(config=CLIENT_CONFIG)
+    client = make_client()
 
     print("Anthropic structured stream")
     for chunk in client.generate(
@@ -106,7 +115,7 @@ def test_stream_structured():
 
 
 def test_stream_tool_calls():
-    client = AnthropicClient(config=CLIENT_CONFIG)
+    client = make_client()
 
     print("Anthropic tool-call stream")
     for chunk in client.generate(
@@ -123,7 +132,7 @@ def test_stream_tool_calls():
 
 
 def test_stream_web_search():
-    client = AnthropicClient(config=CLIENT_CONFIG)
+    client = make_client()
 
     print("Anthropic web-search stream")
     for chunk in client.generate(
@@ -139,10 +148,10 @@ def test_stream_web_search():
 
 
 # test_generate()
-# test_generate_structured()
+test_generate_structured()
 # test_generate_tool_calls()
 # test_generate_web_search()
 # test_stream()
 # test_stream_structured()
 # test_stream_tool_calls()
-test_stream_web_search()
+# test_stream_web_search()

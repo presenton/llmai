@@ -275,7 +275,6 @@ class AnthropicClient(BaseClient):
         tools: list[LLMTool] | None,
         tool_choice: ToolChoice | None,
         response_format: ResponseFormat | None,
-        use_tools_for_structured_output: bool | None,
     ) -> tuple[list[dict[str, object]] | Omit, dict[str, object] | Omit]:
         resolved = filter_resolved_tools_for_provider(
             resolve_tools(tools, tool_choice),
@@ -296,7 +295,7 @@ class AnthropicClient(BaseClient):
             strict=get_response_format_strict(response_format, default=False),
         )
         response_schema_tool_name: str | None = None
-        if response_schema and use_tools_for_structured_output is not False:
+        if response_schema:
             response_schema_tool_name = get_response_format_name(
                 response_format,
                 default="response",
@@ -374,7 +373,6 @@ class AnthropicClient(BaseClient):
         max_tokens: int | None = None,
         reasoning_effort: ReasoningEffort | None = None,
         extra_body: dict | None = None,
-        use_tools_for_structured_output: bool | None = None,
         stream: bool = False,
     ) -> ResponseResult:
         if stream:
@@ -388,7 +386,6 @@ class AnthropicClient(BaseClient):
                 max_tokens=max_tokens,
                 reasoning_effort=reasoning_effort,
                 extra_body=extra_body,
-                use_tools_for_structured_output=use_tools_for_structured_output,
             )
 
         return self._generate_once(
@@ -401,7 +398,6 @@ class AnthropicClient(BaseClient):
             max_tokens=max_tokens,
             reasoning_effort=reasoning_effort,
             extra_body=extra_body,
-            use_tools_for_structured_output=use_tools_for_structured_output,
         )
 
     def _generate_once(
@@ -416,14 +412,12 @@ class AnthropicClient(BaseClient):
         max_tokens: int | None = None,
         reasoning_effort: ReasoningEffort | None = None,
         extra_body: dict | None = None,
-        use_tools_for_structured_output: bool | None = None,
     ) -> ResponseContent:
         anthropic_tools, anthropic_tool_choice = (
             self._get_anthropic_tools_and_tool_choice_or_omit(
                 tools,
                 tool_choice,
                 response_format,
-                use_tools_for_structured_output,
             )
         )
 
@@ -445,9 +439,15 @@ class AnthropicClient(BaseClient):
             text_chunks: list[str] = []
             thinking_blocks: list[str] = []
             response_schema_content: dict | None = None
-            response_schema_tool_name = get_response_format_name(
-                response_format,
-                default="response",
+            response_schema_tool_name = (
+                get_response_format_name(response_format, default="response")
+                if get_response_schema(
+                    response_format,
+                    supported_keys=ANTHROPIC_SUPPORTED_SCHEMA_KEYS,
+                    supported_string_formats=None,
+                    strict=get_response_format_strict(response_format, default=False),
+                )
+                else None
             )
             user_tool_calls: list[AssistantToolCall] = []
             for content in response.content:
@@ -504,14 +504,12 @@ class AnthropicClient(BaseClient):
         max_tokens: int | None = None,
         reasoning_effort: ReasoningEffort | None = None,
         extra_body: dict | None = None,
-        use_tools_for_structured_output: bool | None = None,
     ):
         anthropic_tools, anthropic_tool_choice = (
             self._get_anthropic_tools_and_tool_choice_or_omit(
                 tools,
                 tool_choice,
                 response_format,
-                use_tools_for_structured_output,
             )
         )
 
@@ -520,9 +518,15 @@ class AnthropicClient(BaseClient):
         text_chunks: list[str] = []
         thinking_blocks: list[str] = []
         response_schema_content: dict | None = None
-        response_schema_tool_name = get_response_format_name(
-            response_format,
-            default="response",
+        response_schema_tool_name = (
+            get_response_format_name(response_format, default="response")
+            if get_response_schema(
+                response_format,
+                supported_keys=ANTHROPIC_SUPPORTED_SCHEMA_KEYS,
+                supported_string_formats=None,
+                strict=get_response_format_strict(response_format, default=False),
+            )
+            else None
         )
         user_tool_calls: list[AssistantToolCall] = []
         active_tool_name: str | None = None
@@ -555,7 +559,7 @@ class AnthropicClient(BaseClient):
                     if event.type == "content_block_delta":
                         if event.delta.type == "text_delta":
                             text_chunks.append(event.delta.text)
-                            if not use_tools_for_structured_output:
+                            if response_schema_tool_name is None:
                                 current_chunk_type, current_tool, stream_chunks = (
                                     self._transition_stream_chunk(
                                         current_chunk_type=current_chunk_type,

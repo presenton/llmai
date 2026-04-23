@@ -86,7 +86,7 @@ result = client.generate(
 print(result.content)
 ```
 
-`AzureOpenAIClient` uses the official OpenAI SDK's Azure client and requires an explicit `AzureOpenAIClientConfig`. The config supports API-key auth or Entra token auth and accepts `endpoint` or `base_url`, `api_version`, and optional `deployment`.
+`AzureOpenAIClient` uses the official OpenAI SDK's Azure client and requires an explicit `AzureOpenAIClientConfig`. The config supports API-key auth or Entra token auth and accepts `endpoint` or `base_url`, `api_version`, and optional `deployment`. Azure is always routed through chat completions.
 
 ## Vertex AI
 
@@ -97,7 +97,6 @@ from llmai.shared import UserMessage
 
 client = VertexAIClient(
     config=VertexAIClientConfig(
-        api_key="<your-vertex-api-key>",
         project="your-gcp-project",
         location="us-central1",
     ),
@@ -113,7 +112,7 @@ result = client.generate(
 print(result.content)
 ```
 
-`VertexAIClient` uses the `google-genai` Vertex AI path internally and requires an explicit `VertexAIClientConfig`. In addition to `api_key`, the config can include `project`, `location`, `base_url`, and explicit Google credentials.
+`VertexAIClient` uses the `google-genai` Vertex AI path internally and requires an explicit `VertexAIClientConfig`. Use either `api_key` for Vertex express mode or `project`/`location`/`credentials` for standard Vertex auth; do not combine them. `base_url` remains optional.
 
 ## ChatGPT
 
@@ -312,10 +311,15 @@ for tool_call in first.tool_calls:
 `llmai` also supports a provider-hosted web search tool that is not a function tool:
 
 ```python
-from llmai import OpenAIClient, OpenAIClientConfig
+from llmai import OpenAIApiType, OpenAIClient, OpenAIClientConfig
 from llmai.shared import UserMessage, WebSearchTool
 
-client = OpenAIClient(config=OpenAIClientConfig(api_key="<your-openai-api-key>"))
+client = OpenAIClient(
+    config=OpenAIClientConfig(
+        api_key="<your-openai-api-key>",
+        api_type=OpenAIApiType.RESPONSES,
+    )
+)
 
 result = client.generate(
     model="your-openai-model",
@@ -323,7 +327,6 @@ result = client.generate(
         UserMessage(content="What was a positive news story from today? Cite sources."),
     ],
     tools=[WebSearchTool()],
-    api_type="responses",
 )
 
 print(result.content)

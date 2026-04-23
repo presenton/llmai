@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from enum import Enum
 from typing import Annotated, Any, Literal
 
 from google.auth.credentials import Credentials
@@ -36,8 +37,14 @@ class APIKeyClientConfig(BaseClientConfig):
     base_url: OptionalStr = None
 
 
+class OpenAIApiType(str, Enum):
+    COMPLETIONS = "completions"
+    RESPONSES = "responses"
+
+
 class OpenAIClientConfig(APIKeyClientConfig):
     provider: Literal["openai"] = "openai"
+    api_type: OpenAIApiType = OpenAIApiType.COMPLETIONS
 
 
 class AnthropicClientConfig(APIKeyClientConfig):
@@ -59,11 +66,27 @@ class GoogleClientConfig(APIKeyClientConfig):
     provider: Literal["google"] = "google"
 
 
-class VertexAIClientConfig(APIKeyClientConfig):
+class VertexAIClientConfig(BaseClientConfig):
     provider: Literal["vertex"] = "vertex"
+    api_key: OptionalStr = None
+    base_url: OptionalStr = None
     project: OptionalStr = None
     location: OptionalStr = None
     credentials: Credentials | None = None
+
+    @model_validator(mode="after")
+    def _validate_vertex_auth(self) -> VertexAIClientConfig:
+        if self.api_key is not None and (
+            self.project is not None
+            or self.location is not None
+            or self.credentials is not None
+        ):
+            raise configuration_error(
+                "Vertex AI auth is ambiguous. Configure either api_key or project/location/credentials, not both",
+                provider="vertex",
+            )
+
+        return self
 
 
 class AzureOpenAIClientConfig(BaseClientConfig):
@@ -186,6 +209,7 @@ __all__ = [
     "ClientConfig",
     "DeepSeekClientConfig",
     "GoogleClientConfig",
+    "OpenAIApiType",
     "OpenAIClientConfig",
     "VertexAIClientConfig",
 ]

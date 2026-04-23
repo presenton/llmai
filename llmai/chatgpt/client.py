@@ -24,6 +24,7 @@ class ChatGPTClient(OpenAIClient):
         logger: Logger | None = None,
     ):
         self._logger = logger
+        self._api_type = OpenAIApiType.RESPONSES
         self._base_url = config.base_url or self.DEFAULT_BASE_URL
         resolved_access_token = self._resolve_access_token(config.access_token)
         resolved_account_id = _strip_or_none(config.account_id)
@@ -71,7 +72,6 @@ class ChatGPTClient(OpenAIClient):
         max_tokens: int | None = None,
         reasoning_effort: ReasoningEffort | None = None,
         extra_body: dict | None = None,
-        use_tools_for_structured_output: bool | None = None,
         stream: bool = False,
     ) -> ResponseResult:
         request_extra_body = {
@@ -93,8 +93,6 @@ class ChatGPTClient(OpenAIClient):
             max_tokens=max_tokens,
             reasoning_effort=reasoning_effort,
             extra_body=request_extra_body,
-            use_tools_for_structured_output=use_tools_for_structured_output,
-            api_type=OpenAIApiType.RESPONSES,
             stream=stream,
         )
 

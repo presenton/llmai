@@ -1,18 +1,32 @@
+import os
+
 from dev.shared import SLIDE_SCHEMA, TOOL_CHOICE, TOOL_DEFINITIONS, WEB_SEARCH_TOOL
 from llmai.bedrock import BedrockClient, BedrockClientConfig
 from llmai.shared.messages import UserMessage
 from llmai.shared.response_formats import JSONSchemaResponse
 
 
-MODEL = "arn:aws:bedrock:eu-central-1:471112542209:inference-profile/eu.anthropic.claude-haiku-4-5-20251001-v1:0"
-CLIENT_CONFIG = BedrockClientConfig(
-    api_key="<your-bedrock-api-key>",
-    region="us-east-1",
+MODEL = os.getenv(
+    "BEDROCK_MODEL",
+    "arn:aws:bedrock:eu-central-1:471112542209:inference-profile/eu.anthropic.claude-haiku-4-5-20251001-v1:0",
 )
 
 
+def make_client() -> BedrockClient:
+    return BedrockClient(
+        config=BedrockClientConfig(
+            region=os.getenv("BEDROCK_REGION", "us-east-1"),
+            api_key=os.getenv("BEDROCK_API_KEY"),
+            aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
+            aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
+            aws_session_token=os.getenv("AWS_SESSION_TOKEN"),
+            profile_name=os.getenv("AWS_PROFILE"),
+        )
+    )
+
+
 def test_generate():
-    client = BedrockClient(config=CLIENT_CONFIG)
+    client = make_client()
 
     response = client.generate(
         model=MODEL,
@@ -26,7 +40,7 @@ def test_generate():
 
 
 def test_generate_structured():
-    client = BedrockClient(config=CLIENT_CONFIG)
+    client = make_client()
 
     response = client.generate(
         model=MODEL,
@@ -45,7 +59,7 @@ def test_generate_structured():
 
 
 def test_generate_tool_calls():
-    client = BedrockClient(config=CLIENT_CONFIG)
+    client = make_client()
 
     response = client.generate(
         model=MODEL,
@@ -61,7 +75,7 @@ def test_generate_tool_calls():
 
 
 def test_generate_web_search():
-    client = BedrockClient(config=CLIENT_CONFIG)
+    client = make_client()
 
     response = client.generate(
         model=MODEL,
@@ -76,7 +90,7 @@ def test_generate_web_search():
 
 
 def test_stream():
-    client = BedrockClient(config=CLIENT_CONFIG)
+    client = make_client()
 
     print("Bedrock plain stream")
     for chunk in client.generate(
@@ -91,7 +105,7 @@ def test_stream():
 
 
 def test_stream_structured():
-    client = BedrockClient(config=CLIENT_CONFIG)
+    client = make_client()
 
     print("Bedrock structured stream")
     for chunk in client.generate(
@@ -109,7 +123,7 @@ def test_stream_structured():
 
 
 def test_stream_tool_calls():
-    client = BedrockClient(config=CLIENT_CONFIG)
+    client = make_client()
 
     print("Bedrock tool-call stream")
     for chunk in client.generate(
@@ -126,7 +140,7 @@ def test_stream_tool_calls():
 
 
 def test_stream_web_search():
-    client = BedrockClient(config=CLIENT_CONFIG)
+    client = make_client()
 
     print("Bedrock web-search stream (ignored by provider adapter)")
     for chunk in client.generate(
@@ -142,7 +156,7 @@ def test_stream_web_search():
 
 
 # test_generate()
-# test_generate_structured()
+test_generate_structured()
 # test_generate_tool_calls()
 # test_generate_web_search()
 # test_stream()

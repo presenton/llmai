@@ -34,6 +34,7 @@ from llmai import (
 )
 from llmai.shared import (
     AssistantMessage,
+    BaseClient,
     ImageContentPart,
     LLMAuthenticationError,
     LLMConfigurationError,
@@ -223,7 +224,6 @@ class ClientBehaviorTests(unittest.TestCase):
 
     def test_get_client_vertex_uses_explicit_config(self):
         config = VertexAIClientConfig(
-            api_key="vertex-key",
             project="vertex-project",
             location="us-central1",
         )
@@ -305,6 +305,40 @@ class ClientBehaviorTests(unittest.TestCase):
             ChatGPTClientConfig(access_token="chatgpt-token").provider,
             "chatgpt",
         )
+
+    def test_openai_config_coerces_api_type_to_enum(self):
+        config = OpenAIClientConfig(
+            api_key="openai-key",
+            api_type="responses",
+        )
+
+        self.assertEqual(config.api_type, OpenAIApiType.RESPONSES)
+
+    def test_openai_config_rejects_invalid_api_type(self):
+        with self.assertRaises(ValidationError):
+            OpenAIClientConfig(
+                api_key="openai-key",
+                api_type="invalid",
+            )
+
+    def test_all_clients_share_base_generate_signature(self):
+        expected = tuple(inspect.signature(BaseClient.generate).parameters)
+
+        for client_type in (
+            OpenAIClient,
+            AzureOpenAIClient,
+            ChatGPTClient,
+            DeepSeekClient,
+            AnthropicClient,
+            GoogleClient,
+            VertexAIClient,
+            BedrockClient,
+        ):
+            with self.subTest(client=client_type.__name__):
+                self.assertEqual(
+                    tuple(inspect.signature(client_type.generate).parameters),
+                    expected,
+                )
 
     def make_bedrock_client(self, runtime_client, **client_kwargs):
         captured_sessions = []
@@ -1219,14 +1253,18 @@ class ClientBehaviorTests(unittest.TestCase):
         )
         fake_responses = FakeOpenAIResponses(fake_response)
 
-        client = OpenAIClient(config=OpenAIClientConfig(api_key="test"))
+        client = OpenAIClient(
+            config=OpenAIClientConfig(
+                api_key="test",
+                api_type=OpenAIApiType.RESPONSES,
+            )
+        )
         client._client = SimpleNamespace(responses=fake_responses)
 
         result = client.generate(
             model="gpt-test",
             messages=[UserMessage(content=text_parts("Answer in JSON"))],
             response_format=JSONSchemaResponse(json_schema=AnswerSchema),
-            api_type="responses",
         )
 
         self.assertEqual(result.content, {"answer": "pong"})
@@ -1280,13 +1318,17 @@ class ClientBehaviorTests(unittest.TestCase):
         )
         fake_responses = FakeOpenAIResponses(fake_response)
 
-        client = OpenAIClient(config=OpenAIClientConfig(api_key="test"))
+        client = OpenAIClient(
+            config=OpenAIClientConfig(
+                api_key="test",
+                api_type=OpenAIApiType.RESPONSES,
+            )
+        )
         client._client = SimpleNamespace(responses=fake_responses)
 
         result = client.generate(
             model="gpt-test",
             messages=[UserMessage(content=text_parts("Hello"))],
-            api_type=OpenAIApiType.RESPONSES,
         )
 
         self.assertEqual(result.thinking, ["Plan", "Reflect"])
@@ -1308,13 +1350,17 @@ class ClientBehaviorTests(unittest.TestCase):
         )
         fake_responses = FakeOpenAIResponses(fake_response)
 
-        client = OpenAIClient(config=OpenAIClientConfig(api_key="test"))
+        client = OpenAIClient(
+            config=OpenAIClientConfig(
+                api_key="test",
+                api_type=OpenAIApiType.RESPONSES,
+            )
+        )
         client._client = SimpleNamespace(responses=fake_responses)
 
         client.generate(
             model="gpt-test",
             messages=[UserMessage(content=text_parts("Hello"))],
-            api_type=OpenAIApiType.RESPONSES,
             reasoning_effort=ReasoningEffort(
                 effort=ReasoningEffortValue.HIGH,
                 tokens=2048,
@@ -1413,7 +1459,12 @@ class ClientBehaviorTests(unittest.TestCase):
         )
         fake_responses = FakeOpenAIResponses(events)
 
-        client = OpenAIClient(config=OpenAIClientConfig(api_key="test"))
+        client = OpenAIClient(
+            config=OpenAIClientConfig(
+                api_key="test",
+                api_type=OpenAIApiType.RESPONSES,
+            )
+        )
         client._client = SimpleNamespace(responses=fake_responses)
 
         chunks = list(
@@ -1422,7 +1473,6 @@ class ClientBehaviorTests(unittest.TestCase):
                 messages=[UserMessage(content=text_parts("Weather?"))],
                 tools=[make_tool("get_weather")],
                 stream=True,
-                api_type="responses",
             )
         )
 
@@ -1556,7 +1606,12 @@ class ClientBehaviorTests(unittest.TestCase):
         )
         fake_responses = FakeOpenAIResponses(events)
 
-        client = OpenAIClient(config=OpenAIClientConfig(api_key="test"))
+        client = OpenAIClient(
+            config=OpenAIClientConfig(
+                api_key="test",
+                api_type=OpenAIApiType.RESPONSES,
+            )
+        )
         client._client = SimpleNamespace(responses=fake_responses)
 
         chunks = list(
@@ -1564,7 +1619,6 @@ class ClientBehaviorTests(unittest.TestCase):
                 model="gpt-test",
                 messages=[UserMessage(content=text_parts("Hi"))],
                 stream=True,
-                api_type=OpenAIApiType.RESPONSES,
             )
         )
 
@@ -1661,6 +1715,15 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(context.exception.provider, "azure")
         self.assertIn("base_url or endpoint", context.exception.message)
 
+    def test_azure_config_does_not_accept_api_type(self):
+        with self.assertRaises(ValidationError):
+            AzureOpenAIClientConfig(
+                api_key="test",
+                endpoint="https://azure.example.openai.azure.com",
+                api_version="2024-10-21",
+                api_type=OpenAIApiType.RESPONSES,
+            )
+
     def test_azure_generate_wraps_provider_auth_errors(self):
         request = httpx.Request(
             "POST",
@@ -1694,11 +1757,47 @@ class ClientBehaviorTests(unittest.TestCase):
 
         self.assertEqual(context.exception.provider, "azure")
 
+    def test_azure_always_uses_chat_completions(self):
+        fake_response = SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(
+                        content="hello",
+                        tool_calls=None,
+                    )
+                )
+            ]
+        )
+        fake_completions = FakeOpenAICompletions(fake_response)
+        fake_responses = FakeOpenAIResponses(
+            Exception("responses API should not be used")
+        )
+
+        client = AzureOpenAIClient(
+            config=AzureOpenAIClientConfig(
+                api_key="test",
+                endpoint="https://azure.example.openai.azure.com",
+                api_version="2024-10-21",
+            )
+        )
+        client._client = SimpleNamespace(
+            chat=SimpleNamespace(completions=fake_completions),
+            responses=fake_responses,
+        )
+
+        result = client.generate(
+            model="gpt-test",
+            messages=[UserMessage(content=text_parts("Hello"))],
+        )
+
+        self.assertEqual(result.content[0].text, "hello")
+        self.assertTrue(fake_completions.calls)
+        self.assertFalse(fake_responses.calls)
+
     def test_vertex_init_uses_vertex_genai_client_configuration(self):
         with patch("llmai.google.client.genai.Client") as genai_client_cls:
             VertexAIClient(
                 config=VertexAIClientConfig(
-                    api_key="vertex-key",
                     project="vertex-project",
                     location="us-central1",
                 )
@@ -1706,7 +1805,7 @@ class ClientBehaviorTests(unittest.TestCase):
 
         genai_client_cls.assert_called_once_with(
             vertexai=True,
-            api_key="vertex-key",
+            api_key=None,
             credentials=None,
             project="vertex-project",
             location="us-central1",
@@ -1717,7 +1816,6 @@ class ClientBehaviorTests(unittest.TestCase):
         with patch("llmai.google.client.genai.Client") as genai_client_cls:
             VertexAIClient(
                 config=VertexAIClientConfig(
-                    api_key="vertex-key",
                     project="vertex-project",
                     location="us-central1",
                     base_url="https://vertex.example",
@@ -1726,7 +1824,7 @@ class ClientBehaviorTests(unittest.TestCase):
 
         genai_client_cls.assert_called_once()
         self.assertEqual(genai_client_cls.call_args.kwargs["vertexai"], True)
-        self.assertEqual(genai_client_cls.call_args.kwargs["api_key"], "vertex-key")
+        self.assertIsNone(genai_client_cls.call_args.kwargs["api_key"])
         self.assertEqual(genai_client_cls.call_args.kwargs["project"], "vertex-project")
         self.assertEqual(genai_client_cls.call_args.kwargs["location"], "us-central1")
         self.assertIsInstance(genai_client_cls.call_args.kwargs["http_options"], HttpOptions)
@@ -1734,6 +1832,17 @@ class ClientBehaviorTests(unittest.TestCase):
             genai_client_cls.call_args.kwargs["http_options"].base_url,
             "https://vertex.example",
         )
+
+    def test_vertex_config_rejects_api_key_with_project_or_location(self):
+        with self.assertRaises(LLMConfigurationError) as context:
+            VertexAIClientConfig(
+                api_key="vertex-key",
+                project="vertex-project",
+                location="us-central1",
+            )
+
+        self.assertEqual(context.exception.provider, "vertex")
+        self.assertIn("either api_key or project/location/credentials", context.exception.message)
 
     def test_vertex_init_wraps_configuration_errors(self):
         with patch(
@@ -2072,7 +2181,6 @@ class ClientBehaviorTests(unittest.TestCase):
                 [make_tool("weather"), make_tool("time")],
                 {"mode": "required", "tools": ["weather", "time"]},
                 None,
-                None,
             )
         )
 
@@ -2086,7 +2194,6 @@ class ClientBehaviorTests(unittest.TestCase):
             client._get_anthropic_tools_and_tool_choice_or_omit(
                 [make_web_search_tool()],
                 {"mode": "required", "tools": ["web_search"]},
-                None,
                 None,
             )
         )
@@ -2121,7 +2228,6 @@ class ClientBehaviorTests(unittest.TestCase):
             ],
             None,
             None,
-            None,
         )
 
         input_schema = anthropic_tools[0]["input_schema"]
@@ -2149,7 +2255,6 @@ class ClientBehaviorTests(unittest.TestCase):
                     },
                 )
             ],
-            None,
             None,
             None,
         )
@@ -2623,8 +2728,6 @@ class ClientBehaviorTests(unittest.TestCase):
         google_tools, tool_config = client._get_google_tools_and_tool_config(
             [make_tool("weather"), make_tool("time")],
             {"mode": "required", "tools": ["weather"]},
-            None,
-            None,
         )
 
         self.assertEqual(len(google_tools), 1)
@@ -2640,8 +2743,6 @@ class ClientBehaviorTests(unittest.TestCase):
         google_tools, tool_config = client._get_google_tools_and_tool_config(
             [make_web_search_tool()],
             {"mode": "required", "tools": ["web_search"]},
-            None,
-            None,
         )
 
         self.assertEqual(len(google_tools), 1)
@@ -2654,8 +2755,6 @@ class ClientBehaviorTests(unittest.TestCase):
         google_tools, tool_config = client._get_google_tools_and_tool_config(
             [make_tool("weather"), make_web_search_tool()],
             {"mode": "required", "tools": ["web_search", "weather"]},
-            None,
-            None,
         )
 
         self.assertEqual(len(google_tools), 2)
@@ -2694,8 +2793,6 @@ class ClientBehaviorTests(unittest.TestCase):
                 )
             ],
             None,
-            None,
-            None,
         )
 
         parameters = google_tools[0].function_declarations[0].parameters
@@ -2731,8 +2828,6 @@ class ClientBehaviorTests(unittest.TestCase):
                     },
                 )
             ],
-            None,
-            None,
             None,
         )
 
@@ -3150,22 +3245,18 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(payload_chunks[-1].thinking, ["Plan", "Reflect"])
         self.assertEqual(payload_chunks[-1].messages[-1].thinking, ["Plan", "Reflect"])
 
-    def test_google_generate_hides_internal_response_schema_tool(self):
+    def test_google_generate_uses_native_structured_output(self):
         fake_response = SimpleNamespace(
             candidates=[
                 SimpleNamespace(
                     content=SimpleNamespace(
                         parts=[
                             SimpleNamespace(
-                                text=None,
-                                thought=None,
+                                text='{"answer":"done"}',
+                                thought=False,
                                 inline_data=None,
                                 file_data=None,
-                                function_call=SimpleNamespace(
-                                    id="schema_1",
-                                    name="final_answer",
-                                    args={"answer": "done"},
-                                ),
+                                function_call=None,
                             )
                         ]
                     )
@@ -3185,16 +3276,13 @@ class ClientBehaviorTests(unittest.TestCase):
                 strict=False,
                 json_schema=AnswerSchema,
             ),
-            use_tools_for_structured_output=True,
         )
 
         self.assertEqual(result.content, {"answer": "done"})
         self.assertEqual(result.tool_calls, [])
         self.assertEqual(result.messages[-1].tool_calls, [])
-        self.assertEqual(
-            fake_models.calls[0]["config"].tools[0].function_declarations[0].name,
-            "final_answer",
-        )
+        self.assertEqual(fake_models.calls[0]["config"].response_mime_type, "application/json")
+        self.assertIsNotNone(fake_models.calls[0]["config"].response_json_schema)
 
     def test_google_generate_wraps_provider_auth_errors(self):
         fake_models = FakeGoogleModels(
@@ -3399,80 +3487,6 @@ class ClientBehaviorTests(unittest.TestCase):
                     sent_schema["properties"]["image"]["properties"]["prompt"],
                 )
 
-    def test_bedrock_tool_structured_output_sanitizes_response_schema_for_both_strict_values(self):
-        schema = {
-            "type": "object",
-            "properties": {
-                "bulletPoints": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "maxItems": 3,
-                },
-                "image": {
-                    "type": "object",
-                    "properties": {
-                        "prompt": {
-                            "type": "string",
-                            "minWords": 2,
-                        }
-                    },
-                    "required": ["prompt"],
-                },
-            },
-            "required": ["bulletPoints", "image"],
-        }
-
-        client, _, _ = self.make_bedrock_client(
-            FakeBedrockRuntimeClient(response={}),
-            region="us-east-1",
-            aws_access_key_id="aws-id",
-            aws_secret_access_key="aws-secret",
-        )
-
-        for strict in (False, True):
-            with self.subTest(strict=strict):
-                tool_config = client._get_bedrock_tool_config(
-                    None,
-                    None,
-                    JSONSchemaResponse(
-                        name="final_answer",
-                        strict=strict,
-                        json_schema=schema,
-                    ),
-                    True,
-                )
-
-                response_schema = tool_config["tools"][0]["toolSpec"]["inputSchema"]["json"]
-                self.assertNotIn("maxItems", response_schema["properties"]["bulletPoints"])
-                self.assertNotIn(
-                    "minWords",
-                    response_schema["properties"]["image"]["properties"]["prompt"],
-                )
-                self.assertEqual(tool_config["tools"][0]["toolSpec"]["strict"], strict)
-
-    def test_bedrock_tool_structured_output_uses_custom_name_and_strict(self):
-        fake_runtime = FakeBedrockRuntimeClient(response={})
-        client, _, _ = self.make_bedrock_client(
-            fake_runtime,
-            region="us-east-1",
-            aws_access_key_id="aws-id",
-            aws_secret_access_key="aws-secret",
-        )
-
-        tool_config = client._get_bedrock_tool_config(
-            None,
-            None,
-            JSONSchemaResponse(
-                name="final_answer",
-                strict=False,
-                json_schema=AnswerSchema,
-            ),
-            True,
-        )
-
-        self.assertEqual(tool_config["tools"][0]["toolSpec"]["name"], "final_answer")
-        self.assertFalse(tool_config["tools"][0]["toolSpec"]["strict"])
-
     def test_bedrock_ignores_web_search_tool(self):
         fake_runtime = FakeBedrockRuntimeClient(response={})
         client, _, _ = self.make_bedrock_client(
@@ -3485,8 +3499,6 @@ class ClientBehaviorTests(unittest.TestCase):
         tool_config = client._get_bedrock_tool_config(
             [make_web_search_tool()],
             {"mode": "required", "tools": ["web_search"]},
-            None,
-            None,
         )
 
         self.assertIsNone(tool_config)

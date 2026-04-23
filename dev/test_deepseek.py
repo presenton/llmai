@@ -1,3 +1,5 @@
+import os
+
 from dev.shared import SLIDE_SCHEMA, TOOL_CHOICE, TOOL_DEFINITIONS, WEB_SEARCH_TOOL
 from llmai import DeepSeekClient, DeepSeekClientConfig
 from llmai.shared.messages import UserMessage
@@ -5,12 +7,15 @@ from llmai.shared.reasoning import ReasoningEffort, ReasoningSummary
 from llmai.shared.response_formats import JSONSchemaResponse
 
 
-MODEL = "deepseek-reasoner"
-CLIENT_CONFIG = DeepSeekClientConfig(api_key="<your-deepseek-api-key>")
+MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-coder")
 
 
 def make_client() -> DeepSeekClient:
-    return DeepSeekClient(config=CLIENT_CONFIG)
+    return DeepSeekClient(
+        config=DeepSeekClientConfig(
+            api_key=os.getenv("DEEPSEEK_API_KEY"),
+        )
+    )
 
 
 def test_generate():
@@ -71,7 +76,9 @@ def test_generate_web_search():
     response = client.generate(
         model=MODEL,
         messages=[
-            UserMessage(content="What was a positive news story from today? Cite sources."),
+            UserMessage(
+                content="What was a positive news story from today? Cite sources."
+            ),
         ],
         tools=[WEB_SEARCH_TOOL],
     )
@@ -138,7 +145,9 @@ def test_stream_web_search():
     for chunk in client.generate(
         model=MODEL,
         messages=[
-            UserMessage(content="What was a positive news story from today? Cite sources."),
+            UserMessage(
+                content="What was a positive news story from today? Cite sources."
+            ),
         ],
         tools=[WEB_SEARCH_TOOL],
         stream=True,
@@ -148,7 +157,7 @@ def test_stream_web_search():
 
 
 # test_generate()
-# test_generate_structured()
+test_generate_structured()
 # test_generate_tool_calls()
 # test_generate_web_search()
 # test_stream()

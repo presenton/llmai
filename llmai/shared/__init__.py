@@ -9,6 +9,7 @@ from llmai.shared.configs import (
     ClientConfig,
     DeepSeekClientConfig,
     GoogleClientConfig,
+    OpenAIApiType,
     OpenAIClientConfig,
     VertexAIClientConfig,
 )
@@ -112,6 +113,7 @@ __all__ = [
     "JSONObjectResponse",
     "LLMTool",
     "OpenAIClientConfig",
+    "OpenAIApiType",
     "ResponseContent",
     "ResponseResult",
     "ResponseFormat",

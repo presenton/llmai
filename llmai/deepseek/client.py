@@ -11,6 +11,7 @@ from openai.types.shared_params.function_definition import FunctionDefinition
 from llmai.openai.client import (
     OPENAI_SUPPORTED_SCHEMA_KEYS,
     OPENAI_SUPPORTED_STRING_FORMATS,
+    OpenAIApiType,
     OpenAIClient,
 )
 from llmai.shared.configs import DeepSeekClientConfig
@@ -59,6 +60,7 @@ class DeepSeekClient(OpenAIClient):
         logger: Logger | None = None,
     ):
         self._logger = logger
+        self._api_type = OpenAIApiType.COMPLETIONS
         self._base_url = config.base_url or self.DEFAULT_BASE_URL
 
         try:

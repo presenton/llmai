@@ -32,7 +32,6 @@ from llmai.shared.response_formats import (
     JSONSchemaResponse,
     JSONObjectResponse,
     ResponseFormat,
-    get_response_format_name,
     get_response_format_strict,
     get_response_schema,
 )
@@ -337,20 +336,6 @@ class BedrockClient(BaseClient):
             for tool in tools
         ]
 
-    def _response_schema_tool(
-        self,
-        response_format: ResponseFormat | None,
-        response_schema: dict,
-    ) -> dict[str, object]:
-        return {
-            "toolSpec": {
-                "name": get_response_format_name(response_format, default="response"),
-                "description": "Provide the final response to the user",
-                "inputSchema": {"json": response_schema},
-                "strict": get_response_format_strict(response_format, default=True),
-            }
-        }
-
     def _get_bedrock_response_schema(
         self,
         response_format: ResponseFormat | None,
@@ -374,20 +359,12 @@ class BedrockClient(BaseClient):
         self,
         tools: list[LLMTool] | None,
         tool_choice: ToolChoice | None,
-        response_format: ResponseFormat | None,
-        use_tools_for_structured_output: bool | None,
     ) -> dict[str, object] | None:
         resolved = filter_resolved_tools_for_provider(
             resolve_tools(tools, tool_choice),
             supports_web_search=False,
         )
         bedrock_tools = self._llm_tools_to_bedrock_tools(resolved.function_tools)
-
-        response_schema = self._get_bedrock_response_schema(response_format)
-        if use_tools_for_structured_output and response_schema:
-            bedrock_tools.append(
-                self._response_schema_tool(response_format, response_schema)
-            )
 
         if not bedrock_tools:
             return None
@@ -401,19 +378,13 @@ class BedrockClient(BaseClient):
                 }
             else:
                 config["toolChoice"] = {"any": {}}
-        elif use_tools_for_structured_output and response_schema:
-            config["toolChoice"] = {"any": {}}
 
         return config
 
     def _get_output_config(
         self,
         response_format: ResponseFormat | None,
-        use_tools_for_structured_output: bool | None,
     ) -> dict[str, object] | None:
-        if use_tools_for_structured_output:
-            return None
-
         response_schema = self._get_bedrock_response_schema(response_format)
         if not response_schema:
             return None
@@ -432,20 +403,14 @@ class BedrockClient(BaseClient):
     def _final_content(
         self,
         content: list[TextContentPart | ImageContentPart] | None,
-        response_schema_content: dict | None,
         user_tool_calls: list[AssistantToolCall],
         response_format: ResponseFormat | None,
-        use_tools_for_structured_output: bool | None,
     ) -> object:
-        if response_schema_content is not None:
-            return response_schema_content
-
         text_content = "".join(
             part.text for part in (content or []) if isinstance(part, TextContentPart)
         )
         if (
             text_content
-            and not use_tools_for_structured_output
             and isinstance(response_format, (JSONSchemaResponse, JSONObjectResponse))
         ):
             return json.loads(text_content)
@@ -478,8 +443,6 @@ class BedrockClient(BaseClient):
         content_parts: list[TextContentPart | ImageContentPart],
         thinking_blocks: list[str],
         user_tool_calls: list[AssistantToolCall],
-        response_schema_holder: list[dict | None],
-        response_schema_tool_name: str,
     ) -> None:
         text = block.get("text")
         if text:
@@ -513,25 +476,14 @@ class BedrockClient(BaseClient):
                 name=tool_use["name"],
                 arguments=arguments,
             )
-            if tool_call.name == response_schema_tool_name:
-                response_schema_holder[0] = self._parse_tool_arguments(
-                    tool_call.arguments
-                )
-            else:
-                user_tool_calls.append(tool_call)
+            user_tool_calls.append(tool_call)
 
     def _response_message_to_assistant_message(
         self,
         message: dict[str, object] | None,
-        response_format: ResponseFormat | None,
-    ) -> tuple[AssistantMessage, dict | None, list[AssistantToolCall]]:
+    ) -> tuple[AssistantMessage, list[AssistantToolCall]]:
         content_parts: list[TextContentPart | ImageContentPart] = []
         thinking_blocks: list[str] = []
-        response_schema_holder: list[dict | None] = [None]
-        response_schema_tool_name = get_response_format_name(
-            response_format,
-            default="response",
-        )
         user_tool_calls: list[AssistantToolCall] = []
 
         for block in (message or {}).get("content") or []:
@@ -541,8 +493,6 @@ class BedrockClient(BaseClient):
                     content_parts=content_parts,
                     thinking_blocks=thinking_blocks,
                     user_tool_calls=user_tool_calls,
-                    response_schema_holder=response_schema_holder,
-                    response_schema_tool_name=response_schema_tool_name,
                 )
 
         assistant_message = AssistantMessage(
@@ -550,7 +500,7 @@ class BedrockClient(BaseClient):
             thinking=collapse_thinking_blocks(thinking_blocks),
             tool_calls=user_tool_calls,
         )
-        return assistant_message, response_schema_holder[0], user_tool_calls
+        return assistant_message, user_tool_calls
 
     def _converse_kwargs(
         self,
@@ -563,7 +513,6 @@ class BedrockClient(BaseClient):
         response_format: ResponseFormat | None,
         max_tokens: int | None,
         extra_body: dict | None,
-        use_tools_for_structured_output: bool | None,
     ) -> dict[str, object]:
         kwargs: dict[str, object] = {
             "modelId": model,
@@ -585,16 +534,11 @@ class BedrockClient(BaseClient):
         tool_config = self._get_bedrock_tool_config(
             tools,
             tool_choice,
-            response_format,
-            use_tools_for_structured_output,
         )
         if tool_config:
             kwargs["toolConfig"] = tool_config
 
-        output_config = self._get_output_config(
-            response_format,
-            use_tools_for_structured_output,
-        )
+        output_config = self._get_output_config(response_format)
         if output_config:
             kwargs["outputConfig"] = output_config
 
@@ -629,7 +573,6 @@ class BedrockClient(BaseClient):
         max_tokens: int | None = None,
         reasoning_effort: ReasoningEffort | None = None,
         extra_body: dict | None = None,
-        use_tools_for_structured_output: bool | None = None,
         stream: bool = False,
     ) -> ResponseResult:
         if stream:
@@ -643,7 +586,6 @@ class BedrockClient(BaseClient):
                 max_tokens=max_tokens,
                 reasoning_effort=reasoning_effort,
                 extra_body=extra_body,
-                use_tools_for_structured_output=use_tools_for_structured_output,
             )
 
         return self._generate_once(
@@ -656,7 +598,6 @@ class BedrockClient(BaseClient):
             max_tokens=max_tokens,
             reasoning_effort=reasoning_effort,
             extra_body=extra_body,
-            use_tools_for_structured_output=use_tools_for_structured_output,
         )
 
     def _generate_once(
@@ -671,7 +612,6 @@ class BedrockClient(BaseClient):
         max_tokens: int | None = None,
         reasoning_effort: ReasoningEffort | None = None,
         extra_body: dict | None = None,
-        use_tools_for_structured_output: bool | None = None,
     ) -> ResponseContent:
         del reasoning_effort
 
@@ -687,27 +627,21 @@ class BedrockClient(BaseClient):
                     response_format=response_format,
                     max_tokens=max_tokens,
                     extra_body=extra_body,
-                    use_tools_for_structured_output=use_tools_for_structured_output,
                 )
             )
             duration_seconds = perf_counter() - start_time
 
             response_message = ((response.get("output") or {}).get("message")) or {}
-            assistant_message, response_schema_content, user_tool_calls = (
-                self._response_message_to_assistant_message(
-                    response_message,
-                    response_format,
-                )
+            assistant_message, user_tool_calls = self._response_message_to_assistant_message(
+                response_message
             )
             new_messages = [*messages, assistant_message]
 
             return ResponseContent(
                 content=self._final_content(
                     assistant_message.content,
-                    response_schema_content,
                     user_tool_calls,
                     response_format,
-                    use_tools_for_structured_output,
                 ),
                 thinking=assistant_message.thinking,
                 messages=new_messages,
@@ -730,7 +664,6 @@ class BedrockClient(BaseClient):
         max_tokens: int | None = None,
         reasoning_effort: ReasoningEffort | None = None,
         extra_body: dict | None = None,
-        use_tools_for_structured_output: bool | None = None,
     ):
         del reasoning_effort
 
@@ -746,7 +679,6 @@ class BedrockClient(BaseClient):
                     response_format=response_format,
                     max_tokens=max_tokens,
                     extra_body=extra_body,
-                    use_tools_for_structured_output=use_tools_for_structured_output,
                 )
             )
             current_chunk_type = None
@@ -756,10 +688,6 @@ class BedrockClient(BaseClient):
             content_blocks: dict[int, dict[str, Any]] = {}
             thinking_blocks_by_index: dict[int, str] = {}
             thinking_order: list[int] = []
-            response_schema_tool_name = get_response_format_name(
-                response_format,
-                default="response",
-            )
 
             for event in response.get("stream") or []:
                 if not isinstance(event, dict):
@@ -937,7 +865,6 @@ class BedrockClient(BaseClient):
                             source["s3Location"] = delta_source["s3Location"]
 
             content_parts: list[TextContentPart | ImageContentPart] = []
-            response_schema_holder: list[dict | None] = [None]
             user_tool_calls: list[AssistantToolCall] = []
             for index in sorted(content_blocks):
                 block = content_blocks[index]
@@ -946,11 +873,8 @@ class BedrockClient(BaseClient):
                     content_parts=content_parts,
                     thinking_blocks=[],
                     user_tool_calls=user_tool_calls,
-                    response_schema_holder=response_schema_holder,
-                    response_schema_tool_name=response_schema_tool_name,
                 )
 
-            response_schema_content = response_schema_holder[0]
             assistant_message = AssistantMessage(
                 content=collapse_content_parts(content_parts),
                 thinking=collapse_thinking_blocks(
@@ -990,10 +914,8 @@ class BedrockClient(BaseClient):
             yield ResponseStreamCompletionChunk(
                 content=self._final_content(
                     assistant_message.content,
-                    response_schema_content,
                     user_tool_calls,
                     response_format,
-                    use_tools_for_structured_output,
                 ),
                 thinking=assistant_message.thinking,
                 messages=new_messages,

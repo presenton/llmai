@@ -1,3 +1,5 @@
+import os
+
 from dev.shared import SLIDE_SCHEMA, TOOL_CHOICE, TOOL_DEFINITIONS, WEB_SEARCH_TOOL
 from llmai import ChatGPTClient, ChatGPTClientConfig
 from llmai.shared.messages import UserMessage
@@ -5,12 +7,20 @@ from llmai.shared.reasoning import ReasoningEffort, ReasoningSummary
 from llmai.shared.response_formats import JSONSchemaResponse
 
 
-MODEL = "chatgpt-4o-latest"
-CLIENT_CONFIG = ChatGPTClientConfig(access_token="<your-chatgpt-access-token>")
+MODEL = os.getenv("CHATGPT_MODEL", "chatgpt-4o-latest")
+
+
+def make_client() -> ChatGPTClient:
+    return ChatGPTClient(
+        config=ChatGPTClientConfig(
+            access_token=os.getenv("CHATGPT_ACCESS_TOKEN"),
+            account_id=os.getenv("CHATGPT_ACCOUNT_ID"),
+        )
+    )
 
 
 def test_generate():
-    client = ChatGPTClient(config=CLIENT_CONFIG)
+    client = make_client()
 
     response = client.generate(
         model=MODEL,
@@ -25,7 +35,7 @@ def test_generate():
 
 
 def test_generate_structured():
-    client = ChatGPTClient(config=CLIENT_CONFIG)
+    client = make_client()
 
     response = client.generate(
         model=MODEL,
@@ -45,7 +55,7 @@ def test_generate_structured():
 
 
 def test_generate_tool_calls():
-    client = ChatGPTClient(config=CLIENT_CONFIG)
+    client = make_client()
 
     response = client.generate(
         model=MODEL,
@@ -62,7 +72,7 @@ def test_generate_tool_calls():
 
 
 def test_generate_web_search():
-    client = ChatGPTClient(config=CLIENT_CONFIG)
+    client = make_client()
 
     response = client.generate(
         model=MODEL,
@@ -78,7 +88,7 @@ def test_generate_web_search():
 
 
 def test_stream():
-    client = ChatGPTClient(config=CLIENT_CONFIG)
+    client = make_client()
 
     print("ChatGPT plain stream")
     for chunk in client.generate(
@@ -94,7 +104,7 @@ def test_stream():
 
 
 def test_stream_structured():
-    client = ChatGPTClient(config=CLIENT_CONFIG)
+    client = make_client()
 
     print("ChatGPT structured stream")
     for chunk in client.generate(
@@ -113,7 +123,7 @@ def test_stream_structured():
 
 
 def test_stream_tool_calls():
-    client = ChatGPTClient(config=CLIENT_CONFIG)
+    client = make_client()
 
     print("ChatGPT tool-call stream")
     for chunk in client.generate(
@@ -131,7 +141,7 @@ def test_stream_tool_calls():
 
 
 def test_stream_web_search():
-    client = ChatGPTClient(config=CLIENT_CONFIG)
+    client = make_client()
 
     print("ChatGPT web-search stream")
     for chunk in client.generate(

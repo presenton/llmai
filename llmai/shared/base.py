@@ -124,7 +124,6 @@ class BaseClient(ABC):
         max_tokens: int | None = None,
         reasoning_effort: ReasoningEffort | None = None,
         extra_body: dict | None = None,
-        use_tools_for_structured_output: bool | None = None,
         stream: bool = False,
     ) -> ResponseResult:
         raise NotImplementedError

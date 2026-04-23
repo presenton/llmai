@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import base64
 import json
-from enum import Enum
 from logging import Logger
 from time import perf_counter
 from uuid import uuid4
@@ -33,9 +32,9 @@ from openai.types.shared_params.response_format_json_schema import (
 )
 from openai.types.shared_params.response_format_text import ResponseFormatText
 
-from llmai.shared.configs import OpenAIClientConfig
+from llmai.shared.configs import OpenAIApiType, OpenAIClientConfig
 from llmai.shared.base import BaseClient
-from llmai.shared.errors import LLMError, raise_llm_error
+from llmai.shared.errors import LLMError, configuration_error, raise_llm_error
 from llmai.shared.messages import (
     AssistantContent,
     AssistantMessage,
@@ -115,13 +114,6 @@ OPENAI_SUPPORTED_SCHEMA_KEYS = {
     "required",
     "type",
 }
-
-
-class OpenAIApiType(str, Enum):
-    COMPLETIONS = "completions"
-    RESPONSES = "responses"
-
-
 class OpenAIClient(BaseClient):
     PROVIDER_NAME = "openai"
     PROVIDER_LABEL = "OpenAI"
@@ -133,6 +125,12 @@ class OpenAIClient(BaseClient):
         logger: Logger | None = None,
     ):
         super().__init__(logger=logger)
+        self._api_type = self._coerce_api_type(config.api_type)
+        if self._api_type is None:
+            raise configuration_error(
+                f"Unsupported OpenAI api_type: {config.api_type}",
+                provider=self.PROVIDER_NAME,
+            )
         try:
             self._client = OpenAI(
                 base_url=config.base_url,
@@ -721,16 +719,10 @@ class OpenAIClient(BaseClient):
         max_tokens: int | None = None,
         reasoning_effort: ReasoningEffort | None = None,
         extra_body: dict | None = None,
-        use_tools_for_structured_output: bool | None = None,
-        api_type: OpenAIApiType = OpenAIApiType.COMPLETIONS,
         stream: bool = False,
     ) -> ResponseResult:
-        resolved_api_type = self._coerce_api_type(api_type)
-        if resolved_api_type is None:
-            raise LLMError(400, f"Unsupported OpenAI api_type: {api_type}")
-
         if stream:
-            if resolved_api_type == OpenAIApiType.RESPONSES:
+            if self._api_type == OpenAIApiType.RESPONSES:
                 return self._generate_responses_stream(
                     model=model,
                     messages=messages,
@@ -741,7 +733,6 @@ class OpenAIClient(BaseClient):
                     max_tokens=max_tokens,
                     reasoning_effort=reasoning_effort,
                     extra_body=extra_body,
-                    use_tools_for_structured_output=use_tools_for_structured_output,
                 )
 
             return self._generate_completions_stream(
@@ -754,10 +745,9 @@ class OpenAIClient(BaseClient):
                 max_tokens=max_tokens,
                 reasoning_effort=reasoning_effort,
                 extra_body=extra_body,
-                use_tools_for_structured_output=use_tools_for_structured_output,
             )
 
-        if resolved_api_type == OpenAIApiType.RESPONSES:
+        if self._api_type == OpenAIApiType.RESPONSES:
             return self._generate_responses_once(
                 model=model,
                 messages=messages,
@@ -768,7 +758,6 @@ class OpenAIClient(BaseClient):
                 max_tokens=max_tokens,
                 reasoning_effort=reasoning_effort,
                 extra_body=extra_body,
-                use_tools_for_structured_output=use_tools_for_structured_output,
             )
 
         return self._generate_completions_once(
@@ -781,7 +770,6 @@ class OpenAIClient(BaseClient):
             max_tokens=max_tokens,
             reasoning_effort=reasoning_effort,
             extra_body=extra_body,
-            use_tools_for_structured_output=use_tools_for_structured_output,
         )
 
     def _coerce_api_type(
@@ -808,10 +796,7 @@ class OpenAIClient(BaseClient):
         max_tokens: int | None = None,
         reasoning_effort: ReasoningEffort | None = None,
         extra_body: dict | None = None,
-        use_tools_for_structured_output: bool | None = None,
     ) -> ResponseContent:
-        del use_tools_for_structured_output
-
         openai_tools, openai_tool_choice = (
             self._get_openai_tools_and_tool_choice_or_omit(tools, tool_choice)
         )
@@ -869,10 +854,7 @@ class OpenAIClient(BaseClient):
         max_tokens: int | None = None,
         reasoning_effort: ReasoningEffort | None = None,
         extra_body: dict | None = None,
-        use_tools_for_structured_output: bool | None = None,
     ):
-        del use_tools_for_structured_output
-
         openai_tools, openai_tool_choice = (
             self._get_openai_tools_and_tool_choice_or_omit(tools, tool_choice)
         )
@@ -1041,10 +1023,7 @@ class OpenAIClient(BaseClient):
         max_tokens: int | None = None,
         reasoning_effort: ReasoningEffort | None = None,
         extra_body: dict | None = None,
-        use_tools_for_structured_output: bool | None = None,
     ) -> ResponseContent:
-        del use_tools_for_structured_output
-
         openai_tools, openai_tool_choice = (
             self._get_openai_responses_tools_and_tool_choice_or_omit(
                 tools,
@@ -1102,10 +1081,7 @@ class OpenAIClient(BaseClient):
         max_tokens: int | None = None,
         reasoning_effort: ReasoningEffort | None = None,
         extra_body: dict | None = None,
-        use_tools_for_structured_output: bool | None = None,
     ):
-        del use_tools_for_structured_output
-
         openai_tools, openai_tool_choice = (
             self._get_openai_responses_tools_and_tool_choice_or_omit(
                 tools,

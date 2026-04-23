@@ -1,3 +1,5 @@
+import os
+
 from dev.shared import SLIDE_SCHEMA, TOOL_CHOICE, TOOL_DEFINITIONS, WEB_SEARCH_TOOL
 from llmai.openai import OpenAIApiType, OpenAIClient, OpenAIClientConfig
 from llmai.shared.messages import UserMessage
@@ -9,13 +11,21 @@ from llmai.shared.reasoning import (
 from llmai.shared.response_formats import JSONSchemaResponse
 
 
-MODEL = "gpt-5.4"
+MODEL = os.getenv("OPENAI_MODEL", "gpt-5.4")
 API_TYPE = OpenAIApiType.RESPONSES
-CLIENT_CONFIG = OpenAIClientConfig(api_key="<your-openai-api-key>")
+
+
+def make_client() -> OpenAIClient:
+    return OpenAIClient(
+        config=OpenAIClientConfig(
+            api_key=os.getenv("OPENAI_API_KEY"),
+            api_type=API_TYPE,
+        )
+    )
 
 
 def test_generate():
-    client = OpenAIClient(config=CLIENT_CONFIG)
+    client = make_client()
 
     response = client.generate(
         model=MODEL,
@@ -24,7 +34,6 @@ def test_generate():
                 content="Think as long as you want to define who is better at math AI or Human? You must think and answer"
             ),
         ],
-        api_type=API_TYPE,
         reasoning_effort=ReasoningEffort(
             effort=ReasoningEffortValue.HIGH,
             summary=ReasoningSummary.DETAILED,
@@ -36,7 +45,7 @@ def test_generate():
 
 
 def test_generate_structured():
-    client = OpenAIClient(config=CLIENT_CONFIG)
+    client = make_client()
 
     response = client.generate(
         model=MODEL,
@@ -52,7 +61,6 @@ def test_generate_structured():
             effort=ReasoningEffortValue.HIGH,
             summary=ReasoningSummary.DETAILED,
         ),
-        api_type=API_TYPE,
     )
     print("OpenAI structured generation")
     print(response)
@@ -60,7 +68,7 @@ def test_generate_structured():
 
 
 def test_generate_tool_calls():
-    client = OpenAIClient(config=CLIENT_CONFIG)
+    client = make_client()
 
     response = client.generate(
         model=MODEL,
@@ -73,7 +81,6 @@ def test_generate_tool_calls():
         ),
         tools=TOOL_DEFINITIONS,
         tool_choice=TOOL_CHOICE,
-        api_type=API_TYPE,
     )
     print("OpenAI tool-call generation")
     print(response)
@@ -81,7 +88,7 @@ def test_generate_tool_calls():
 
 
 def test_generate_web_search():
-    client = OpenAIClient(config=CLIENT_CONFIG)
+    client = make_client()
 
     response = client.generate(
         model=MODEL,
@@ -91,7 +98,6 @@ def test_generate_web_search():
             ),
         ],
         tools=[WEB_SEARCH_TOOL],
-        api_type=API_TYPE,
         reasoning_effort=ReasoningEffort(
             effort=ReasoningEffortValue.LOW,
         ),
@@ -102,7 +108,7 @@ def test_generate_web_search():
 
 
 def test_stream():
-    client = OpenAIClient(config=CLIENT_CONFIG)
+    client = make_client()
 
     print("OpenAI plain stream")
     for chunk in client.generate(
@@ -114,7 +120,6 @@ def test_stream():
             effort=ReasoningEffortValue.HIGH,
             summary=ReasoningSummary.DETAILED,
         ),
-        api_type=API_TYPE,
         stream=True,
     ):
         print(chunk)
@@ -122,7 +127,7 @@ def test_stream():
 
 
 def test_stream_structured():
-    client = OpenAIClient(config=CLIENT_CONFIG)
+    client = make_client()
 
     print("OpenAI structured stream")
     for chunk in client.generate(
@@ -137,7 +142,6 @@ def test_stream_structured():
             effort=ReasoningEffortValue.HIGH,
             summary=ReasoningSummary.DETAILED,
         ),
-        api_type=API_TYPE,
         stream=True,
     ):
         print(chunk)
@@ -145,7 +149,7 @@ def test_stream_structured():
 
 
 def test_stream_tool_calls():
-    client = OpenAIClient(config=CLIENT_CONFIG)
+    client = make_client()
 
     print("OpenAI tool-call stream")
     for chunk in client.generate(
@@ -155,7 +159,6 @@ def test_stream_tool_calls():
         ],
         tools=TOOL_DEFINITIONS,
         tool_choice=TOOL_CHOICE,
-        api_type=API_TYPE,
         reasoning_effort=ReasoningEffort(
             effort=ReasoningEffortValue.HIGH,
             summary=ReasoningSummary.DETAILED,
@@ -167,7 +170,7 @@ def test_stream_tool_calls():
 
 
 def test_stream_web_search():
-    client = OpenAIClient(config=CLIENT_CONFIG)
+    client = make_client()
 
     print("OpenAI web-search stream")
     for chunk in client.generate(
@@ -178,7 +181,6 @@ def test_stream_web_search():
             ),
         ],
         tools=[WEB_SEARCH_TOOL],
-        api_type=API_TYPE,
         reasoning_effort=ReasoningEffort(
             effort=ReasoningEffortValue.LOW,
         ),
@@ -190,10 +192,10 @@ def test_stream_web_search():
 
 
 # test_generate()
-# test_generate_structured()
+test_generate_structured()
 # test_generate_tool_calls()
 # test_generate_web_search()
 # test_stream()
 # test_stream_structured()
 # test_stream_tool_calls()
-test_stream_web_search()
+# test_stream_web_search()

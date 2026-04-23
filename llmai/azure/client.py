@@ -6,7 +6,7 @@ from logging import Logger
 from openai import AzureOpenAI
 
 from llmai.openai.client import OpenAIClient
-from llmai.shared.configs import AzureOpenAIClientConfig
+from llmai.shared.configs import AzureOpenAIClientConfig, OpenAIApiType
 from llmai.shared.errors import configuration_error, raise_llm_error
 
 
@@ -21,6 +21,7 @@ class AzureOpenAIClient(OpenAIClient):
         logger: Logger | None = None,
     ):
         self._logger = logger
+        self._api_type = OpenAIApiType.COMPLETIONS
 
         resolved_base_url, resolved_endpoint = self._resolve_base_url_and_endpoint(
             base_url=config.base_url,
