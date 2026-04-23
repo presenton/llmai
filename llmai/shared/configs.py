@@ -45,6 +45,7 @@ class OpenAIApiType(str, Enum):
 class OpenAIClientConfig(APIKeyClientConfig):
     provider: Literal["openai"] = "openai"
     api_type: OpenAIApiType = OpenAIApiType.COMPLETIONS
+    provide_system_message_as_instructions: bool = False
 
 
 class AnthropicClientConfig(APIKeyClientConfig):

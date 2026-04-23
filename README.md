@@ -135,7 +135,7 @@ result = client.generate(
 print(result.content)
 ```
 
-`ChatGPTClient` targets ChatGPT's Codex backend at `https://chatgpt.com/backend-api/codex` and always uses the Responses API internally. Credentials and optional overrides are passed through `ChatGPTClientConfig`, which uses `access_token`.
+`ChatGPTClient` targets ChatGPT's Codex backend at `https://chatgpt.com/backend-api/codex` and always uses the Responses API internally. Credentials and optional overrides are passed through `ChatGPTClientConfig`, which uses `access_token`. When you include `SystemMessage` entries, ChatGPT collects them in order and sends them through the Responses API `instructions` field; otherwise it falls back to `instructions="Follow the prompt"`.
 
 ## DeepSeek
 
@@ -355,6 +355,8 @@ Current `llmai` behavior:
 - Amazon Bedrock: ignores hosted `web_search`
 
 `web_search` can be mixed with normal function tools in the same request.
+
+If you use `OpenAIClient` with `api_type=OpenAIApiType.RESPONSES`, `OpenAIClientConfig(provide_system_message_as_instructions=True)` lifts all `SystemMessage` values into the top-level Responses API `instructions` field. The default is `False`, which keeps system messages inline in `input`.
 
 ## Streaming
 

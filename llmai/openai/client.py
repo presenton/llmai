@@ -92,7 +92,6 @@ OPENAI_SUPPORTED_STRING_FORMATS = {
     "ipv6",
     "uuid",
 }
-OPENAI_RESPONSES_INSTRUCTIONS = "Follow the prompt"
 OPENAI_SUPPORTED_SCHEMA_KEYS = {
     "$defs",
     "$ref",
@@ -115,6 +114,8 @@ OPENAI_SUPPORTED_SCHEMA_KEYS = {
     "required",
     "type",
 }
+
+
 class OpenAIClient(BaseClient):
     PROVIDER_NAME = "openai"
     PROVIDER_LABEL = "OpenAI"
@@ -132,6 +133,9 @@ class OpenAIClient(BaseClient):
                 f"Unsupported OpenAI api_type: {config.api_type}",
                 provider=self.PROVIDER_NAME,
             )
+        self._provide_system_message_as_instructions = (
+            config.provide_system_message_as_instructions
+        )
         try:
             self._client = OpenAI(
                 base_url=config.base_url,
@@ -332,6 +336,8 @@ class OpenAIClient(BaseClient):
 
         for message in messages:
             if isinstance(message, SystemMessage):
+                if self._provide_system_message_as_instructions:
+                    continue
                 openai_input.append(
                     {
                         "type": "message",
@@ -365,6 +371,21 @@ class OpenAIClient(BaseClient):
                 )
 
         return openai_input
+
+    def _messages_to_openai_responses_instructions(
+        self,
+        messages: list[Message],
+    ) -> str | None:
+        if not self._provide_system_message_as_instructions:
+            return None
+
+        system_messages = [
+            message.content for message in messages if isinstance(message, SystemMessage)
+        ]
+        if not system_messages:
+            return None
+
+        return "\n\n".join(system_messages)
 
     def _messages_to_openai_messages(
         self,
@@ -1035,21 +1056,25 @@ class OpenAIClient(BaseClient):
             reasoning_effort,
             extra_body
         )
+        response_input = self._messages_to_openai_responses_input(messages)
+        request_kwargs = {
+            "model": model,
+            "input": response_input,
+            "temperature": temperature,
+            "text": self._get_openai_responses_text_or_omit(response_format),
+            "tools": openai_tools,
+            "tool_choice": openai_tool_choice,
+            "reasoning": reasoning,
+            "max_output_tokens": max_tokens,
+            "extra_body": request_extra_body,
+        }
+        instructions = self._messages_to_openai_responses_instructions(messages)
+        if instructions is not None:
+            request_kwargs["instructions"] = instructions
 
         try:
             start_time = perf_counter()
-            response = self._client.responses.create(
-                model=model,
-                instructions=OPENAI_RESPONSES_INSTRUCTIONS,
-                input=self._messages_to_openai_responses_input(messages),
-                temperature=temperature,
-                text=self._get_openai_responses_text_or_omit(response_format),
-                tools=openai_tools,
-                tool_choice=openai_tool_choice,
-                reasoning=reasoning,
-                max_output_tokens=max_tokens,
-                extra_body=request_extra_body,
-            )
+            response = self._client.responses.create(**request_kwargs)
             duration_seconds = perf_counter() - start_time
 
             assistant_message = self._responses_output_to_assistant_message(
@@ -1094,22 +1119,26 @@ class OpenAIClient(BaseClient):
             reasoning_effort,
             extra_body
         )
+        response_input = self._messages_to_openai_responses_input(messages)
+        request_kwargs = {
+            "model": model,
+            "input": response_input,
+            "temperature": temperature,
+            "text": self._get_openai_responses_text_or_omit(response_format),
+            "tools": openai_tools,
+            "tool_choice": openai_tool_choice,
+            "reasoning": reasoning,
+            "max_output_tokens": max_tokens,
+            "extra_body": request_extra_body,
+            "stream": True,
+        }
+        instructions = self._messages_to_openai_responses_instructions(messages)
+        if instructions is not None:
+            request_kwargs["instructions"] = instructions
 
         try:
             start_time = perf_counter()
-            response = self._client.responses.create(
-                model=model,
-                instructions=OPENAI_RESPONSES_INSTRUCTIONS,
-                input=self._messages_to_openai_responses_input(messages),
-                temperature=temperature,
-                text=self._get_openai_responses_text_or_omit(response_format),
-                tools=openai_tools,
-                tool_choice=openai_tool_choice,
-                reasoning=reasoning,
-                max_output_tokens=max_tokens,
-                extra_body=request_extra_body,
-                stream=True,
-            )
+            response = self._client.responses.create(**request_kwargs)
 
             current_chunk_type = None
             current_tool = None

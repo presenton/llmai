@@ -13,6 +13,8 @@ from llmai.shared.response_formats import ResponseFormat
 from llmai.shared.responses import ResponseResult
 from llmai.shared.tools import LLMTool, ToolChoice
 
+CHATGPT_DEFAULT_INSTRUCTIONS = "Follow the prompt"
+
 
 class ChatGPTClient(OpenAIClient):
     DEFAULT_BASE_URL = "https://chatgpt.com/backend-api/codex"
@@ -25,6 +27,7 @@ class ChatGPTClient(OpenAIClient):
     ):
         self._logger = logger
         self._api_type = OpenAIApiType.RESPONSES
+        self._provide_system_message_as_instructions = True
         self._base_url = config.base_url or self.DEFAULT_BASE_URL
         resolved_access_token = self._resolve_access_token(config.access_token)
         resolved_account_id = _strip_or_none(config.account_id)
@@ -49,6 +52,14 @@ class ChatGPTClient(OpenAIClient):
         if self._logger:
             self._logger.info("ChatGPT client created")
             self._logger.info("Base URL: %s", self._base_url)
+
+    def _messages_to_openai_responses_instructions(
+        self,
+        messages: list[Message],
+    ) -> str | None:
+        return super()._messages_to_openai_responses_instructions(
+            messages
+        ) or CHATGPT_DEFAULT_INSTRUCTIONS
 
     def _resolve_access_token(self, access_token: str | None) -> str:
         resolved_access_token = _strip_or_none(access_token)

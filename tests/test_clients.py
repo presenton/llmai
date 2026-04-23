@@ -44,6 +44,7 @@ from llmai.shared import (
     ReasoningEffort,
     ReasoningEffortValue,
     ReasoningSummary,
+    SystemMessage,
     TextContentPart,
     Tool,
     UserMessage,
@@ -320,6 +321,11 @@ class ClientBehaviorTests(unittest.TestCase):
                 api_key="openai-key",
                 api_type="invalid",
             )
+
+    def test_openai_config_defaults_system_message_instructions_to_false(self):
+        config = OpenAIClientConfig(api_key="openai-key")
+
+        self.assertFalse(config.provide_system_message_as_instructions)
 
     def test_all_clients_share_base_generate_signature(self):
         expected = tuple(inspect.signature(BaseClient.generate).parameters)
@@ -615,12 +621,25 @@ class ClientBehaviorTests(unittest.TestCase):
 
         result = client.generate(
             model="chatgpt-4o-latest",
-            messages=[UserMessage(content=text_parts("Hello"))],
+            messages=[
+                SystemMessage(content="First instruction"),
+                SystemMessage(content="Second instruction"),
+                UserMessage(content=text_parts("Hello")),
+            ],
         )
 
         self.assertEqual(result.content[0].text, "final answer")
         self.assertEqual(fake_responses.calls[0]["model"], "chatgpt-4o-latest")
-        self.assertEqual(fake_responses.calls[0]["instructions"], "Follow the prompt")
+        self.assertEqual(
+            fake_responses.calls[0]["instructions"],
+            "First instruction\n\nSecond instruction",
+        )
+        self.assertEqual(len(fake_responses.calls[0]["input"]), 1)
+        self.assertNotIn(
+            "system",
+            [item.get("role") for item in fake_responses.calls[0]["input"]],
+        )
+        self.assertEqual(fake_responses.calls[0]["input"][0]["role"], "user")
         self.assertEqual(fake_responses.calls[0]["extra_body"]["store"], False)
         self.assertEqual(
             fake_responses.calls[0]["extra_body"]["include"],
@@ -671,6 +690,42 @@ class ClientBehaviorTests(unittest.TestCase):
             [{"type": "web_search"}],
         )
         self.assertIsInstance(fake_responses.calls[0]["tool_choice"], openai.Omit)
+
+    def test_chatgpt_generate_uses_fallback_instructions_without_system_message(self):
+        fake_response = SimpleNamespace(
+            output=[
+                SimpleNamespace(
+                    type="message",
+                    content=[
+                        SimpleNamespace(
+                            type="output_text",
+                            text="final answer",
+                        )
+                    ],
+                )
+            ]
+        )
+        fake_responses = FakeOpenAIResponses(fake_response)
+
+        client = ChatGPTClient(
+            config=ChatGPTClientConfig(access_token="test")
+        )
+        client._client = SimpleNamespace(
+            responses=fake_responses,
+            chat=SimpleNamespace(completions=FakeOpenAICompletions(None)),
+        )
+
+        client.generate(
+            model="chatgpt-4o-latest",
+            messages=[UserMessage(content=text_parts("Hello"))],
+        )
+
+        self.assertEqual(
+            fake_responses.calls[0]["instructions"],
+            "Follow the prompt",
+        )
+        self.assertEqual(len(fake_responses.calls[0]["input"]), 1)
+        self.assertEqual(fake_responses.calls[0]["input"][0]["role"], "user")
 
     def test_chatgpt_generate_does_not_expose_api_type(self):
         self.assertNotIn(
@@ -1293,7 +1348,52 @@ class ClientBehaviorTests(unittest.TestCase):
             fake_responses.calls[0]["reasoning"],
             {"summary": "auto"},
         )
-        self.assertEqual(fake_responses.calls[0]["instructions"], "Follow the prompt")
+        self.assertNotIn("instructions", fake_responses.calls[0])
+        self.assertEqual(fake_responses.calls[0]["input"][0]["role"], "user")
+
+    def test_openai_responses_generate_can_lift_system_messages_to_instructions(self):
+        fake_response = SimpleNamespace(
+            output=[
+                SimpleNamespace(
+                    type="message",
+                    content=[
+                        SimpleNamespace(
+                            type="output_text",
+                            text="done",
+                        )
+                    ],
+                )
+            ]
+        )
+        fake_responses = FakeOpenAIResponses(fake_response)
+
+        client = OpenAIClient(
+            config=OpenAIClientConfig(
+                api_key="test",
+                api_type=OpenAIApiType.RESPONSES,
+                provide_system_message_as_instructions=True,
+            )
+        )
+        client._client = SimpleNamespace(responses=fake_responses)
+
+        client.generate(
+            model="gpt-test",
+            messages=[
+                SystemMessage(content="First instruction"),
+                SystemMessage(content="Second instruction"),
+                UserMessage(content=text_parts("Hello")),
+            ],
+        )
+
+        self.assertEqual(
+            fake_responses.calls[0]["instructions"],
+            "First instruction\n\nSecond instruction",
+        )
+        self.assertEqual(len(fake_responses.calls[0]["input"]), 1)
+        self.assertNotIn(
+            "system",
+            [item.get("role") for item in fake_responses.calls[0]["input"]],
+        )
         self.assertEqual(fake_responses.calls[0]["input"][0]["role"], "user")
 
     def test_openai_responses_generate_preserves_multiple_thinking_blocks(self):
@@ -1533,7 +1633,7 @@ class ClientBehaviorTests(unittest.TestCase):
             2,
         )
         self.assertTrue(fake_responses.calls[0]["stream"])
-        self.assertEqual(fake_responses.calls[0]["instructions"], "Follow the prompt")
+        self.assertNotIn("instructions", fake_responses.calls[0])
 
     def test_openai_responses_stream_wraps_multiple_thinking_blocks(self):
         completed_response = SimpleNamespace(
