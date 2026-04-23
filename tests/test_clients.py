@@ -593,7 +593,7 @@ class ClientBehaviorTests(unittest.TestCase):
         )
 
     def test_chatgpt_generate_uses_openai_responses_api(self):
-        fake_response = SimpleNamespace(
+        completed_response = SimpleNamespace(
             output=[
                 SimpleNamespace(
                     type="message",
@@ -606,7 +606,16 @@ class ClientBehaviorTests(unittest.TestCase):
                 )
             ]
         )
-        fake_responses = FakeOpenAIResponses(fake_response)
+        fake_responses = FakeOpenAIResponses(
+            iter(
+                [
+                    SimpleNamespace(
+                        type="response.completed",
+                        response=completed_response,
+                    )
+                ]
+            )
+        )
         fake_completions = FakeOpenAICompletions(
             Exception("chat completions should not be used")
         )
@@ -653,10 +662,11 @@ class ClientBehaviorTests(unittest.TestCase):
             fake_responses.calls[0]["extra_body"]["text"],
             {"verbosity": "medium"},
         )
+        self.assertTrue(fake_responses.calls[0]["stream"])
         self.assertFalse(fake_completions.calls)
 
     def test_chatgpt_generate_attaches_web_search_tool(self):
-        fake_response = SimpleNamespace(
+        completed_response = SimpleNamespace(
             output=[
                 SimpleNamespace(
                     type="message",
@@ -669,7 +679,16 @@ class ClientBehaviorTests(unittest.TestCase):
                 )
             ]
         )
-        fake_responses = FakeOpenAIResponses(fake_response)
+        fake_responses = FakeOpenAIResponses(
+            iter(
+                [
+                    SimpleNamespace(
+                        type="response.completed",
+                        response=completed_response,
+                    )
+                ]
+            )
+        )
 
         client = ChatGPTClient(
             config=ChatGPTClientConfig(access_token="test")
@@ -692,7 +711,7 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertIsInstance(fake_responses.calls[0]["tool_choice"], openai.Omit)
 
     def test_chatgpt_generate_uses_fallback_instructions_without_system_message(self):
-        fake_response = SimpleNamespace(
+        completed_response = SimpleNamespace(
             output=[
                 SimpleNamespace(
                     type="message",
@@ -705,7 +724,16 @@ class ClientBehaviorTests(unittest.TestCase):
                 )
             ]
         )
-        fake_responses = FakeOpenAIResponses(fake_response)
+        fake_responses = FakeOpenAIResponses(
+            iter(
+                [
+                    SimpleNamespace(
+                        type="response.completed",
+                        response=completed_response,
+                    )
+                ]
+            )
+        )
 
         client = ChatGPTClient(
             config=ChatGPTClientConfig(access_token="test")
@@ -734,6 +762,7 @@ class ClientBehaviorTests(unittest.TestCase):
             fake_responses.calls[0]["max_output_tokens"],
             openai.Omit,
         )
+        self.assertTrue(fake_responses.calls[0]["stream"])
         self.assertEqual(len(fake_responses.calls[0]["input"]), 1)
         self.assertEqual(fake_responses.calls[0]["input"][0]["role"], "user")
 

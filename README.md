@@ -135,7 +135,7 @@ result = client.generate(
 print(result.content)
 ```
 
-`ChatGPTClient` targets ChatGPT's Codex backend at `https://chatgpt.com/backend-api/codex` and always uses the Responses API internally. Credentials and optional overrides are passed through `ChatGPTClientConfig`, which uses `access_token`. When you include `SystemMessage` entries, ChatGPT collects them in order and sends them through the Responses API `instructions` field; otherwise it falls back to `instructions="Follow the prompt"`. The ChatGPT backend does not support Responses `temperature` or `max_output_tokens`, so `temperature` and `max_tokens` are ignored for this client.
+`ChatGPTClient` targets ChatGPT's Codex backend at `https://chatgpt.com/backend-api/codex` and always uses the Responses API internally. Credentials and optional overrides are passed through `ChatGPTClientConfig`, which uses `access_token`. When you include `SystemMessage` entries, ChatGPT collects them in order and sends them through the Responses API `instructions` field; otherwise it falls back to `instructions="Follow the prompt"`. The ChatGPT backend requires `stream=True`, so `generate(stream=False)` streams internally and returns the aggregated final response. It also does not support Responses `temperature` or `max_output_tokens`, so `temperature` and `max_tokens` are ignored for this client.
 
 ## DeepSeek
 

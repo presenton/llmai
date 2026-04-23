@@ -6,11 +6,11 @@ from openai import Omit, OpenAI
 
 from llmai.openai.client import OpenAIApiType, OpenAIClient
 from llmai.shared.configs import ChatGPTClientConfig
-from llmai.shared.errors import configuration_error, raise_llm_error
+from llmai.shared.errors import LLMError, configuration_error, raise_llm_error
 from llmai.shared.messages import Message
 from llmai.shared.reasoning import ReasoningEffort
 from llmai.shared.response_formats import ResponseFormat
-from llmai.shared.responses import ResponseResult
+from llmai.shared.responses import ResponseContent, ResponseResult
 from llmai.shared.tools import LLMTool, ToolChoice
 
 CHATGPT_DEFAULT_INSTRUCTIONS = "Follow the prompt"
@@ -74,6 +74,51 @@ class ChatGPTClient(OpenAIClient):
     ) -> Omit:
         del temperature
         return Omit()
+
+    def _generate_responses_once(
+        self,
+        *,
+        model: str,
+        messages: list[Message],
+        temperature: float | None = None,
+        tools: list[LLMTool] | None = None,
+        tool_choice: ToolChoice | None = None,
+        response_format: ResponseFormat | None = None,
+        max_tokens: int | None = None,
+        reasoning_effort: ReasoningEffort | None = None,
+        extra_body: dict | None = None,
+    ) -> ResponseContent:
+        completion_chunk = None
+
+        for chunk in super()._generate_responses_stream(
+            model=model,
+            messages=messages,
+            temperature=temperature,
+            tools=tools,
+            tool_choice=tool_choice,
+            response_format=response_format,
+            max_tokens=max_tokens,
+            reasoning_effort=reasoning_effort,
+            extra_body=extra_body,
+        ):
+            if getattr(chunk, "type", None) == "completion":
+                completion_chunk = chunk
+
+        if completion_chunk is None:
+            raise LLMError(
+                500,
+                "No completion returned from streamed ChatGPT response",
+                provider="chatgpt",
+            )
+
+        return ResponseContent(
+            content=completion_chunk.content,
+            thinking=completion_chunk.thinking,
+            messages=completion_chunk.messages,
+            tool_calls=completion_chunk.tool_calls,
+            usage=completion_chunk.usage,
+            duration_seconds=completion_chunk.duration_seconds,
+        )
 
     def _resolve_access_token(self, access_token: str | None) -> str:
         resolved_access_token = _strip_or_none(access_token)
