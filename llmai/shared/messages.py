@@ -90,7 +90,7 @@ class UserMessage(Message):
 
 class SystemMessage(Message):
     role: Literal["system"] = "system"
-    content: TextMessageContent
+    content: str
 
 
 class AssistantToolCall(BaseModel):

@@ -311,8 +311,7 @@ class BedrockClient(BaseClient):
             if not isinstance(message, SystemMessage):
                 continue
 
-            for part in message.content:
-                system_blocks.append({"text": part.text})
+            system_blocks.append({"text": message.content})
 
         return system_blocks or None
 

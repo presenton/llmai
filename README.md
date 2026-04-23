@@ -57,7 +57,7 @@ print(result.usage)
 print(result.duration_seconds)
 ```
 
-For text-only prompts, `UserMessage(content="...")` is the simplest form. You can also pass explicit content parts like `TextContentPart` when you need mixed multimodal input or tighter control over message structure.
+For text-only prompts, `UserMessage(content="...")` is the simplest form. `SystemMessage(content="...")` also takes a plain string. Use explicit content parts like `TextContentPart` only when you need mixed multimodal input or tighter control over user message structure.
 
 If you want to swap providers, the overall call shape stays the same. In most cases you only need to change the client class, credentials, and model name.
 
@@ -402,3 +402,5 @@ The shared layer includes the main primitives you will use across providers:
 - `JSONSchemaResponse`, `JSONObjectResponse`, `TextResponse`
 - `ResponseContent`, `ResponseStreamChunk`, `ResponseStreamContentChunk`, `ResponseStreamThinkingChunk`, `ResponseStreamToolChunk`, `ResponseStreamToolCompleteChunk`, `ResponseStreamCompletionChunk`
 - `ResponseUsage`
+
+`UserMessage.content` accepts either a plain string or explicit content parts. `SystemMessage.content` is always a plain string.

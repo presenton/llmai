@@ -92,7 +92,7 @@ class AnthropicClient(BaseClient):
     def _get_system_prompt(self, messages: list[Message]) -> str | Omit:
         for message in messages:
             if isinstance(message, SystemMessage):
-                return "".join(part.text for part in message.content)
+                return message.content
         return Omit()
 
     def _parse_tool_arguments(self, arguments: str | None) -> dict:

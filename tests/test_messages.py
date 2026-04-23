@@ -89,12 +89,14 @@ class AssistantMessageTests(unittest.TestCase):
 
         self.assertEqual(content[0].text, "Describe this image.")
 
-    def test_supports_string_entries_in_text_message_content_lists(self):
-        message = SystemMessage(content=["Be concise."])
+    def test_supports_top_level_string_system_content(self):
+        message = SystemMessage(content="Be concise.")
 
-        content = normalize_content_parts(message.content)
+        self.assertEqual(message.content, "Be concise.")
 
-        self.assertEqual(content[0].text, "Be concise.")
+    def test_rejects_non_string_system_content(self):
+        with self.assertRaises(ValidationError):
+            SystemMessage(content=["Be concise."])
 
     def test_collapse_content_parts_keeps_text_only_parts_as_a_list(self):
         content = collapse_content_parts(

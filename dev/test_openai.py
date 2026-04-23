@@ -2,7 +2,7 @@ import os
 
 from dev.shared import SLIDE_SCHEMA, TOOL_CHOICE, TOOL_DEFINITIONS, WEB_SEARCH_TOOL
 from llmai.openai import OpenAIApiType, OpenAIClient, OpenAIClientConfig
-from llmai.shared.messages import UserMessage
+from llmai.shared.messages import SystemMessage, UserMessage
 from llmai.shared.reasoning import (
     ReasoningEffort,
     ReasoningEffortValue,
@@ -50,7 +50,8 @@ def test_generate_structured():
     response = client.generate(
         model=MODEL,
         messages=[
-            UserMessage(content="What is presentation?"),
+            SystemMessage(content="create slide about global warming"),
+            UserMessage(content="Create a presentation slide"),
         ],
         response_format=JSONSchemaResponse(
             name="ResponseSchema",
