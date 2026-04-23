@@ -92,6 +92,7 @@ OPENAI_SUPPORTED_STRING_FORMATS = {
     "ipv6",
     "uuid",
 }
+OPENAI_RESPONSES_INSTRUCTIONS = "Follow the prompt"
 OPENAI_SUPPORTED_SCHEMA_KEYS = {
     "$defs",
     "$ref",
@@ -1039,6 +1040,7 @@ class OpenAIClient(BaseClient):
             start_time = perf_counter()
             response = self._client.responses.create(
                 model=model,
+                instructions=OPENAI_RESPONSES_INSTRUCTIONS,
                 input=self._messages_to_openai_responses_input(messages),
                 temperature=temperature,
                 text=self._get_openai_responses_text_or_omit(response_format),
@@ -1097,6 +1099,7 @@ class OpenAIClient(BaseClient):
             start_time = perf_counter()
             response = self._client.responses.create(
                 model=model,
+                instructions=OPENAI_RESPONSES_INSTRUCTIONS,
                 input=self._messages_to_openai_responses_input(messages),
                 temperature=temperature,
                 text=self._get_openai_responses_text_or_omit(response_format),

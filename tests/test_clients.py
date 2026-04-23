@@ -620,6 +620,7 @@ class ClientBehaviorTests(unittest.TestCase):
 
         self.assertEqual(result.content[0].text, "final answer")
         self.assertEqual(fake_responses.calls[0]["model"], "chatgpt-4o-latest")
+        self.assertEqual(fake_responses.calls[0]["instructions"], "Follow the prompt")
         self.assertEqual(fake_responses.calls[0]["extra_body"]["store"], False)
         self.assertEqual(
             fake_responses.calls[0]["extra_body"]["include"],
@@ -1292,6 +1293,7 @@ class ClientBehaviorTests(unittest.TestCase):
             fake_responses.calls[0]["reasoning"],
             {"summary": "auto"},
         )
+        self.assertEqual(fake_responses.calls[0]["instructions"], "Follow the prompt")
         self.assertEqual(fake_responses.calls[0]["input"][0]["role"], "user")
 
     def test_openai_responses_generate_preserves_multiple_thinking_blocks(self):
@@ -1531,6 +1533,7 @@ class ClientBehaviorTests(unittest.TestCase):
             2,
         )
         self.assertTrue(fake_responses.calls[0]["stream"])
+        self.assertEqual(fake_responses.calls[0]["instructions"], "Follow the prompt")
 
     def test_openai_responses_stream_wraps_multiple_thinking_blocks(self):
         completed_response = SimpleNamespace(
