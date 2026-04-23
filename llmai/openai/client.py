@@ -687,24 +687,6 @@ class OpenAIClient(BaseClient):
 
         return reasoning_effort.effort
 
-    def _get_openai_responses_temperature_or_omit(
-        self,
-        temperature: float | None,
-    ) -> float | Omit:
-        if temperature is None:
-            return Omit()
-
-        return temperature
-
-    def _get_openai_responses_max_output_tokens_or_omit(
-        self,
-        max_tokens: int | None,
-    ) -> int | Omit:
-        if max_tokens is None:
-            return Omit()
-
-        return max_tokens
-
     def _responses_output_to_assistant_message(
         self,
         output: list[object],
@@ -1078,16 +1060,12 @@ class OpenAIClient(BaseClient):
         request_kwargs = {
             "model": model,
             "input": response_input,
-            "temperature": self._get_openai_responses_temperature_or_omit(
-                temperature
-            ),
+            "temperature": temperature if temperature is not None else Omit(),
             "text": self._get_openai_responses_text_or_omit(response_format),
             "tools": openai_tools,
             "tool_choice": openai_tool_choice,
             "reasoning": reasoning,
-            "max_output_tokens": self._get_openai_responses_max_output_tokens_or_omit(
-                max_tokens
-            ),
+            "max_output_tokens": max_tokens if max_tokens is not None else Omit(),
             "extra_body": request_extra_body,
         }
         instructions = self._messages_to_openai_responses_instructions(messages)
@@ -1145,16 +1123,12 @@ class OpenAIClient(BaseClient):
         request_kwargs = {
             "model": model,
             "input": response_input,
-            "temperature": self._get_openai_responses_temperature_or_omit(
-                temperature
-            ),
+            "temperature": temperature if temperature is not None else Omit(),
             "text": self._get_openai_responses_text_or_omit(response_format),
             "tools": openai_tools,
             "tool_choice": openai_tool_choice,
             "reasoning": reasoning,
-            "max_output_tokens": self._get_openai_responses_max_output_tokens_or_omit(
-                max_tokens
-            ),
+            "max_output_tokens": max_tokens if max_tokens is not None else Omit(),
             "extra_body": request_extra_body,
             "stream": True,
         }

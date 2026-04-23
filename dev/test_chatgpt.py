@@ -3,11 +3,15 @@ import os
 from dev.shared import SLIDE_SCHEMA, TOOL_CHOICE, TOOL_DEFINITIONS, WEB_SEARCH_TOOL
 from llmai import ChatGPTClient, ChatGPTClientConfig
 from llmai.shared.messages import UserMessage
-from llmai.shared.reasoning import ReasoningEffort, ReasoningSummary
+from llmai.shared.reasoning import (
+    ReasoningEffort,
+    ReasoningEffortValue,
+    ReasoningSummary,
+)
 from llmai.shared.response_formats import JSONSchemaResponse
 
 
-MODEL = os.getenv("CHATGPT_MODEL", "chatgpt-4o-latest")
+MODEL = os.getenv("CHATGPT_MODEL", "gpt-5.4-mini")
 
 
 def make_client() -> ChatGPTClient:
@@ -77,7 +81,9 @@ def test_generate_web_search():
     response = client.generate(
         model=MODEL,
         messages=[
-            UserMessage(content="What was a positive news story from today? Cite sources."),
+            UserMessage(
+                content="What was a positive news story from today? Cite sources."
+            ),
         ],
         tools=[WEB_SEARCH_TOOL],
         reasoning_effort=ReasoningEffort(summary=ReasoningSummary.DETAILED),
@@ -96,7 +102,9 @@ def test_stream():
         messages=[
             UserMessage(content="What is presentation?"),
         ],
-        reasoning_effort=ReasoningEffort(summary=ReasoningSummary.DETAILED),
+        reasoning_effort=ReasoningEffort(
+            effort=ReasoningEffortValue.HIGH, summary=ReasoningSummary.DETAILED
+        ),
         stream=True,
     ):
         print(chunk)
@@ -147,7 +155,9 @@ def test_stream_web_search():
     for chunk in client.generate(
         model=MODEL,
         messages=[
-            UserMessage(content="What was a positive news story from today? Cite sources."),
+            UserMessage(
+                content="What was a positive news story from today? Cite sources."
+            ),
         ],
         tools=[WEB_SEARCH_TOOL],
         reasoning_effort=ReasoningEffort(summary=ReasoningSummary.DETAILED),

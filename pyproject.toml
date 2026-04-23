@@ -1,6 +1,6 @@
 [project]
 name = "llmai"
-version = "0.1.8"
+version = "0.1.9"
 description = "Unified Python client for OpenAI, Azure OpenAI, Vertex AI, Anthropic, Gemini, DeepSeek, Bedrock, and ChatGPT."
 readme = "README.md"
 authors = [{ name = "sauravniraula", email = "developmentsaurav@gmail.com" }]

@@ -710,6 +710,57 @@ class ClientBehaviorTests(unittest.TestCase):
         )
         self.assertIsInstance(fake_responses.calls[0]["tool_choice"], openai.Omit)
 
+    def test_chatgpt_generate_falls_back_to_streamed_content_when_completed_output_is_empty(self):
+        completed_response = SimpleNamespace(
+            output=[],
+            usage=SimpleNamespace(
+                input_tokens=17,
+                output_tokens=141,
+                total_tokens=158,
+                input_tokens_details=SimpleNamespace(cached_tokens=0),
+                output_tokens_details=SimpleNamespace(reasoning_tokens=0),
+            ),
+        )
+        fake_responses = FakeOpenAIResponses(
+            iter(
+                [
+                    SimpleNamespace(
+                        type="response.output_text.delta",
+                        delta="final answer",
+                        item_id="msg_1",
+                        content_index=0,
+                        output_index=0,
+                        logprobs=[],
+                        sequence_number=1,
+                    ),
+                    SimpleNamespace(
+                        type="response.completed",
+                        response=completed_response,
+                        sequence_number=2,
+                    ),
+                ]
+            )
+        )
+
+        client = ChatGPTClient(
+            config=ChatGPTClientConfig(access_token="test")
+        )
+        client._client = SimpleNamespace(
+            responses=fake_responses,
+            chat=SimpleNamespace(completions=FakeOpenAICompletions(None)),
+        )
+
+        result = client.generate(
+            model="chatgpt-4o-latest",
+            messages=[UserMessage(content=text_parts("Hello"))],
+        )
+
+        self.assertEqual(result.content[0].text, "final answer")
+        self.assertEqual(result.messages[-1].content[0].text, "final answer")
+        self.assertEqual(result.usage.input_tokens, 17)
+        self.assertEqual(result.usage.output_tokens, 141)
+        self.assertEqual(result.usage.total_tokens, 158)
+
     def test_chatgpt_generate_uses_fallback_instructions_without_system_message(self):
         completed_response = SimpleNamespace(
             output=[
