@@ -687,6 +687,15 @@ class OpenAIClient(BaseClient):
 
         return reasoning_effort.effort
 
+    def _get_openai_responses_max_output_tokens_or_omit(
+        self,
+        max_tokens: int | None,
+    ) -> int | Omit:
+        if max_tokens is None:
+            return Omit()
+
+        return max_tokens
+
     def _responses_output_to_assistant_message(
         self,
         output: list[object],
@@ -1065,7 +1074,9 @@ class OpenAIClient(BaseClient):
             "tools": openai_tools,
             "tool_choice": openai_tool_choice,
             "reasoning": reasoning,
-            "max_output_tokens": max_tokens,
+            "max_output_tokens": self._get_openai_responses_max_output_tokens_or_omit(
+                max_tokens
+            ),
             "extra_body": request_extra_body,
         }
         instructions = self._messages_to_openai_responses_instructions(messages)
@@ -1128,7 +1139,9 @@ class OpenAIClient(BaseClient):
             "tools": openai_tools,
             "tool_choice": openai_tool_choice,
             "reasoning": reasoning,
-            "max_output_tokens": max_tokens,
+            "max_output_tokens": self._get_openai_responses_max_output_tokens_or_omit(
+                max_tokens
+            ),
             "extra_body": request_extra_body,
             "stream": True,
         }

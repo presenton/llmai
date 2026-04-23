@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from logging import Logger
 
-from openai import OpenAI
+from openai import Omit, OpenAI
 
 from llmai.openai.client import OpenAIApiType, OpenAIClient
 from llmai.shared.configs import ChatGPTClientConfig
@@ -60,6 +60,13 @@ class ChatGPTClient(OpenAIClient):
         return super()._messages_to_openai_responses_instructions(
             messages
         ) or CHATGPT_DEFAULT_INSTRUCTIONS
+
+    def _get_openai_responses_max_output_tokens_or_omit(
+        self,
+        max_tokens: int | None,
+    ) -> Omit:
+        del max_tokens
+        return Omit()
 
     def _resolve_access_token(self, access_token: str | None) -> str:
         resolved_access_token = _strip_or_none(access_token)
