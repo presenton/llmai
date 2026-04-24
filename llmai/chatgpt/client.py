@@ -218,21 +218,21 @@ class ChatGPTClient(BaseClient):
 
         text_content = self._assistant_content_to_openai_content(message.content)
         if text_content is not None:
-            input_items.append(
-                {
-                    "id": self._response_item_id("message"),
-                    "type": "message",
-                    "role": "assistant",
-                    "status": "completed",
-                    "content": [
-                        {
-                            "type": "output_text",
-                            "text": text_content,
-                            "annotations": [],
-                        }
-                    ],
-                }
-            )
+            message_item: dict[str, object] = {
+                "type": "message",
+                "role": "assistant",
+                "status": "completed",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": text_content,
+                        "annotations": [],
+                    }
+                ],
+            }
+            if message.id is not None:
+                message_item["id"] = message.id
+            input_items.append(message_item)
 
         for tool_call in message.tool_calls:
             input_items.append(
@@ -466,11 +466,13 @@ class ChatGPTClient(BaseClient):
         text_chunks: list[str] = []
         thinking_blocks: list[str] = []
         tool_calls: list[AssistantToolCall] = []
+        assistant_message_id: str | None = None
 
         for item in output:
             item_type = getattr(item, "type", None)
 
             if item_type == "message":
+                assistant_message_id = assistant_message_id or getattr(item, "id", None)
                 for content in getattr(item, "content", []) or []:
                     content_type = getattr(content, "type", None)
                     if content_type == "output_text" and getattr(content, "text", None):
@@ -496,6 +498,7 @@ class ChatGPTClient(BaseClient):
                 )
 
         return AssistantMessage(
+            id=assistant_message_id,
             content=content_from_text("".join(text_chunks) or None),
             thinking=collapse_thinking_blocks(thinking_blocks),
             tool_calls=tool_calls,
@@ -616,6 +619,7 @@ class ChatGPTClient(BaseClient):
             current_chunk_type = None
             current_tool = None
             content = ""
+            streamed_assistant_message_id: str | None = None
             active_thinking_key: tuple[str, int] | None = None
             thinking_blocks_by_key: dict[tuple[str, int], str] = {}
             thinking_order: list[tuple[str, int]] = []
@@ -628,6 +632,10 @@ class ChatGPTClient(BaseClient):
                 event_type = getattr(event, "type", None)
 
                 if event_type == "response.output_text.delta":
+                    streamed_assistant_message_id = (
+                        streamed_assistant_message_id
+                        or getattr(event, "item_id", None)
+                    )
                     if current_chunk_type == "thinking":
                         active_thinking_key = None
                     content += event.delta
@@ -810,6 +818,7 @@ class ChatGPTClient(BaseClient):
                 if partial_tool_calls[tool_key]["name"]
             ]
             streamed_assistant_message = AssistantMessage(
+                id=streamed_assistant_message_id,
                 content=content_from_text(content or None),
                 thinking=collapse_thinking_blocks(thinking_blocks),
                 tool_calls=streamed_tool_calls,
@@ -820,6 +829,10 @@ class ChatGPTClient(BaseClient):
                     getattr(final_response, "output", []) or []
                 )
                 assistant_message = AssistantMessage(
+                    id=(
+                        response_assistant_message.id
+                        or streamed_assistant_message.id
+                    ),
                     content=(
                         response_assistant_message.content
                         or streamed_assistant_message.content

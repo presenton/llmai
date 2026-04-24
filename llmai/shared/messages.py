@@ -101,6 +101,7 @@ class AssistantToolCall(BaseModel):
 
 class AssistantMessage(Message):
     role: Literal["assistant"] = "assistant"
+    id: str | None = None
     content: AssistantContent = None
     thinking: ThinkingContent = None
     tool_calls: list[AssistantToolCall] = Field(default_factory=list)

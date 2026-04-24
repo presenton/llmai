@@ -2,7 +2,7 @@ import os
 
 from dev.shared import SLIDE_SCHEMA, TOOL_CHOICE, TOOL_DEFINITIONS, WEB_SEARCH_TOOL
 from llmai.openai import OpenAIApiType, OpenAIClient, OpenAIClientConfig
-from llmai.shared.messages import SystemMessage, UserMessage
+from llmai.shared.messages import AssistantMessage, SystemMessage, UserMessage
 from llmai.shared.reasoning import (
     ReasoningEffort,
     ReasoningEffortValue,
@@ -12,7 +12,7 @@ from llmai.shared.response_formats import JSONSchemaResponse
 
 
 MODEL = os.getenv("OPENAI_MODEL", "gpt-5.4")
-API_TYPE = OpenAIApiType.RESPONSES
+API_TYPE = OpenAIApiType.COMPLETIONS
 
 
 def make_client() -> OpenAIClient:
@@ -33,6 +33,7 @@ def test_generate():
             UserMessage(
                 content="Think as long as you want to define who is better at math AI or Human? You must think and answer"
             ),
+            AssistantMessage(content=["I think its human"]),
         ],
         reasoning_effort=ReasoningEffort(
             effort=ReasoningEffortValue.HIGH,
@@ -192,8 +193,8 @@ def test_stream_web_search():
     print("-" * 50)
 
 
-# test_generate()
-test_generate_structured()
+test_generate()
+# test_generate_structured()
 # test_generate_tool_calls()
 # test_generate_web_search()
 # test_stream()

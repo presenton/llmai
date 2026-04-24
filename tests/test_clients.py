@@ -1380,6 +1380,7 @@ class ClientBehaviorTests(unittest.TestCase):
                     summary=[SimpleNamespace(text="Compare speed and creativity.")],
                 ),
                 SimpleNamespace(
+                    id="msg_1",
                     type="message",
                     content=[
                         SimpleNamespace(
@@ -1422,6 +1423,7 @@ class ClientBehaviorTests(unittest.TestCase):
             result.messages[-1].thinking,
             ["Compare speed and creativity."],
         )
+        self.assertEqual(result.messages[-1].id, "msg_1")
         self.assertEqual(result.usage.input_tokens, 11)
         self.assertEqual(result.usage.output_tokens, 7)
         self.assertEqual(result.usage.total_tokens, 18)
@@ -1440,6 +1442,37 @@ class ClientBehaviorTests(unittest.TestCase):
         )
         self.assertNotIn("instructions", fake_responses.calls[0])
         self.assertEqual(fake_responses.calls[0]["input"][0]["role"], "user")
+
+    def test_openai_responses_omits_assistant_message_id_when_unset(self):
+        client = OpenAIClient(
+            config=OpenAIClientConfig(
+                api_key="test",
+                api_type=OpenAIApiType.RESPONSES,
+            )
+        )
+
+        openai_input = client._messages_to_openai_responses_input(
+            [AssistantMessage(content=text_parts("Hello"))]
+        )
+
+        self.assertEqual(len(openai_input), 1)
+        self.assertEqual(openai_input[0]["role"], "assistant")
+        self.assertNotIn("id", openai_input[0])
+
+    def test_openai_responses_preserves_assistant_message_id_in_history(self):
+        client = OpenAIClient(
+            config=OpenAIClientConfig(
+                api_key="test",
+                api_type=OpenAIApiType.RESPONSES,
+            )
+        )
+
+        openai_input = client._messages_to_openai_responses_input(
+            [AssistantMessage(id="msg_1", content=text_parts("Hello"))]
+        )
+
+        self.assertEqual(len(openai_input), 1)
+        self.assertEqual(openai_input[0]["id"], "msg_1")
 
     def test_openai_responses_generate_can_lift_system_messages_to_instructions(self):
         fake_response = SimpleNamespace(
@@ -1724,6 +1757,62 @@ class ClientBehaviorTests(unittest.TestCase):
         )
         self.assertTrue(fake_responses.calls[0]["stream"])
         self.assertNotIn("instructions", fake_responses.calls[0])
+
+    def test_openai_responses_stream_falls_back_to_streamed_message_id_when_completed_output_is_empty(self):
+        completed_response = SimpleNamespace(
+            output=[],
+            usage=SimpleNamespace(
+                input_tokens=17,
+                output_tokens=141,
+                total_tokens=158,
+                input_tokens_details=SimpleNamespace(cached_tokens=0),
+                output_tokens_details=SimpleNamespace(reasoning_tokens=0),
+            ),
+        )
+        events = iter(
+            [
+                SimpleNamespace(
+                    type="response.output_text.delta",
+                    delta="final answer",
+                    item_id="msg_1",
+                    content_index=0,
+                    output_index=0,
+                    logprobs=[],
+                    sequence_number=1,
+                ),
+                SimpleNamespace(
+                    type="response.completed",
+                    response=completed_response,
+                    sequence_number=2,
+                ),
+            ]
+        )
+        fake_responses = FakeOpenAIResponses(events)
+
+        client = OpenAIClient(
+            config=OpenAIClientConfig(
+                api_key="test",
+                api_type=OpenAIApiType.RESPONSES,
+            )
+        )
+        client._client = SimpleNamespace(responses=fake_responses)
+
+        chunks = list(
+            client.generate(
+                model="gpt-test",
+                messages=[UserMessage(content=text_parts("Hello"))],
+                stream=True,
+            )
+        )
+
+        completion = stream_payload_chunks(chunks)[-1]
+
+        self.assertEqual(completion.content[0].text, "final answer")
+        self.assertEqual(completion.messages[-1].content[0].text, "final answer")
+        self.assertEqual(completion.messages[-1].id, "msg_1")
+        self.assertEqual(completion.usage.input_tokens, 17)
+        self.assertEqual(completion.usage.output_tokens, 141)
+        self.assertEqual(completion.usage.total_tokens, 158)
 
     def test_openai_responses_stream_wraps_multiple_thinking_blocks(self):
         completed_response = SimpleNamespace(

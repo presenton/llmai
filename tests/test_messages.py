@@ -42,6 +42,15 @@ class AssistantMessageTests(unittest.TestCase):
         self.assertEqual(message.thinking, ["hidden chain summary"])
         self.assertEqual(message.model_dump()["thinking"], ["hidden chain summary"])
 
+    def test_supports_optional_assistant_message_id(self):
+        message = AssistantMessage(
+            id="msg_123",
+            content=[TextContentPart(text="final answer")],
+        )
+
+        self.assertEqual(message.id, "msg_123")
+        self.assertEqual(message.model_dump()["id"], "msg_123")
+
     def test_supports_multimodal_user_content(self):
         message = UserMessage(
             content=[
