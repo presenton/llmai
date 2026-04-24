@@ -26,6 +26,7 @@ from llmai.shared.logs import LogLevel
 from llmai.shared.messages import (
     AssistantContent,
     AssistantMessage,
+    AssistantReasoningItem,
     AssistantToolCall,
     ContentPart,
     ImageContentPart,
@@ -39,6 +40,7 @@ from llmai.shared.messages import (
     collapse_content_parts,
     content_from_text,
     content_has_images,
+    flatten_thinking_content,
     normalize_content_parts,
 )
 from llmai.shared.providers import LLMProvider
@@ -86,6 +88,7 @@ from llmai.shared.tools import (
 __all__ = [
     "AssistantContent",
     "AssistantMessage",
+    "AssistantReasoningItem",
     "AssistantToolCall",
     "APIKeyClientConfig",
     "AnthropicClientConfig",
@@ -148,6 +151,7 @@ __all__ = [
     "cleanup_schema_dict",
     "content_from_text",
     "content_has_images",
+    "flatten_thinking_content",
     "filter_schema_dict",
     "get_response_schema",
     "get_schema_as_dict",

@@ -36,7 +36,6 @@ TextMessageContentPart: TypeAlias = TextContentPart | str
 MessageContent: TypeAlias = List[MessageContentPart] | str
 AssistantContent: TypeAlias = List[MessageContentPart] | None
 TextMessageContent: TypeAlias = List[TextMessageContentPart]
-ThinkingContent: TypeAlias = list[str] | None
 
 
 def normalize_content_parts(
@@ -69,10 +68,6 @@ def content_from_text(text: str | None) -> AssistantContent:
     return [TextContentPart(text=text)]
 
 
-def collapse_thinking_blocks(blocks: list[str]) -> ThinkingContent:
-    return blocks or None
-
-
 def content_has_images(content: AssistantContent) -> bool:
     return any(
         isinstance(part, ImageContentPart) for part in normalize_content_parts(content)
@@ -97,6 +92,30 @@ class AssistantToolCall(BaseModel):
     id: str
     name: str
     arguments: str | None = None
+
+
+class AssistantReasoningItem(BaseModel):
+    id: str | None = None
+    summary: list[str] = Field(default_factory=list)
+    encrypted_content: str | None = None
+
+
+ThinkingContent: TypeAlias = list[AssistantReasoningItem] | None
+
+
+def collapse_thinking_blocks(blocks: list[str]) -> ThinkingContent:
+    return [AssistantReasoningItem(summary=[block]) for block in blocks] or None
+
+
+def flatten_thinking_content(thinking: ThinkingContent) -> list[str]:
+    if thinking is None:
+        return []
+
+    flattened: list[str] = []
+    for item in thinking:
+        flattened.extend(item.summary)
+
+    return flattened
 
 
 class AssistantMessage(Message):

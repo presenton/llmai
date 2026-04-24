@@ -4,6 +4,7 @@ from pydantic import ValidationError
 
 from llmai.shared import (
     AssistantMessage,
+    AssistantReasoningItem,
     ImageContentPart,
     ReasoningEffort,
     ReasoningEffortValue,
@@ -12,6 +13,7 @@ from llmai.shared import (
     TextContentPart,
     UserMessage,
     collapse_content_parts,
+    flatten_thinking_content,
     normalize_content_parts,
 )
 
@@ -35,12 +37,15 @@ class AssistantMessageTests(unittest.TestCase):
     def test_supports_optional_thinking_field(self):
         message = AssistantMessage(
             content=[TextContentPart(text="final answer")],
-            thinking=["hidden chain summary"],
+            thinking=[AssistantReasoningItem(summary=["hidden chain summary"])],
         )
 
         self.assertEqual(message.content[0].text, "final answer")
-        self.assertEqual(message.thinking, ["hidden chain summary"])
-        self.assertEqual(message.model_dump()["thinking"], ["hidden chain summary"])
+        self.assertEqual(flatten_thinking_content(message.thinking), ["hidden chain summary"])
+        self.assertEqual(
+            message.model_dump()["thinking"][0]["summary"],
+            ["hidden chain summary"],
+        )
 
     def test_supports_optional_assistant_message_id(self):
         message = AssistantMessage(
@@ -50,6 +55,23 @@ class AssistantMessageTests(unittest.TestCase):
 
         self.assertEqual(message.id, "msg_123")
         self.assertEqual(message.model_dump()["id"], "msg_123")
+
+    def test_supports_optional_structured_thinking_items(self):
+        message = AssistantMessage(
+            content=[TextContentPart(text="final answer")],
+            thinking=[
+                AssistantReasoningItem(
+                    id="rs_123",
+                    summary=["hidden chain summary"],
+                )
+            ],
+        )
+
+        self.assertEqual(message.thinking[0].id, "rs_123")
+        self.assertEqual(
+            message.thinking[0].summary,
+            ["hidden chain summary"],
+        )
 
     def test_supports_multimodal_user_content(self):
         message = UserMessage(

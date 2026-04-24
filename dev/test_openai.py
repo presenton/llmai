@@ -2,7 +2,7 @@ import os
 
 from dev.shared import SLIDE_SCHEMA, TOOL_CHOICE, TOOL_DEFINITIONS, WEB_SEARCH_TOOL
 from llmai.openai import OpenAIApiType, OpenAIClient, OpenAIClientConfig
-from llmai.shared.messages import AssistantMessage, SystemMessage, UserMessage
+from llmai.shared.messages import SystemMessage, UserMessage
 from llmai.shared.reasoning import (
     ReasoningEffort,
     ReasoningEffortValue,
@@ -33,7 +33,6 @@ def test_generate():
             UserMessage(
                 content="Think as long as you want to define who is better at math AI or Human? You must think and answer"
             ),
-            AssistantMessage(content=["I think its human"]),
         ],
         reasoning_effort=ReasoningEffort(
             effort=ReasoningEffortValue.HIGH,
@@ -193,7 +192,33 @@ def test_stream_web_search():
     print("-" * 50)
 
 
-test_generate()
+def test_generatation_loop():
+    client = make_client()
+
+    messages = [
+        UserMessage(
+            content="Think as long as you want to define who is better at math AI or Human? You must think and answer"
+        )
+    ]
+    for idx in range(10):
+        response = client.generate(
+            model=MODEL,
+            messages=messages,
+            reasoning_effort=ReasoningEffort(
+                effort=ReasoningEffortValue.HIGH,
+                summary=ReasoningSummary.DETAILED,
+            ),
+        )
+        messages = response.messages
+        messages.append(UserMessage(content="Think more"))
+        print(response.content)
+        print("-" * 50)
+    print("OpenAI plain generation")
+    print(response)
+    print("-" * 50)
+
+
+# test_generate()
 # test_generate_structured()
 # test_generate_tool_calls()
 # test_generate_web_search()
@@ -201,3 +226,4 @@ test_generate()
 # test_stream_structured()
 # test_stream_tool_calls()
 # test_stream_web_search()
+# test_generatation_loop()

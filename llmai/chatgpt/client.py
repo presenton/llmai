@@ -14,6 +14,7 @@ from llmai.shared.errors import LLMError, configuration_error, raise_llm_error
 from llmai.shared.messages import (
     AssistantContent,
     AssistantMessage,
+    AssistantReasoningItem,
     AssistantToolCall,
     ImageContentPart,
     Message,
@@ -21,7 +22,6 @@ from llmai.shared.messages import (
     SystemMessage,
     ToolResponseMessage,
     UserMessage,
-    collapse_thinking_blocks,
     content_from_text,
     content_has_images,
     normalize_content_parts,
@@ -201,27 +201,32 @@ class ChatGPTClient(BaseClient):
     ) -> list[dict[str, object]]:
         input_items: list[dict[str, object]] = []
 
-        for thinking_block in message.thinking or []:
-            input_items.append(
-                {
-                    "id": self._response_item_id("reasoning"),
-                    "type": "reasoning",
-                    "status": "completed",
-                    "summary": [
-                        {
-                            "type": "summary_text",
-                            "text": thinking_block,
-                        }
-                    ],
-                }
-            )
+        for reasoning_item in message.thinking or []:
+            if reasoning_item.id is None:
+                continue
+
+            serialized_reasoning_item: dict[str, object] = {
+                "id": reasoning_item.id,
+                "type": "reasoning",
+                "summary": [
+                    {
+                        "type": "summary_text",
+                        "text": summary_text,
+                    }
+                    for summary_text in reasoning_item.summary
+                ],
+            }
+            if reasoning_item.encrypted_content is not None:
+                serialized_reasoning_item["encrypted_content"] = (
+                    reasoning_item.encrypted_content
+                )
+            input_items.append(serialized_reasoning_item)
 
         text_content = self._assistant_content_to_openai_content(message.content)
         if text_content is not None:
             message_item: dict[str, object] = {
                 "type": "message",
                 "role": "assistant",
-                "status": "completed",
                 "content": [
                     {
                         "type": "output_text",
@@ -238,7 +243,6 @@ class ChatGPTClient(BaseClient):
             input_items.append(
                 {
                     "type": "function_call",
-                    "status": "completed",
                     "call_id": tool_call.id,
                     "name": tool_call.name,
                     "arguments": tool_call.arguments or "",
@@ -464,7 +468,7 @@ class ChatGPTClient(BaseClient):
         output: list[object],
     ) -> AssistantMessage:
         text_chunks: list[str] = []
-        thinking_blocks: list[str] = []
+        thinking_items: list[AssistantReasoningItem] = []
         tool_calls: list[AssistantToolCall] = []
         assistant_message_id: str | None = None
 
@@ -482,12 +486,18 @@ class ChatGPTClient(BaseClient):
                     ):
                         text_chunks.append(content.refusal)
             elif item_type == "reasoning":
-                block_parts: list[str] = []
+                summary_texts: list[str] = []
                 for summary in getattr(item, "summary", []) or []:
                     if getattr(summary, "text", None):
-                        block_parts.append(summary.text)
-                if block_parts:
-                    thinking_blocks.append("".join(block_parts))
+                        summary_texts.append(summary.text)
+                if summary_texts or getattr(item, "id", None) is not None:
+                    thinking_items.append(
+                        AssistantReasoningItem(
+                            id=getattr(item, "id", None),
+                            summary=summary_texts,
+                            encrypted_content=getattr(item, "encrypted_content", None),
+                        )
+                    )
             elif item_type == "function_call":
                 tool_calls.append(
                     AssistantToolCall(
@@ -500,7 +510,7 @@ class ChatGPTClient(BaseClient):
         return AssistantMessage(
             id=assistant_message_id,
             content=content_from_text("".join(text_chunks) or None),
-            thinking=collapse_thinking_blocks(thinking_blocks),
+            thinking=thinking_items or None,
             tool_calls=tool_calls,
         )
 
@@ -806,6 +816,27 @@ class ChatGPTClient(BaseClient):
                 for key in thinking_order
                 if thinking_blocks_by_key[key]
             ]
+            streamed_thinking_by_id: dict[str, AssistantReasoningItem] = {}
+            streamed_thinking_order: list[str] = []
+            for item_id, summary_index in thinking_order:
+                thinking_text = thinking_blocks_by_key.get((item_id, summary_index))
+                if not thinking_text:
+                    continue
+
+                thinking_item = streamed_thinking_by_id.get(item_id)
+                if thinking_item is None:
+                    thinking_item = AssistantReasoningItem(
+                        id=item_id,
+                        summary=[],
+                    )
+                    streamed_thinking_by_id[item_id] = thinking_item
+                    streamed_thinking_order.append(item_id)
+                thinking_item.summary.append(thinking_text)
+
+            streamed_thinking = [
+                streamed_thinking_by_id[item_id]
+                for item_id in streamed_thinking_order
+            ]
             streamed_tool_calls = [
                 AssistantToolCall(
                     id=partial_tool_calls[tool_key]["id"]
@@ -820,7 +851,7 @@ class ChatGPTClient(BaseClient):
             streamed_assistant_message = AssistantMessage(
                 id=streamed_assistant_message_id,
                 content=content_from_text(content or None),
-                thinking=collapse_thinking_blocks(thinking_blocks),
+                thinking=streamed_thinking or None,
                 tool_calls=streamed_tool_calls,
             )
 
@@ -828,6 +859,12 @@ class ChatGPTClient(BaseClient):
                 response_assistant_message = self._responses_output_to_assistant_message(
                     getattr(final_response, "output", []) or []
                 )
+                thinking = response_assistant_message.thinking
+                if streamed_assistant_message.thinking and not all(
+                    thinking_item.id is not None
+                    for thinking_item in (thinking or [])
+                ):
+                    thinking = streamed_assistant_message.thinking
                 assistant_message = AssistantMessage(
                     id=(
                         response_assistant_message.id
@@ -837,10 +874,7 @@ class ChatGPTClient(BaseClient):
                         response_assistant_message.content
                         or streamed_assistant_message.content
                     ),
-                    thinking=(
-                        response_assistant_message.thinking
-                        or streamed_assistant_message.thinking
-                    ),
+                    thinking=thinking or streamed_assistant_message.thinking,
                     tool_calls=(
                         response_assistant_message.tool_calls
                         or streamed_assistant_message.tool_calls

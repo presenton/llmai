@@ -34,7 +34,10 @@ from llmai import (
 )
 from llmai.shared import (
     AssistantMessage,
+    AssistantReasoningItem,
+    AssistantToolCall,
     BaseClient,
+    flatten_thinking_content,
     ImageContentPart,
     LLMAuthenticationError,
     LLMConfigurationError,
@@ -62,6 +65,26 @@ def make_web_search_tool() -> WebSearchTool:
 
 def text_parts(text: str) -> list[TextContentPart]:
     return [TextContentPart(text=text)]
+
+
+def thinking_items(*texts: str) -> list[AssistantReasoningItem]:
+    return [AssistantReasoningItem(summary=[text]) for text in texts]
+
+
+def make_reasoning_item(
+    *summary: str,
+    item_id: str | None = None,
+    encrypted_content: str | None = None,
+) -> AssistantReasoningItem:
+    return AssistantReasoningItem(
+        id=item_id,
+        summary=list(summary),
+        encrypted_content=encrypted_content,
+    )
+
+
+def thinking_texts(thinking) -> list[str]:
+    return flatten_thinking_content(thinking)
 
 
 def stream_marker_chunks(chunks):
@@ -1376,6 +1399,7 @@ class ClientBehaviorTests(unittest.TestCase):
         fake_response = SimpleNamespace(
             output=[
                 SimpleNamespace(
+                    id="rs_1",
                     type="reasoning",
                     summary=[SimpleNamespace(text="Compare speed and creativity.")],
                 ),
@@ -1416,14 +1440,19 @@ class ClientBehaviorTests(unittest.TestCase):
 
         self.assertEqual(result.content, {"answer": "pong"})
         self.assertEqual(
-            result.thinking,
+            thinking_texts(result.thinking),
             ["Compare speed and creativity."],
         )
         self.assertEqual(
-            result.messages[-1].thinking,
+            thinking_texts(result.messages[-1].thinking),
             ["Compare speed and creativity."],
         )
         self.assertEqual(result.messages[-1].id, "msg_1")
+        self.assertEqual(result.messages[-1].thinking[0].id, "rs_1")
+        self.assertEqual(
+            result.messages[-1].thinking[0].summary,
+            ["Compare speed and creativity."],
+        )
         self.assertEqual(result.usage.input_tokens, 11)
         self.assertEqual(result.usage.output_tokens, 7)
         self.assertEqual(result.usage.total_tokens, 18)
@@ -1473,6 +1502,62 @@ class ClientBehaviorTests(unittest.TestCase):
 
         self.assertEqual(len(openai_input), 1)
         self.assertEqual(openai_input[0]["id"], "msg_1")
+        self.assertNotIn("status", openai_input[0])
+
+    def test_openai_responses_does_not_synthesize_reasoning_ids_from_plain_thinking(self):
+        client = OpenAIClient(
+            config=OpenAIClientConfig(
+                api_key="test",
+                api_type=OpenAIApiType.RESPONSES,
+            )
+        )
+
+        openai_input = client._messages_to_openai_responses_input(
+            [
+                AssistantMessage(
+                    id="msg_1",
+                    content=text_parts("Hello"),
+                    thinking=thinking_items("Plan"),
+                )
+            ]
+        )
+
+        self.assertEqual(len(openai_input), 1)
+        self.assertEqual(openai_input[0]["type"], "message")
+        self.assertNotIn("status", openai_input[0])
+
+    def test_openai_responses_preserves_reasoning_item_ids_in_history(self):
+        client = OpenAIClient(
+            config=OpenAIClientConfig(
+                api_key="test",
+                api_type=OpenAIApiType.RESPONSES,
+            )
+        )
+
+        openai_input = client._messages_to_openai_responses_input(
+            [
+                AssistantMessage(
+                    id="msg_1",
+                    content=text_parts("Hello"),
+                    thinking=[make_reasoning_item("Plan", item_id="rs_1")],
+                    tool_calls=[
+                        AssistantToolCall(
+                            id="call_1",
+                            name="get_weather",
+                            arguments='{"city":"Kathmandu"}',
+                        )
+                    ],
+                )
+            ]
+        )
+
+        self.assertEqual(openai_input[0]["type"], "reasoning")
+        self.assertEqual(openai_input[0]["id"], "rs_1")
+        self.assertNotIn("status", openai_input[0])
+        self.assertEqual(openai_input[1]["type"], "message")
+        self.assertNotIn("status", openai_input[1])
+        self.assertEqual(openai_input[2]["type"], "function_call")
+        self.assertNotIn("status", openai_input[2])
 
     def test_openai_responses_generate_can_lift_system_messages_to_instructions(self):
         fake_response = SimpleNamespace(
@@ -1556,8 +1641,15 @@ class ClientBehaviorTests(unittest.TestCase):
             messages=[UserMessage(content=text_parts("Hello"))],
         )
 
-        self.assertEqual(result.thinking, ["Plan", "Reflect"])
-        self.assertEqual(result.messages[-1].thinking, ["Plan", "Reflect"])
+        self.assertEqual(thinking_texts(result.thinking), ["Plan", "Reflect"])
+        self.assertEqual(
+            thinking_texts(result.messages[-1].thinking),
+            ["Plan", "Reflect"],
+        )
+        self.assertEqual(
+            [item.summary for item in result.messages[-1].thinking],
+            [["Plan"], ["Reflect"]],
+        )
 
     def test_openai_responses_generate_passes_reasoning_effort_model(self):
         fake_response = SimpleNamespace(
@@ -1742,8 +1834,11 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(payload_chunks[4].type, "tool_complete")
         self.assertEqual(payload_chunks[4].tool, "get_weather")
         self.assertEqual(payload_chunks[4].arguments, '{"city":"Kathmandu"}')
-        self.assertEqual(payload_chunks[-1].thinking, ["Plan"])
-        self.assertEqual(payload_chunks[-1].messages[-1].thinking, ["Plan"])
+        self.assertEqual(thinking_texts(payload_chunks[-1].thinking), ["Plan"])
+        self.assertEqual(
+            thinking_texts(payload_chunks[-1].messages[-1].thinking),
+            ["Plan"],
+        )
         self.assertEqual(
             payload_chunks[-1].tool_calls[0].arguments,
             '{"city":"Kathmandu"}',
@@ -1920,8 +2015,16 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(payload_chunks[0].chunk, "Plan")
         self.assertEqual(payload_chunks[1].chunk, "Reflect")
         self.assertEqual(payload_chunks[2].chunk, "Hello")
-        self.assertEqual(payload_chunks[-1].thinking, ["Plan", "Reflect"])
-        self.assertEqual(payload_chunks[-1].messages[-1].thinking, ["Plan", "Reflect"])
+        self.assertEqual(thinking_texts(payload_chunks[-1].thinking), ["Plan", "Reflect"])
+        self.assertEqual(
+            thinking_texts(payload_chunks[-1].messages[-1].thinking),
+            ["Plan", "Reflect"],
+        )
+        self.assertEqual(payload_chunks[-1].messages[-1].thinking[0].id, "rs_1")
+        self.assertEqual(
+            payload_chunks[-1].messages[-1].thinking[0].summary,
+            ["Plan", "Reflect"],
+        )
         self.assertEqual(
             fake_responses.calls[0]["reasoning"],
             {"summary": "auto"},
@@ -2581,8 +2684,11 @@ class ClientBehaviorTests(unittest.TestCase):
         )
 
         self.assertEqual(result.content[0].text, "final answer")
-        self.assertEqual(result.thinking, ["internal"])
-        self.assertEqual(result.messages[-1].thinking, ["internal"])
+        self.assertEqual(thinking_texts(result.thinking), ["internal"])
+        self.assertEqual(
+            thinking_texts(result.messages[-1].thinking),
+            ["internal"],
+        )
 
     def test_anthropic_generate_preserves_multiple_thinking_blocks(self):
         fake_response = SimpleNamespace(
@@ -2602,8 +2708,14 @@ class ClientBehaviorTests(unittest.TestCase):
             messages=[UserMessage(content=text_parts("Answer me"))],
         )
 
-        self.assertEqual(result.thinking, ["internal-1", "internal-2"])
-        self.assertEqual(result.messages[-1].thinking, ["internal-1", "internal-2"])
+        self.assertEqual(
+            thinking_texts(result.thinking),
+            ["internal-1", "internal-2"],
+        )
+        self.assertEqual(
+            thinking_texts(result.messages[-1].thinking),
+            ["internal-1", "internal-2"],
+        )
 
     def test_anthropic_generate_returns_usage_and_duration(self):
         fake_response = SimpleNamespace(
@@ -2737,8 +2849,11 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(payload_chunks[0].chunk, "Plan")
         self.assertEqual(payload_chunks[1].type, "content")
         self.assertEqual(payload_chunks[1].chunk, "Hello")
-        self.assertEqual(payload_chunks[-1].thinking, ["Plan"])
-        self.assertEqual(payload_chunks[-1].messages[-1].thinking, ["Plan"])
+        self.assertEqual(thinking_texts(payload_chunks[-1].thinking), ["Plan"])
+        self.assertEqual(
+            thinking_texts(payload_chunks[-1].messages[-1].thinking),
+            ["Plan"],
+        )
         self.assertEqual(payload_chunks[-1].usage.input_tokens, 9)
         self.assertEqual(payload_chunks[-1].usage.output_tokens, 2)
         self.assertEqual(payload_chunks[-1].usage.total_tokens, 11)
@@ -2808,8 +2923,11 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(payload_chunks[0].chunk, "Plan")
         self.assertEqual(payload_chunks[1].chunk, "Reflect")
         self.assertEqual(payload_chunks[2].chunk, "Hello")
-        self.assertEqual(payload_chunks[-1].thinking, ["Plan", "Reflect"])
-        self.assertEqual(payload_chunks[-1].messages[-1].thinking, ["Plan", "Reflect"])
+        self.assertEqual(thinking_texts(payload_chunks[-1].thinking), ["Plan", "Reflect"])
+        self.assertEqual(
+            thinking_texts(payload_chunks[-1].messages[-1].thinking),
+            ["Plan", "Reflect"],
+        )
 
     def test_anthropic_generate_hides_internal_response_schema_tool(self):
         fake_response = SimpleNamespace(
@@ -3250,8 +3368,11 @@ class ClientBehaviorTests(unittest.TestCase):
             messages=[UserMessage(content=text_parts("Show me something"))],
         )
 
-        self.assertEqual(result.thinking, ["hidden reasoning"])
-        self.assertEqual(result.messages[-1].thinking, ["hidden reasoning"])
+        self.assertEqual(thinking_texts(result.thinking), ["hidden reasoning"])
+        self.assertEqual(
+            thinking_texts(result.messages[-1].thinking),
+            ["hidden reasoning"],
+        )
         self.assertIsInstance(result.content, list)
         self.assertEqual(result.content[0].text, "I found an image.")
         self.assertEqual(result.content[1].mime_type, "image/png")
@@ -3306,8 +3427,11 @@ class ClientBehaviorTests(unittest.TestCase):
             messages=[UserMessage(content=text_parts("Show me something"))],
         )
 
-        self.assertEqual(result.thinking, ["Plan", "Reflect"])
-        self.assertEqual(result.messages[-1].thinking, ["Plan", "Reflect"])
+        self.assertEqual(thinking_texts(result.thinking), ["Plan", "Reflect"])
+        self.assertEqual(
+            thinking_texts(result.messages[-1].thinking),
+            ["Plan", "Reflect"],
+        )
 
     def test_google_generate_passes_reasoning_effort_to_thinking_config(self):
         fake_response = SimpleNamespace(
@@ -3447,8 +3571,11 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(payload_chunks[1].type, "content")
         self.assertEqual(payload_chunks[1].chunk, "Hello")
         self.assertEqual(payload_chunks[-1].type, "completion")
-        self.assertEqual(payload_chunks[-1].thinking, ["Plan"])
-        self.assertEqual(payload_chunks[-1].messages[-1].thinking, ["Plan"])
+        self.assertEqual(thinking_texts(payload_chunks[-1].thinking), ["Plan"])
+        self.assertEqual(
+            thinking_texts(payload_chunks[-1].messages[-1].thinking),
+            ["Plan"],
+        )
         self.assertIsInstance(payload_chunks[-1].content, list)
         self.assertEqual(payload_chunks[-1].content[0].text, "Hello")
         self.assertEqual(payload_chunks[-1].content[1].mime_type, "image/png")
@@ -3524,8 +3651,11 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(payload_chunks[0].chunk, "Plan")
         self.assertEqual(payload_chunks[1].chunk, "Reflect")
         self.assertEqual(payload_chunks[2].chunk, "Hello")
-        self.assertEqual(payload_chunks[-1].thinking, ["Plan", "Reflect"])
-        self.assertEqual(payload_chunks[-1].messages[-1].thinking, ["Plan", "Reflect"])
+        self.assertEqual(thinking_texts(payload_chunks[-1].thinking), ["Plan", "Reflect"])
+        self.assertEqual(
+            thinking_texts(payload_chunks[-1].messages[-1].thinking),
+            ["Plan", "Reflect"],
+        )
 
     def test_google_generate_uses_native_structured_output(self):
         fake_response = SimpleNamespace(
@@ -3987,8 +4117,11 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(payload_chunks[4].type, "tool_complete")
         self.assertEqual(payload_chunks[4].tool, "get_weather")
         self.assertEqual(payload_chunks[4].arguments, '{"city":"Kathmandu"}')
-        self.assertEqual(payload_chunks[-1].thinking, ["Plan"])
-        self.assertEqual(payload_chunks[-1].messages[-1].thinking, ["Plan"])
+        self.assertEqual(thinking_texts(payload_chunks[-1].thinking), ["Plan"])
+        self.assertEqual(
+            thinking_texts(payload_chunks[-1].messages[-1].thinking),
+            ["Plan"],
+        )
         self.assertEqual(payload_chunks[-1].tool_calls[0].name, "get_weather")
         self.assertEqual(
             payload_chunks[-1].tool_calls[0].arguments,
@@ -4072,8 +4205,11 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(payload_chunks[0].chunk, "Plan")
         self.assertEqual(payload_chunks[1].chunk, "Reflect")
         self.assertEqual(payload_chunks[2].chunk, "Hello")
-        self.assertEqual(payload_chunks[-1].thinking, ["Plan", "Reflect"])
-        self.assertEqual(payload_chunks[-1].messages[-1].thinking, ["Plan", "Reflect"])
+        self.assertEqual(thinking_texts(payload_chunks[-1].thinking), ["Plan", "Reflect"])
+        self.assertEqual(
+            thinking_texts(payload_chunks[-1].messages[-1].thinking),
+            ["Plan", "Reflect"],
+        )
 
     def test_bedrock_stream_generates_tool_id_when_missing(self):
         fake_runtime = FakeBedrockRuntimeClient(
