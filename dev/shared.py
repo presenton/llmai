@@ -45,6 +45,7 @@ TOOL_DEFINITIONS = [
     Tool(
         name="get_weather",
         description="Get the current weather for a city",
+        strict=True,
         schema={
             "type": "object",
             "properties": {

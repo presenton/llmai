@@ -12,7 +12,7 @@ from llmai.shared.response_formats import JSONSchemaResponse
 
 
 MODEL = os.getenv("OPENAI_MODEL", "gpt-5.4")
-API_TYPE = OpenAIApiType.COMPLETIONS
+API_TYPE = OpenAIApiType.RESPONSES
 
 
 def make_client() -> OpenAIClient:

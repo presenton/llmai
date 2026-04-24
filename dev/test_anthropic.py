@@ -6,7 +6,7 @@ from llmai.shared.messages import UserMessage
 from llmai.shared.response_formats import JSONSchemaResponse
 
 
-MODEL = os.getenv("ANTHROPIC_MODEL", "claude-haiku-4-5")
+MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
 
 
 def make_client() -> AnthropicClient:
@@ -148,8 +148,8 @@ def test_stream_web_search():
 
 
 # test_generate()
-test_generate_structured()
-# test_generate_tool_calls()
+# test_generate_structured()
+test_generate_tool_calls()
 # test_generate_web_search()
 # test_stream()
 # test_stream_structured()
