@@ -87,8 +87,6 @@ GOOGLE_SUPPORTED_RESPONSE_SCHEMA_KEYS = {
     "type",
 }
 GOOGLE_SUPPORTED_TOOL_SCHEMA_KEYS = {
-    "$defs",
-    "$ref",
     "anyOf",
     "description",
     "enum",
