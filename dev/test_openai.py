@@ -32,7 +32,7 @@ def make_responses_client() -> OpenAIClient:
 
 def make_reasoning_effort() -> ReasoningEffort:
     return ReasoningEffort(
-        effort=ReasoningEffortValue.HIGH,
+        effort=ReasoningEffortValue.LOW,
         summary=ReasoningSummary.DETAILED,
     )
 
@@ -273,7 +273,7 @@ def _generation_loop(client: OpenAIClient, label: str):
             content="Think as long as you want to define who is better at math AI or Human? You must think and answer"
         )
     ]
-    for _ in range(10):
+    for _ in range(3):
         response = client.generate(
             model=MODEL,
             messages=messages,
@@ -365,8 +365,8 @@ def test_stream_reasoning_responses():
 # test_generate_structured_completions()
 # test_generate_structured_responses()
 # test_generate_structured_strict_completions()
-test_generate_structured_strict_responses()
-# test_generate_tool_calls_completions()
+# test_generate_structured_strict_responses()
+test_generate_tool_calls_completions()
 # test_generate_tool_calls_responses()
 # test_generate_web_search_responses()
 # test_stream_completions()

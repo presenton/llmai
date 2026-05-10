@@ -309,8 +309,8 @@ class SchemaTests(unittest.TestCase):
 
         processed = process_schema(
             schema,
-            flatten_refs_defs=False,
-            flatten_anyof_allof=False,
+            flatten_refs=False,
+            flatten_allof=False,
             supported_string_types=["email"],
             supported_schema_fields=[
                 "type",
@@ -366,8 +366,8 @@ class SchemaTests(unittest.TestCase):
 
         processed = process_schema(
             schema,
-            flatten_refs_defs=True,
-            flatten_anyof_allof=True,
+            flatten_refs=True,
+            flatten_allof=True,
             supported_string_types=["email", "uri"],
             supported_schema_fields=[
                 "type",
@@ -394,38 +394,32 @@ class SchemaTests(unittest.TestCase):
             {"type": "string", "format": "uri"},
         )
 
-    def test_process_schema_can_flatten_all_of_without_flattening_refs_defs(self):
+    def test_process_schema_flattens_all_of_inside_preserved_defs(self):
         schema = {
             "type": "object",
             "properties": {
-                "result": {
+                "result": {"$ref": "#/$defs/Result"},
+            },
+            "$defs": {
+                "Result": {
                     "allOf": [
                         {
-                            "$ref": "#/$defs/Result",
+                            "$ref": "#/$defs/TextValue",
                         }
                     ],
                     "description": "Resolved result",
-                }
-            },
-            "required": ["result"],
-            "$defs": {
-                "Result": {
-                    "type": "object",
-                    "properties": {
-                        "email": {
-                            "type": "string",
-                            "format": "email",
-                        }
-                    },
-                    "required": ["email"],
-                }
+                },
+                "TextValue": {
+                    "type": "string",
+                    "format": "email",
+                },
             },
         }
 
         processed = process_schema(
             schema,
-            flatten_refs_defs=False,
-            flatten_anyof_allof=True,
+            flatten_refs=False,
+            flatten_allof=True,
             supported_string_types=["email"],
             supported_schema_fields=[
                 "$defs",
@@ -433,57 +427,140 @@ class SchemaTests(unittest.TestCase):
                 "description",
                 "format",
                 "properties",
-                "required",
                 "type",
             ],
         )
 
-        result = processed["properties"]["result"]
-        self.assertNotIn("allOf", result)
-        self.assertEqual(result["$ref"], "#/$defs/Result")
-        self.assertEqual(result["description"], "Resolved result")
-        self.assertIn("$defs", processed)
+        self.assertEqual(processed["properties"]["result"], {"$ref": "#/$defs/Result"})
+        self.assertEqual(
+            processed["$defs"]["Result"],
+            {
+                "type": "string",
+                "format": "email",
+                "description": "Resolved result",
+            },
+        )
 
-    def test_process_schema_can_flatten_refs_defs_without_flattening_all_of(self):
+    def test_process_schema_can_ensure_additional_properties_false(self):
         schema = {
             "type": "object",
             "properties": {
-                "result": {
-                    "allOf": [
-                        {
-                            "$ref": "#/$defs/Result",
-                        }
-                    ],
-                    "description": "Resolved result",
-                }
+                "name": {
+                    "type": "string",
+                },
+                "metadata": {
+                    "type": "object",
+                    "properties": {
+                        "source": {
+                            "type": "string",
+                        },
+                    },
+                },
             },
             "$defs": {
-                "Result": {
-                    "type": "string",
-                    "format": "email",
+                "Existing": {
+                    "type": "object",
+                    "additionalProperties": True,
+                    "properties": {
+                        "value": {
+                            "type": "string",
+                        }
+                    },
                 }
             },
         }
 
         processed = process_schema(
             schema,
-            flatten_refs_defs=True,
-            flatten_anyof_allof=False,
-            supported_string_types=["email"],
+            flatten_refs=False,
+            flatten_allof=False,
+            ensure_additional_properties=True,
+            supported_string_types=[],
             supported_schema_fields=[
-                "allOf",
-                "description",
-                "format",
+                "$defs",
+                "additionalProperties",
                 "properties",
                 "type",
             ],
         )
 
-        result = processed["properties"]["result"]
-        self.assertNotIn("$defs", processed)
-        self.assertIn("allOf", result)
-        self.assertEqual(result["allOf"], [{"type": "string", "format": "email"}])
-        self.assertEqual(result["description"], "Resolved result")
+        self.assertFalse(processed["additionalProperties"])
+        self.assertFalse(
+            processed["properties"]["metadata"]["additionalProperties"]
+        )
+        self.assertFalse(processed["$defs"]["Existing"]["additionalProperties"])
+        self.assertNotIn("additionalProperties", processed["properties"]["name"])
+
+    def test_process_schema_can_remove_additional_properties(self):
+        schema = {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "metadata": {
+                    "type": "object",
+                    "additionalProperties": True,
+                    "properties": {
+                        "source": {
+                            "type": "string",
+                        },
+                    },
+                },
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "additional_properties": False,
+                        "properties": {
+                            "name": {
+                                "type": "string",
+                            }
+                        },
+                    },
+                },
+            },
+            "$defs": {
+                "Existing": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "value": {
+                            "type": "string",
+                        }
+                    },
+                }
+            },
+        }
+
+        processed = process_schema(
+            schema,
+            flatten_refs=False,
+            flatten_allof=False,
+            remove_additional_properties=True,
+        )
+
+        processed_text = repr(processed)
+        self.assertNotIn("additionalProperties", processed_text)
+        self.assertNotIn("additional_properties", processed_text)
+        self.assertEqual(processed["properties"]["metadata"]["type"], "object")
+        self.assertEqual(processed["$defs"]["Existing"]["type"], "object")
+
+    def test_process_schema_remove_additional_properties_wins_over_ensure(self):
+        processed = process_schema(
+            {
+                "type": "object",
+                "properties": {
+                    "metadata": {
+                        "type": "object",
+                    },
+                },
+            },
+            flatten_refs=False,
+            flatten_allof=False,
+            ensure_additional_properties=True,
+            remove_additional_properties=True,
+        )
+
+        self.assertNotIn("additionalProperties", repr(processed))
 
     def test_process_schema_preserves_multi_branch_any_of(self):
         schema = {
@@ -505,8 +582,8 @@ class SchemaTests(unittest.TestCase):
 
         processed = process_schema(
             schema,
-            flatten_refs_defs=False,
-            flatten_anyof_allof=True,
+            flatten_refs=True,
+            flatten_allof=True,
             supported_string_types=["email"],
             supported_schema_fields=[
                 "anyOf",
@@ -529,7 +606,7 @@ class SchemaTests(unittest.TestCase):
             ],
         )
 
-    def test_process_schema_flattens_single_branch_any_of(self):
+    def test_process_schema_preserves_single_branch_any_of(self):
         schema = {
             "type": "object",
             "properties": {
@@ -547,8 +624,8 @@ class SchemaTests(unittest.TestCase):
 
         processed = process_schema(
             schema,
-            flatten_refs_defs=False,
-            flatten_anyof_allof=True,
+            flatten_refs=True,
+            flatten_allof=True,
             supported_string_types=["email"],
             supported_schema_fields=[
                 "anyOf",
@@ -562,8 +639,12 @@ class SchemaTests(unittest.TestCase):
         self.assertEqual(
             processed["properties"]["value"],
             {
-                "type": "string",
-                "format": "email",
+                "anyOf": [
+                    {
+                        "type": "string",
+                        "format": "email",
+                    },
+                ],
                 "description": "Wrapped value",
             },
         )
@@ -584,8 +665,8 @@ class SchemaTests(unittest.TestCase):
 
         processed = process_schema(
             schema,
-            flatten_refs_defs=False,
-            flatten_anyof_allof=False,
+            flatten_refs=False,
+            flatten_allof=False,
             supported_string_types=["email"],
             supported_schema_fields=["type", "properties", "$ref", "$defs", "format"],
         )
@@ -630,8 +711,8 @@ class SchemaTests(unittest.TestCase):
 
         processed = process_schema(
             schema,
-            flatten_refs_defs=True,
-            flatten_anyof_allof=False,
+            flatten_refs=True,
+            flatten_allof=True,
             supported_string_types=[],
             supported_schema_fields=[
                 "$defs",
@@ -669,8 +750,8 @@ class SchemaTests(unittest.TestCase):
 
         processed = process_schema(
             schema,
-            flatten_refs_defs=True,
-            flatten_anyof_allof=True,
+            flatten_refs=True,
+            flatten_allof=True,
             supported_string_types=[],
             supported_schema_fields=[
                 "$ref",

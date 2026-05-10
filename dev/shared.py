@@ -191,7 +191,7 @@ SLIDE_SCHEMA = {
         "citations",
         "speakerNotes",
     ],
-    "additionalProperties": False,
+    # "additionalProperties": False,
     "$defs": {
         **STRING_DEFS,
         "BulletPoint": {
@@ -238,40 +238,221 @@ SLIDE_SCHEMA = {
     },
 }
 
+TOOL_LOCATION_DEFS = {
+    "CityName": {
+        "type": "string",
+        "minLength": 2,
+        "maxLength": 80,
+        "pattern": "^[A-Za-z][A-Za-z .'-]*$",
+    },
+    "CityWithRegion": {
+        "type": "string",
+        "minLength": 5,
+        "maxLength": 120,
+        "pattern": "^[A-Za-z][A-Za-z .'-]+, [A-Za-z][A-Za-z .'-]+$",
+    },
+    "CountryCode": {
+        "type": "string",
+        "pattern": "^[A-Z]{2}$",
+    },
+    "CountryName": {
+        "type": "string",
+        "minLength": 2,
+        "maxLength": 80,
+        "pattern": "^[A-Za-z][A-Za-z .'-]*$",
+    },
+    "Locale": STRING_DEFS["LanguageTag"],
+    "LocationText": {
+        "anyOf": [
+            {
+                "$ref": "#/$defs/CityName",
+            },
+            {
+                "$ref": "#/$defs/CityWithRegion",
+            },
+        ],
+    },
+    "Location": {
+        "type": "object",
+        "properties": {
+            "city": {
+                "allOf": [
+                    {
+                        "$ref": "#/$defs/LocationText",
+                    }
+                ],
+                "description": "City name, optionally including a region.",
+            },
+            "country": {
+                "anyOf": [
+                    {
+                        "$ref": "#/$defs/CountryCode",
+                    },
+                    {
+                        "$ref": "#/$defs/CountryName",
+                    },
+                ],
+            },
+            "locale": {
+                "$ref": "#/$defs/Locale",
+            },
+        },
+        "required": ["city", "country", "locale"],
+        "additionalProperties": False,
+    },
+}
+
+WEATHER_TOOL_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "location": {
+            "allOf": [
+                {
+                    "$ref": "#/$defs/Location",
+                }
+            ],
+            "description": "The place to look up weather for.",
+        },
+        "units": {
+            "anyOf": [
+                {
+                    "$ref": "#/$defs/MetricUnits",
+                },
+                {
+                    "$ref": "#/$defs/ImperialUnits",
+                },
+            ],
+        },
+        "detail": {
+            "allOf": [
+                {
+                    "$ref": "#/$defs/WeatherDetail",
+                }
+            ],
+        },
+    },
+    "required": ["location", "units", "detail"],
+    "$defs": {
+        **TOOL_LOCATION_DEFS,
+        "MetricUnits": {
+            "type": "string",
+            "enum": ["celsius", "metric"],
+        },
+        "ImperialUnits": {
+            "type": "string",
+            "enum": ["fahrenheit", "imperial"],
+        },
+        "WeatherDetail": {
+            "type": "string",
+            "enum": ["current", "hourly", "daily"],
+        },
+    },
+}
+
+TIME_TOOL_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "location": {
+            "allOf": [
+                {
+                    "$ref": "#/$defs/Location",
+                }
+            ],
+            "description": "The place to look up local time for.",
+        },
+        "timeFormat": {
+            "anyOf": [
+                {
+                    "$ref": "#/$defs/TwelveHourFormat",
+                },
+                {
+                    "$ref": "#/$defs/TwentyFourHourFormat",
+                },
+            ],
+        },
+        "referenceDate": {
+            "allOf": [
+                {
+                    "$ref": "#/$defs/IsoDate",
+                }
+            ],
+        },
+    },
+    "required": ["location", "timeFormat", "referenceDate"],
+    "$defs": {
+        **TOOL_LOCATION_DEFS,
+        "IsoDate": STRING_DEFS["IsoDate"],
+        "TwelveHourFormat": {
+            "type": "string",
+            "enum": ["12h", "clock12"],
+        },
+        "TwentyFourHourFormat": {
+            "type": "string",
+            "enum": ["24h", "clock24"],
+        },
+    },
+}
+
+TIMEZONE_TOOL_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "location": {
+            "allOf": [
+                {
+                    "$ref": "#/$defs/Location",
+                }
+            ],
+            "description": "The place to resolve into a timezone identifier.",
+        },
+        "identifierStyle": {
+            "anyOf": [
+                {
+                    "$ref": "#/$defs/IanaStyle",
+                },
+                {
+                    "$ref": "#/$defs/OffsetStyle",
+                },
+            ],
+        },
+        "observedAt": {
+            "allOf": [
+                {
+                    "$ref": "#/$defs/IsoDateTime",
+                }
+            ],
+        },
+    },
+    "required": ["location", "identifierStyle", "observedAt"],
+    "$defs": {
+        **TOOL_LOCATION_DEFS,
+        "IsoDateTime": STRING_DEFS["IsoDateTime"],
+        "IanaStyle": {
+            "type": "string",
+            "enum": ["iana", "region/name"],
+        },
+        "OffsetStyle": {
+            "type": "string",
+            "enum": ["utc-offset", "abbreviation"],
+        },
+    },
+}
+
 TOOL_DEFINITIONS = [
     Tool(
         name="get_weather",
         description="Get the current weather for a city",
         strict=True,
-        schema={
-            "type": "object",
-            "properties": {
-                "city": {"type": "string"},
-            },
-            "required": ["city"],
-        },
+        schema=WEATHER_TOOL_SCHEMA,
     ),
     Tool(
         name="get_time",
         description="Get the current local time for a city",
-        schema={
-            "type": "object",
-            "properties": {
-                "city": {"type": "string"},
-            },
-            "required": ["city"],
-        },
+        schema=TIME_TOOL_SCHEMA,
     ),
     Tool(
         name="get_timezone",
         description="Get the timezone identifier for a city",
-        schema={
-            "type": "object",
-            "properties": {
-                "city": {"type": "string"},
-            },
-            "required": ["city"],
-        },
+        schema=TIMEZONE_TOOL_SCHEMA,
     ),
 ]
 

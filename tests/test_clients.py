@@ -520,6 +520,49 @@ class ClientBehaviorTests(unittest.TestCase):
             {"type": "string", "format": "email"},
         )
 
+    def test_openai_strict_tool_schemas_ensure_additional_properties_false(self):
+        client = OpenAIClient(config=OpenAIClientConfig(api_key="test"))
+
+        openai_tools = client._llm_tools_to_openai_tools(
+            [
+                Tool(
+                    name="weather",
+                    description="weather description",
+                    strict=True,
+                    schema={
+                        "type": "object",
+                        "properties": {
+                            "location": {
+                                "type": "object",
+                                "properties": {
+                                    "city": {
+                                        "type": "string",
+                                    }
+                                },
+                            }
+                        },
+                        "$defs": {
+                            "Address": {
+                                "type": "object",
+                                "properties": {
+                                    "line": {
+                                        "type": "string",
+                                    }
+                                },
+                            }
+                        },
+                    },
+                )
+            ]
+        )
+
+        parameters = openai_tools[0]["function"]["parameters"]
+        self.assertFalse(parameters["additionalProperties"])
+        self.assertFalse(
+            parameters["properties"]["location"]["additionalProperties"]
+        )
+        self.assertFalse(parameters["$defs"]["Address"]["additionalProperties"])
+
     def test_openai_generate_filters_tools_without_custom_allowed_tools_wrapper(self):
         fake_message = SimpleNamespace(
             content=None,
@@ -1222,8 +1265,8 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(sent_schema["properties"]["score"]["maximum"], 1)
         self.assertEqual(sent_schema["properties"]["bulletPoints"]["minItems"], 1)
         self.assertEqual(sent_schema["properties"]["bulletPoints"]["maxItems"], 3)
-        self.assertNotIn("minLength", sent_schema["properties"]["title"])
-        self.assertNotIn("maxLength", sent_schema["properties"]["title"])
+        self.assertEqual(sent_schema["properties"]["title"]["minLength"], 20)
+        self.assertEqual(sent_schema["properties"]["title"]["maxLength"], 100)
         self.assertNotIn(
             "minWords",
             sent_schema["properties"]["image"]["properties"]["prompt"],
@@ -1270,7 +1313,7 @@ class ClientBehaviorTests(unittest.TestCase):
         parameters = tools[0]["function"]["parameters"]
         self.assertEqual(parameters["properties"]["email"]["format"], "email")
         self.assertNotIn("format", parameters["properties"]["url"])
-        self.assertNotIn("minLength", parameters["properties"]["title"])
+        self.assertEqual(parameters["properties"]["title"]["minLength"], 20)
         self.assertEqual(schema["properties"]["url"]["format"], "uri")
         self.assertEqual(schema["properties"]["title"]["minLength"], 20)
 
@@ -3282,6 +3325,85 @@ class ClientBehaviorTests(unittest.TestCase):
             payload["properties"]["location"]["properties"]["city"]["example"],
             "Kathmandu",
         )
+
+    def test_google_tool_schemas_process_refs_defs_all_of_for_all_strict_modes(self):
+        client = GoogleClient(config=GoogleClientConfig(api_key="test"))
+
+        for strict in [False, True]:
+            with self.subTest(strict=strict):
+                google_tools, _ = client._get_google_tools_and_tool_config(
+                    [
+                        Tool(
+                            name="weather",
+                            description="weather description",
+                            strict=strict,
+                            schema={
+                                "type": "object",
+                                "properties": {
+                                    "location": {
+                                        "allOf": [
+                                            {
+                                                "$ref": "#/$defs/Location",
+                                            }
+                                        ],
+                                        "description": "Resolved location",
+                                    },
+                                    "units": {
+                                        "anyOf": [
+                                            {
+                                                "$ref": "#/$defs/MetricUnits",
+                                            },
+                                            {
+                                                "$ref": "#/$defs/ImperialUnits",
+                                            },
+                                        ],
+                                    },
+                                },
+                                "required": ["location", "units"],
+                                "$defs": {
+                                    "CityName": {
+                                        "type": "string",
+                                        "examples": ["Kathmandu"],
+                                    },
+                                    "Location": {
+                                        "type": "object",
+                                        "properties": {
+                                            "city": {
+                                                "$ref": "#/$defs/CityName",
+                                            },
+                                        },
+                                        "required": ["city"],
+                                    },
+                                    "MetricUnits": {
+                                        "type": "string",
+                                        "enum": ["metric"],
+                                    },
+                                    "ImperialUnits": {
+                                        "type": "string",
+                                        "enum": ["imperial"],
+                                    },
+                                },
+                            },
+                        )
+                    ],
+                    None,
+                )
+
+                parameters = google_tools[0].function_declarations[0].parameters
+                payload = parameters.model_dump(exclude_none=True, by_alias=True)
+                payload_text = repr(payload)
+                self.assertNotIn("$defs", payload_text)
+                self.assertNotIn("$ref", payload_text)
+                self.assertNotIn("allOf", payload_text)
+                self.assertNotIn("examples", payload_text)
+                self.assertEqual(
+                    payload["properties"]["location"]["properties"]["city"]["type"],
+                    "STRING",
+                )
+                self.assertEqual(
+                    payload["properties"]["units"]["anyOf"][0]["enum"],
+                    ["metric"],
+                )
 
     def test_google_stream_generates_tool_id_when_missing(self):
         fake_models = FakeGoogleModels(

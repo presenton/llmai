@@ -10,8 +10,7 @@ from llmai.shared.reasoning import (
 )
 from llmai.shared.response_formats import JSONSchemaResponse
 
-
-MODEL = os.getenv("GOOGLE_MODEL", "gemini-3.1-pro-preview")
+MODEL = os.getenv("GOOGLE_MODEL", "gemini-3-flash-preview")
 
 
 def make_client() -> GoogleClient:
@@ -24,7 +23,7 @@ def make_client() -> GoogleClient:
 
 def make_reasoning_effort() -> ReasoningEffort:
     return ReasoningEffort(
-        effort=ReasoningEffortValue.HIGH,
+        effort=ReasoningEffortValue.LOW,
         summary=ReasoningSummary.DETAILED,
     )
 
@@ -103,7 +102,9 @@ def test_generate_web_search():
     response = client.generate(
         model=MODEL,
         messages=[
-            UserMessage(content="What was a positive news story from today? Cite sources."),
+            UserMessage(
+                content="What was a positive news story from today? Cite sources."
+            ),
         ],
         tools=[WEB_SEARCH_TOOL],
     )
@@ -183,7 +184,9 @@ def test_stream_web_search():
     for chunk in client.generate(
         model=MODEL,
         messages=[
-            UserMessage(content="What was a positive news story from today? Cite sources."),
+            UserMessage(
+                content="What was a positive news story from today? Cite sources."
+            ),
         ],
         tools=[WEB_SEARCH_TOOL],
         stream=True,
@@ -227,7 +230,7 @@ def test_stream_reasoning():
     print("-" * 50)
 
 
-test_generate()
+# test_generate()
 # test_generate_structured()
 # test_generate_structured_strict()
 # test_generate_tool_calls()
@@ -237,5 +240,5 @@ test_generate()
 # test_stream_structured_strict()
 # test_stream_tool_calls()
 # test_stream_web_search()
-# test_generate_reasoning()
+test_generate_reasoning()
 # test_stream_reasoning()

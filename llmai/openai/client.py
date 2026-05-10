@@ -32,8 +32,8 @@ from openai.types.shared_params.response_format_json_schema import (
 )
 from openai.types.shared_params.response_format_text import ResponseFormatText
 
-from llmai.shared.configs import OpenAIApiType, OpenAIClientConfig
 from llmai.shared.base import BaseClient
+from llmai.shared.configs import OpenAIApiType, OpenAIClientConfig
 from llmai.shared.errors import LLMError, configuration_error, raise_llm_error
 from llmai.shared.messages import (
     AssistantContent,
@@ -52,8 +52,8 @@ from llmai.shared.messages import (
 )
 from llmai.shared.reasoning import ReasoningEffort
 from llmai.shared.response_formats import (
-    JSONSchemaResponse,
     JSONObjectResponse,
+    JSONSchemaResponse,
     ResponseFormat,
     TextResponse,
     get_response_format_name,
@@ -66,20 +66,21 @@ from llmai.shared.responses import (
     ResponseStreamCompletionChunk,
     ResponseStreamContentChunk,
     ResponseStreamThinkingChunk,
-    ResponseStreamToolCompleteChunk,
     ResponseStreamToolChunk,
+    ResponseStreamToolCompleteChunk,
     ResponseUsage,
 )
 from llmai.shared.schema import get_schema_as_dict, process_schema
 from llmai.shared.tools import (
+    WEB_SEARCH_TOOL_NAME,
     LLMTool,
     Tool,
     ToolChoice,
-    WEB_SEARCH_TOOL_NAME,
     WebSearchTool,
     filter_resolved_tools_for_provider,
     resolve_tools,
 )
+
 
 class OpenAIClient(BaseClient):
     PROVIDER_NAME = "openai"
@@ -110,6 +111,8 @@ class OpenAIClient(BaseClient):
         "maximum",
         "minItems",
         "minimum",
+        "maxLength",
+        "minLength",
         "multipleOf",
         "pattern",
         "properties",
@@ -381,7 +384,9 @@ class OpenAIClient(BaseClient):
             return None
 
         system_messages = [
-            message.content for message in messages if isinstance(message, SystemMessage)
+            message.content
+            for message in messages
+            if isinstance(message, SystemMessage)
         ]
         if not system_messages:
             return None
@@ -498,8 +503,9 @@ class OpenAIClient(BaseClient):
 
         return process_schema(
             schema,
-            flatten_refs_defs=False,
-            flatten_anyof_allof=True,
+            flatten_refs=False,
+            flatten_allof=True,
+            ensure_additional_properties=True,
             supported_string_types=self.STRICT_SUPPORTED_STRING_FORMATS,
             supported_schema_fields=self.STRICT_SUPPORTED_SCHEMA_FIELDS,
         )
@@ -587,9 +593,7 @@ class OpenAIClient(BaseClient):
         )
         if resolved.web_search_tool is not None:
             openai_tools.append(
-                self._web_search_tool_to_openai_responses_tool(
-                    resolved.web_search_tool
-                )
+                self._web_search_tool_to_openai_responses_tool(resolved.web_search_tool)
             )
         if not openai_tools:
             return Omit(), Omit()
@@ -729,7 +733,9 @@ class OpenAIClient(BaseClient):
             elif item_type == "function_call":
                 tool_calls.append(
                     AssistantToolCall(
-                        id=getattr(item, "call_id", None) or getattr(item, "id", None) or "",
+                        id=getattr(item, "call_id", None)
+                        or getattr(item, "id", None)
+                        or "",
                         name=getattr(item, "name", None) or "",
                         arguments=getattr(item, "arguments", None),
                     )
@@ -1066,8 +1072,7 @@ class OpenAIClient(BaseClient):
             )
         )
         reasoning, request_extra_body = self._openai_responses_reasoning_and_extra_body(
-            reasoning_effort,
-            extra_body
+            reasoning_effort, extra_body
         )
         response_input = self._messages_to_openai_responses_input(messages)
         request_kwargs = {
@@ -1129,8 +1134,7 @@ class OpenAIClient(BaseClient):
             )
         )
         reasoning, request_extra_body = self._openai_responses_reasoning_and_extra_body(
-            reasoning_effort,
-            extra_body
+            reasoning_effort, extra_body
         )
         response_input = self._messages_to_openai_responses_input(messages)
         request_kwargs = {
@@ -1170,8 +1174,7 @@ class OpenAIClient(BaseClient):
 
                 if event_type == "response.output_text.delta":
                     streamed_assistant_message_id = (
-                        streamed_assistant_message_id
-                        or getattr(event, "item_id", None)
+                        streamed_assistant_message_id or getattr(event, "item_id", None)
                     )
                     if current_chunk_type == "thinking":
                         active_thinking_key = None
@@ -1254,9 +1257,11 @@ class OpenAIClient(BaseClient):
                     if getattr(item, "type", None) != "function_call":
                         continue
 
-                    tool_key = getattr(item, "id", None) or getattr(
-                        item, "call_id", None
-                    ) or self._response_item_id("tool")
+                    tool_key = (
+                        getattr(item, "id", None)
+                        or getattr(item, "call_id", None)
+                        or self._response_item_id("tool")
+                    )
                     current = partial_tool_calls.get(tool_key)
                     if current is None:
                         current = {"id": None, "name": None, "arguments": None}
@@ -1361,8 +1366,7 @@ class OpenAIClient(BaseClient):
                 thinking_item.summary.append(thinking_text)
 
             streamed_thinking = [
-                streamed_thinking_by_id[item_id]
-                for item_id in streamed_thinking_order
+                streamed_thinking_by_id[item_id] for item_id in streamed_thinking_order
             ]
             streamed_tool_calls = [
                 AssistantToolCall(
@@ -1383,20 +1387,18 @@ class OpenAIClient(BaseClient):
             )
 
             if final_response is not None:
-                response_assistant_message = self._responses_output_to_assistant_message(
-                    getattr(final_response, "output", []) or []
+                response_assistant_message = (
+                    self._responses_output_to_assistant_message(
+                        getattr(final_response, "output", []) or []
+                    )
                 )
                 thinking = response_assistant_message.thinking
                 if streamed_assistant_message.thinking and not all(
-                    thinking_item.id is not None
-                    for thinking_item in (thinking or [])
+                    thinking_item.id is not None for thinking_item in (thinking or [])
                 ):
                     thinking = streamed_assistant_message.thinking
                 assistant_message = AssistantMessage(
-                    id=(
-                        response_assistant_message.id
-                        or streamed_assistant_message.id
-                    ),
+                    id=(response_assistant_message.id or streamed_assistant_message.id),
                     content=(
                         response_assistant_message.content
                         or streamed_assistant_message.content
@@ -1418,7 +1420,9 @@ class OpenAIClient(BaseClient):
             duration_seconds = perf_counter() - start_time
 
             pending_tool_calls = [
-                tool_call for tool_call in tool_calls if tool_call.id not in completed_tool_ids
+                tool_call
+                for tool_call in tool_calls
+                if tool_call.id not in completed_tool_ids
             ]
 
             if current_chunk_type == "tool":

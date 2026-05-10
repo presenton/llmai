@@ -69,7 +69,7 @@ from llmai.shared.responses import (
     ResponseStreamToolCompleteChunk,
     ResponseUsage,
 )
-from llmai.shared.schema import get_schema_as_dict
+from llmai.shared.schema import get_schema_as_dict, process_schema
 from llmai.shared.tools import (
     LLMTool,
     Tool,
@@ -83,6 +83,31 @@ from llmai.shared.tools import (
 class GoogleClient(BaseClient):
     PROVIDER_NAME = "google"
     PROVIDER_LABEL = "Google Gemini"
+    TOOL_SUPPORTED_SCHEMA_FIELDS = [
+        "additionalProperties",
+        "anyOf",
+        "default",
+        "description",
+        "enum",
+        "example",
+        "format",
+        "items",
+        "maxItems",
+        "maxLength",
+        "maxProperties",
+        "maximum",
+        "minItems",
+        "minLength",
+        "minProperties",
+        "minimum",
+        "nullable",
+        "pattern",
+        "properties",
+        "propertyOrdering",
+        "required",
+        "title",
+        "type",
+    ]
 
     def __init__(
         self,
@@ -143,9 +168,7 @@ class GoogleClient(BaseClient):
             thinking_budget = 0
 
         thinking_level = None
-        if reasoning_effort.effort == "minimal":
-            thinking_level = GoogleThinkingLevel.MINIMAL
-        elif reasoning_effort.effort == "low":
+        if reasoning_effort.effort == "low":
             thinking_level = GoogleThinkingLevel.LOW
         elif reasoning_effort.effort == "medium":
             thinking_level = GoogleThinkingLevel.MEDIUM
@@ -331,15 +354,21 @@ class GoogleClient(BaseClient):
                     {
                         "name": tool.name,
                         "description": tool.description,
-                        "parameters": get_schema_as_dict(
-                            tool.input_schema,
-                            strict=tool.strict,
-                        ),
+                        "parameters": self._google_tool_schema(tool),
                     }
                 ]
             )
             for tool in tools
         ]
+
+    def _google_tool_schema(self, tool: Tool) -> dict:
+        return process_schema(
+            get_schema_as_dict(tool.input_schema, strict=tool.strict),
+            flatten_refs=True,
+            flatten_allof=True,
+            supported_schema_fields=self.TOOL_SUPPORTED_SCHEMA_FIELDS,
+            remove_additional_properties=True,
+        )
 
     def _web_search_tool_to_google_tool(
         self,

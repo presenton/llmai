@@ -63,14 +63,16 @@ def _strip_schema_keys(
 def process_schema(
     schema: dict,
     *,
-    flatten_refs_defs: bool,
-    flatten_anyof_allof: bool,
+    flatten_refs: bool,
+    flatten_allof: bool,
+    ensure_additional_properties: bool = False,
+    remove_additional_properties: bool = False,
     supported_string_types: list[str] | None = None,
     supported_schema_fields: list[str] | None = None,
 ) -> dict:
     processed = deepcopy(schema)
 
-    if flatten_refs_defs or flatten_anyof_allof:
+    if flatten_refs or flatten_allof:
         original_definitions = {
             key: deepcopy(value)
             for key, value in processed.items()
@@ -80,14 +82,15 @@ def process_schema(
             processed,
             root=processed,
             seen_refs=frozenset(),
-            flatten_refs_defs=flatten_refs_defs,
-            flatten_anyof_allof=flatten_anyof_allof,
+            flatten_refs=flatten_refs,
+            flatten_allof=flatten_allof,
             in_definition=False,
+            in_allof=False,
         )
-        if _has_def_ref(processed):
+        if flatten_refs and _has_def_ref(processed):
             processed.update(original_definitions)
 
-    return _filter_schema(
+    processed = _filter_schema(
         processed,
         supported_string_types=(
             set(supported_string_types) if supported_string_types is not None else None
@@ -98,15 +101,27 @@ def process_schema(
         in_named_schema_map=False,
     )
 
+    if ensure_additional_properties:
+        processed = _ensure_additional_properties(processed)
+
+    if remove_additional_properties:
+        processed = _strip_schema_keys(
+            processed,
+            keys={"additionalProperties", "additional_properties"},
+        )
+
+    return processed
+
 
 def _flatten_schema(
     schema: object,
     *,
     root: dict,
     seen_refs: frozenset[str],
-    flatten_refs_defs: bool,
-    flatten_anyof_allof: bool,
+    flatten_refs: bool,
+    flatten_allof: bool,
     in_definition: bool,
+    in_allof: bool,
 ) -> object:
     if isinstance(schema, dict):
         flattened = {
@@ -114,15 +129,16 @@ def _flatten_schema(
                 value,
                 root=root,
                 seen_refs=seen_refs,
-                flatten_refs_defs=flatten_refs_defs,
-                flatten_anyof_allof=flatten_anyof_allof,
+                flatten_refs=flatten_refs,
+                flatten_allof=flatten_allof,
                 in_definition=key in {"$defs", "definitions"},
+                in_allof=in_allof or key == "allOf",
             )
             for key, value in schema.items()
             if (
-                (key != "$ref" or not flatten_refs_defs)
+                (key != "$ref" or not (flatten_refs or in_allof))
                 and (
-                    not flatten_refs_defs
+                    not flatten_refs
                     or in_definition
                     or key not in {"$defs", "definitions"}
                 )
@@ -130,7 +146,7 @@ def _flatten_schema(
         }
 
         ref = schema.get("$ref")
-        if flatten_refs_defs and isinstance(ref, str):
+        if (flatten_refs or in_allof) and isinstance(ref, str):
             if ref in seen_refs:
                 return {**{"$ref": ref}, **flattened}
 
@@ -141,15 +157,16 @@ def _flatten_schema(
                         resolved,
                         root=root,
                         seen_refs=seen_refs | {ref},
-                        flatten_refs_defs=flatten_refs_defs,
-                        flatten_anyof_allof=flatten_anyof_allof,
+                        flatten_refs=flatten_refs,
+                        flatten_allof=flatten_allof,
                         in_definition=in_definition,
+                        in_allof=in_allof,
                     ),
                     **flattened,
                 }
 
-        if flatten_anyof_allof:
-            flattened = _merge_subschema_keywords(flattened)
+        if flatten_allof:
+            flattened = _merge_allof(flattened)
 
         return flattened
 
@@ -159,9 +176,10 @@ def _flatten_schema(
                 each,
                 root=root,
                 seen_refs=seen_refs,
-                flatten_refs_defs=flatten_refs_defs,
-                flatten_anyof_allof=flatten_anyof_allof,
+                flatten_refs=flatten_refs,
+                flatten_allof=flatten_allof,
                 in_definition=in_definition,
+                in_allof=in_allof,
             )
             for each in schema
         ]
@@ -169,13 +187,9 @@ def _flatten_schema(
     return schema
 
 
-def _merge_subschema_keywords(schema: dict) -> dict:
+def _merge_allof(schema: dict) -> dict:
     if isinstance(schema.get("allOf"), list):
         return _merge_subschema_keyword(schema, "allOf")
-
-    any_of = schema.get("anyOf")
-    if isinstance(any_of, list) and len(any_of) == 1:
-        return _merge_subschema_keyword(schema, "anyOf")
 
     return schema
 
@@ -300,10 +314,31 @@ def _filter_schema(
             value,
             supported_string_types=supported_string_types,
             supported_schema_fields=supported_schema_fields,
-            in_named_schema_map=key in {"properties", "$defs", "definitions"},
+            in_named_schema_map=(
+                False
+                if in_named_schema_map
+                else key in {"properties", "$defs", "definitions"}
+            ),
         )
 
     return filtered
+
+
+def _ensure_additional_properties(schema: object) -> object:
+    if isinstance(schema, list):
+        return [_ensure_additional_properties(item) for item in schema]
+
+    if not isinstance(schema, dict):
+        return schema
+
+    ensured = {
+        key: _ensure_additional_properties(value)
+        for key, value in schema.items()
+    }
+    if ensured.get("type") == "object":
+        ensured["additionalProperties"] = False
+
+    return ensured
 
 
 def _should_drop_schema_key(

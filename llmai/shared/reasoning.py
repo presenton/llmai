@@ -5,7 +5,6 @@ from pydantic import BaseModel, Field
 
 class ReasoningEffortValue(str, Enum):
     NONE = "none"
-    MINIMAL = "minimal"
     LOW = "low"
     MEDIUM = "medium"
     HIGH = "high"
