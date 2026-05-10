@@ -1,5 +1,5 @@
-from typing import Annotated, TypeAlias
 from copy import deepcopy
+from typing import Annotated, TypeAlias
 
 from pydantic import BaseModel, Field
 
@@ -58,6 +58,276 @@ def _strip_schema_keys(
         return [_strip_schema_keys(each, keys=keys) for each in schema]
 
     return schema
+
+
+def process_schema(
+    schema: dict,
+    *,
+    flatten_refs_defs: bool,
+    flatten_anyof_allof: bool,
+    supported_string_types: list[str] | None = None,
+    supported_schema_fields: list[str] | None = None,
+) -> dict:
+    processed = deepcopy(schema)
+
+    if flatten_refs_defs or flatten_anyof_allof:
+        original_definitions = {
+            key: deepcopy(value)
+            for key, value in processed.items()
+            if key in {"$defs", "definitions"}
+        }
+        processed = _flatten_schema(
+            processed,
+            root=processed,
+            seen_refs=frozenset(),
+            flatten_refs_defs=flatten_refs_defs,
+            flatten_anyof_allof=flatten_anyof_allof,
+            in_definition=False,
+        )
+        if _has_def_ref(processed):
+            processed.update(original_definitions)
+
+    return _filter_schema(
+        processed,
+        supported_string_types=(
+            set(supported_string_types) if supported_string_types is not None else None
+        ),
+        supported_schema_fields=(
+            set(supported_schema_fields) if supported_schema_fields is not None else None
+        ),
+        in_named_schema_map=False,
+    )
+
+
+def _flatten_schema(
+    schema: object,
+    *,
+    root: dict,
+    seen_refs: frozenset[str],
+    flatten_refs_defs: bool,
+    flatten_anyof_allof: bool,
+    in_definition: bool,
+) -> object:
+    if isinstance(schema, dict):
+        flattened = {
+            key: _flatten_schema(
+                value,
+                root=root,
+                seen_refs=seen_refs,
+                flatten_refs_defs=flatten_refs_defs,
+                flatten_anyof_allof=flatten_anyof_allof,
+                in_definition=key in {"$defs", "definitions"},
+            )
+            for key, value in schema.items()
+            if (
+                (key != "$ref" or not flatten_refs_defs)
+                and (
+                    not flatten_refs_defs
+                    or in_definition
+                    or key not in {"$defs", "definitions"}
+                )
+            )
+        }
+
+        ref = schema.get("$ref")
+        if flatten_refs_defs and isinstance(ref, str):
+            if ref in seen_refs:
+                return {**{"$ref": ref}, **flattened}
+
+            resolved = _resolve_local_ref(root, ref)
+            if isinstance(resolved, dict):
+                flattened = {
+                    **_flatten_schema(
+                        resolved,
+                        root=root,
+                        seen_refs=seen_refs | {ref},
+                        flatten_refs_defs=flatten_refs_defs,
+                        flatten_anyof_allof=flatten_anyof_allof,
+                        in_definition=in_definition,
+                    ),
+                    **flattened,
+                }
+
+        if flatten_anyof_allof:
+            flattened = _merge_subschema_keywords(flattened)
+
+        return flattened
+
+    if isinstance(schema, list):
+        return [
+            _flatten_schema(
+                each,
+                root=root,
+                seen_refs=seen_refs,
+                flatten_refs_defs=flatten_refs_defs,
+                flatten_anyof_allof=flatten_anyof_allof,
+                in_definition=in_definition,
+            )
+            for each in schema
+        ]
+
+    return schema
+
+
+def _merge_subschema_keywords(schema: dict) -> dict:
+    if isinstance(schema.get("allOf"), list):
+        return _merge_subschema_keyword(schema, "allOf")
+
+    any_of = schema.get("anyOf")
+    if isinstance(any_of, list) and len(any_of) == 1:
+        return _merge_subschema_keyword(schema, "anyOf")
+
+    return schema
+
+
+def _merge_subschema_keyword(schema: dict, key: str) -> dict:
+    subschemas = schema.get(key)
+    if not isinstance(subschemas, list):
+        return schema
+
+    merged: dict = {}
+    for item in subschemas:
+        if isinstance(item, dict):
+            merged = _merge_schema_dicts(merged, item)
+        else:
+            return schema
+
+    siblings = {each_key: value for each_key, value in schema.items() if each_key != key}
+    return _merge_schema_dicts(merged, siblings)
+
+
+def _merge_schema_dicts(left: dict, right: dict) -> dict:
+    merged = deepcopy(left)
+
+    for key, value in right.items():
+        if (
+            key == "properties"
+            and isinstance(merged.get(key), dict)
+            and isinstance(value, dict)
+        ):
+            merged[key] = {**merged[key], **value}
+            continue
+
+        if (
+            key == "required"
+            and isinstance(merged.get(key), list)
+            and isinstance(value, list)
+        ):
+            merged[key] = [
+                *merged[key],
+                *[item for item in value if item not in merged[key]],
+            ]
+            continue
+
+        merged[key] = value
+
+    return merged
+
+
+def _resolve_local_ref(root: dict, ref: str) -> object:
+    if ref == "#":
+        return root
+
+    if not ref.startswith("#/"):
+        return {"$ref": ref}
+
+    current: object = root
+    for part in ref[2:].split("/"):
+        if not isinstance(current, dict):
+            return {"$ref": ref}
+
+        key = part.replace("~1", "/").replace("~0", "~")
+        if key not in current:
+            return {"$ref": ref}
+
+        current = current[key]
+
+    return current
+
+
+def _has_def_ref(schema: object) -> bool:
+    if isinstance(schema, dict):
+        ref = schema.get("$ref")
+        if isinstance(ref, str) and (
+            ref.startswith("#/$defs/") or ref.startswith("#/definitions/")
+        ):
+            return True
+
+        return any(_has_def_ref(value) for value in schema.values())
+
+    if isinstance(schema, list):
+        return any(_has_def_ref(item) for item in schema)
+
+    return False
+
+
+def _filter_schema(
+    schema: object,
+    *,
+    supported_string_types: set[str] | None,
+    supported_schema_fields: set[str] | None,
+    in_named_schema_map: bool,
+) -> object:
+    if isinstance(schema, list):
+        return [
+            _filter_schema(
+                item,
+                supported_string_types=supported_string_types,
+                supported_schema_fields=supported_schema_fields,
+                in_named_schema_map=False,
+            )
+            for item in schema
+        ]
+
+    if not isinstance(schema, dict):
+        return schema
+
+    filtered: dict = {}
+    is_string_schema = schema.get("type") == "string"
+
+    for key, value in schema.items():
+        if _should_drop_schema_key(
+            key,
+            value,
+            is_string_schema=is_string_schema,
+            supported_string_types=supported_string_types,
+            supported_schema_fields=supported_schema_fields,
+            in_named_schema_map=in_named_schema_map,
+        ):
+            continue
+
+        filtered[key] = _filter_schema(
+            value,
+            supported_string_types=supported_string_types,
+            supported_schema_fields=supported_schema_fields,
+            in_named_schema_map=key in {"properties", "$defs", "definitions"},
+        )
+
+    return filtered
+
+
+def _should_drop_schema_key(
+    key: str,
+    value: object,
+    *,
+    is_string_schema: bool,
+    supported_string_types: set[str] | None,
+    supported_schema_fields: set[str] | None,
+    in_named_schema_map: bool,
+) -> bool:
+    if (
+        is_string_schema
+        and key == "format"
+        and supported_string_types is not None
+        and isinstance(value, str)
+        and value not in supported_string_types
+    ):
+        return True
+
+    if supported_schema_fields is None or in_named_schema_map:
+        return False
+
+    return key not in supported_schema_fields
 
 
 def _model_json_schema(model_type: type[BaseModel]) -> dict:

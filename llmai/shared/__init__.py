@@ -73,6 +73,7 @@ from llmai.shared.responses import (
 from llmai.shared.schema import (
     SchemaLike,
     get_schema_as_dict,
+    process_schema,
 )
 from llmai.shared.tools import (
     HostedToolType,
@@ -152,4 +153,5 @@ __all__ = [
     "get_response_schema",
     "get_schema_as_dict",
     "normalize_content_parts",
+    "process_schema",
 ]

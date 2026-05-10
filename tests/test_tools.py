@@ -2,7 +2,7 @@ import unittest
 
 from llmai.shared import Tool, WebSearchTool
 from llmai.shared.errors import ToolError
-from llmai.shared.schema import get_schema_as_dict
+from llmai.shared.schema import get_schema_as_dict, process_schema
 from llmai.shared.tools import filter_resolved_tools_for_provider, resolve_tools
 
 
@@ -282,6 +282,411 @@ class SchemaTests(unittest.TestCase):
         self.assertEqual(
             cleaned["$defs"]["Result"]["properties"]["url"]["format"],
             "uri",
+        )
+
+    def test_process_schema_filters_fields_without_removing_property_names(self):
+        schema = {
+            "type": "object",
+            "title": "Search result",
+            "properties": {
+                "email": {
+                    "type": "string",
+                    "format": "email",
+                    "minLength": 3,
+                },
+                "url": {
+                    "type": "string",
+                    "format": "uri",
+                },
+                "score": {
+                    "type": "number",
+                    "minimum": 0,
+                },
+            },
+            "required": ["email", "url", "score"],
+            "additionalProperties": False,
+        }
+
+        processed = process_schema(
+            schema,
+            flatten_refs_defs=False,
+            flatten_anyof_allof=False,
+            supported_string_types=["email"],
+            supported_schema_fields=[
+                "type",
+                "properties",
+                "format",
+                "required",
+                "additionalProperties",
+            ],
+        )
+
+        self.assertNotIn("title", processed)
+        self.assertEqual(
+            sorted(processed["properties"]),
+            ["email", "score", "url"],
+        )
+        self.assertEqual(processed["properties"]["email"]["format"], "email")
+        self.assertNotIn("format", processed["properties"]["url"])
+        self.assertNotIn("minLength", processed["properties"]["email"])
+        self.assertNotIn("minimum", processed["properties"]["score"])
+        self.assertEqual(schema["properties"]["url"]["format"], "uri")
+
+    def test_process_schema_flattens_local_refs_and_all_of(self):
+        schema = {
+            "type": "object",
+            "properties": {
+                "result": {
+                    "allOf": [
+                        {
+                            "$ref": "#/$defs/Result",
+                        }
+                    ],
+                    "description": "Resolved result",
+                }
+            },
+            "required": ["result"],
+            "$defs": {
+                "Result": {
+                    "type": "object",
+                    "properties": {
+                        "email": {
+                            "type": "string",
+                            "format": "email",
+                        },
+                        "url": {
+                            "type": "string",
+                            "format": "uri",
+                        },
+                    },
+                    "required": ["email", "url"],
+                }
+            },
+        }
+
+        processed = process_schema(
+            schema,
+            flatten_refs_defs=True,
+            flatten_anyof_allof=True,
+            supported_string_types=["email", "uri"],
+            supported_schema_fields=[
+                "type",
+                "properties",
+                "required",
+                "format",
+                "description",
+            ],
+        )
+
+        result = processed["properties"]["result"]
+        self.assertNotIn("$defs", processed)
+        self.assertNotIn("allOf", result)
+        self.assertNotIn("$ref", result)
+        self.assertEqual(result["type"], "object")
+        self.assertEqual(result["description"], "Resolved result")
+        self.assertEqual(result["required"], ["email", "url"])
+        self.assertEqual(
+            result["properties"]["email"],
+            {"type": "string", "format": "email"},
+        )
+        self.assertEqual(
+            result["properties"]["url"],
+            {"type": "string", "format": "uri"},
+        )
+
+    def test_process_schema_can_flatten_all_of_without_flattening_refs_defs(self):
+        schema = {
+            "type": "object",
+            "properties": {
+                "result": {
+                    "allOf": [
+                        {
+                            "$ref": "#/$defs/Result",
+                        }
+                    ],
+                    "description": "Resolved result",
+                }
+            },
+            "required": ["result"],
+            "$defs": {
+                "Result": {
+                    "type": "object",
+                    "properties": {
+                        "email": {
+                            "type": "string",
+                            "format": "email",
+                        }
+                    },
+                    "required": ["email"],
+                }
+            },
+        }
+
+        processed = process_schema(
+            schema,
+            flatten_refs_defs=False,
+            flatten_anyof_allof=True,
+            supported_string_types=["email"],
+            supported_schema_fields=[
+                "$defs",
+                "$ref",
+                "description",
+                "format",
+                "properties",
+                "required",
+                "type",
+            ],
+        )
+
+        result = processed["properties"]["result"]
+        self.assertNotIn("allOf", result)
+        self.assertEqual(result["$ref"], "#/$defs/Result")
+        self.assertEqual(result["description"], "Resolved result")
+        self.assertIn("$defs", processed)
+
+    def test_process_schema_can_flatten_refs_defs_without_flattening_all_of(self):
+        schema = {
+            "type": "object",
+            "properties": {
+                "result": {
+                    "allOf": [
+                        {
+                            "$ref": "#/$defs/Result",
+                        }
+                    ],
+                    "description": "Resolved result",
+                }
+            },
+            "$defs": {
+                "Result": {
+                    "type": "string",
+                    "format": "email",
+                }
+            },
+        }
+
+        processed = process_schema(
+            schema,
+            flatten_refs_defs=True,
+            flatten_anyof_allof=False,
+            supported_string_types=["email"],
+            supported_schema_fields=[
+                "allOf",
+                "description",
+                "format",
+                "properties",
+                "type",
+            ],
+        )
+
+        result = processed["properties"]["result"]
+        self.assertNotIn("$defs", processed)
+        self.assertIn("allOf", result)
+        self.assertEqual(result["allOf"], [{"type": "string", "format": "email"}])
+        self.assertEqual(result["description"], "Resolved result")
+
+    def test_process_schema_preserves_multi_branch_any_of(self):
+        schema = {
+            "type": "object",
+            "properties": {
+                "value": {
+                    "anyOf": [
+                        {
+                            "type": "string",
+                            "format": "email",
+                        },
+                        {
+                            "type": "null",
+                        },
+                    ]
+                }
+            },
+        }
+
+        processed = process_schema(
+            schema,
+            flatten_refs_defs=False,
+            flatten_anyof_allof=True,
+            supported_string_types=["email"],
+            supported_schema_fields=[
+                "anyOf",
+                "format",
+                "properties",
+                "type",
+            ],
+        )
+
+        self.assertEqual(
+            processed["properties"]["value"]["anyOf"],
+            [
+                {
+                    "type": "string",
+                    "format": "email",
+                },
+                {
+                    "type": "null",
+                },
+            ],
+        )
+
+    def test_process_schema_flattens_single_branch_any_of(self):
+        schema = {
+            "type": "object",
+            "properties": {
+                "value": {
+                    "anyOf": [
+                        {
+                            "type": "string",
+                            "format": "email",
+                        },
+                    ],
+                    "description": "Wrapped value",
+                }
+            },
+        }
+
+        processed = process_schema(
+            schema,
+            flatten_refs_defs=False,
+            flatten_anyof_allof=True,
+            supported_string_types=["email"],
+            supported_schema_fields=[
+                "anyOf",
+                "description",
+                "format",
+                "properties",
+                "type",
+            ],
+        )
+
+        self.assertEqual(
+            processed["properties"]["value"],
+            {
+                "type": "string",
+                "format": "email",
+                "description": "Wrapped value",
+            },
+        )
+
+    def test_process_schema_keeps_defs_when_not_flattening(self):
+        schema = {
+            "type": "object",
+            "properties": {
+                "result": {"$ref": "#/$defs/Result"},
+            },
+            "$defs": {
+                "Result": {
+                    "type": "string",
+                    "format": "uuid",
+                }
+            },
+        }
+
+        processed = process_schema(
+            schema,
+            flatten_refs_defs=False,
+            flatten_anyof_allof=False,
+            supported_string_types=["email"],
+            supported_schema_fields=["type", "properties", "$ref", "$defs", "format"],
+        )
+
+        self.assertEqual(processed["properties"]["result"]["$ref"], "#/$defs/Result")
+        self.assertIn("$defs", processed)
+        self.assertEqual(processed["$defs"]["Result"], {"type": "string"})
+
+    def test_process_schema_flatten_keeps_recursive_defs_ref_resolvable(self):
+        schema = {
+            "type": "object",
+            "properties": {
+                "linked_list": {
+                    "$ref": "#/$defs/linked_list_node",
+                }
+            },
+            "$defs": {
+                "linked_list_node": {
+                    "type": "object",
+                    "properties": {
+                        "value": {
+                            "type": "number",
+                        },
+                        "next": {
+                            "anyOf": [
+                                {
+                                    "$ref": "#/$defs/linked_list_node",
+                                },
+                                {
+                                    "type": "null",
+                                },
+                            ]
+                        },
+                    },
+                    "additionalProperties": False,
+                    "required": ["next", "value"],
+                }
+            },
+            "additionalProperties": False,
+            "required": ["linked_list"],
+        }
+
+        processed = process_schema(
+            schema,
+            flatten_refs_defs=True,
+            flatten_anyof_allof=False,
+            supported_string_types=[],
+            supported_schema_fields=[
+                "$defs",
+                "$ref",
+                "additionalProperties",
+                "anyOf",
+                "properties",
+                "required",
+                "type",
+            ],
+        )
+
+        linked_list = processed["properties"]["linked_list"]
+        self.assertEqual(linked_list["type"], "object")
+        self.assertIn("$defs", processed)
+        self.assertEqual(
+            linked_list["properties"]["next"]["anyOf"][0],
+            {"$ref": "#/$defs/linked_list_node"},
+        )
+
+    def test_process_schema_flatten_handles_root_recursive_ref(self):
+        schema = {
+            "type": "object",
+            "properties": {
+                "children": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#",
+                    },
+                }
+            },
+            "required": ["children"],
+            "additionalProperties": False,
+        }
+
+        processed = process_schema(
+            schema,
+            flatten_refs_defs=True,
+            flatten_anyof_allof=True,
+            supported_string_types=[],
+            supported_schema_fields=[
+                "$ref",
+                "additionalProperties",
+                "items",
+                "properties",
+                "required",
+                "type",
+            ],
+        )
+
+        self.assertEqual(
+            processed["properties"]["children"]["items"]["properties"]["children"][
+                "items"
+            ],
+            {"$ref": "#"},
         )
 
 

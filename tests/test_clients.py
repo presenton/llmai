@@ -449,7 +449,7 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertIsInstance(openai_tools, openai.Omit)
         self.assertIsInstance(tool_choice, openai.Omit)
 
-    def test_openai_strict_tool_schemas_keep_all_of(self):
+    def test_openai_strict_tool_schemas_flatten_all_of(self):
         client = OpenAIClient(config=OpenAIClientConfig(api_key="test"))
 
         openai_tools = client._llm_tools_to_openai_tools(
@@ -475,13 +475,49 @@ class ClientBehaviorTests(unittest.TestCase):
         )
 
         parameters = openai_tools[0]["function"]["parameters"]
-        self.assertEqual(
-            parameters["properties"]["location"]["allOf"],
-            [{"type": "string"}],
-        )
+        self.assertNotIn("allOf", parameters["properties"]["location"])
+        self.assertEqual(parameters["properties"]["location"]["type"], "string")
         self.assertEqual(
             parameters["properties"]["location"]["description"],
             "Resolved location",
+        )
+
+    def test_openai_strict_tool_schemas_keep_defs_refs(self):
+        client = OpenAIClient(config=OpenAIClientConfig(api_key="test"))
+
+        openai_tools = client._llm_tools_to_openai_tools(
+            [
+                Tool(
+                    name="weather",
+                    description="weather description",
+                    strict=True,
+                    schema={
+                        "type": "object",
+                        "properties": {
+                            "location": {
+                                "$ref": "#/$defs/Location",
+                            }
+                        },
+                        "required": ["location"],
+                        "$defs": {
+                            "Location": {
+                                "type": "string",
+                                "format": "email",
+                            }
+                        },
+                    },
+                )
+            ]
+        )
+
+        parameters = openai_tools[0]["function"]["parameters"]
+        self.assertEqual(
+            parameters["properties"]["location"],
+            {"$ref": "#/$defs/Location"},
+        )
+        self.assertEqual(
+            parameters["$defs"]["Location"],
+            {"type": "string", "format": "email"},
         )
 
     def test_openai_generate_filters_tools_without_custom_allowed_tools_wrapper(self):
@@ -1094,7 +1130,7 @@ class ClientBehaviorTests(unittest.TestCase):
             "object",
         )
 
-    def test_openai_generate_preserves_json_schema_keywords(self):
+    def test_openai_generate_processes_strict_json_schema_keywords(self):
         fake_message = SimpleNamespace(
             content='{"answer":"pong"}',
             tool_calls=None,
@@ -1180,29 +1216,26 @@ class ClientBehaviorTests(unittest.TestCase):
             sent_schema["properties"]["username"]["pattern"],
             "^@[a-zA-Z0-9_]+$",
         )
-        self.assertEqual(sent_schema["properties"]["url"]["format"], "uri")
-        self.assertEqual(
-            sent_schema["properties"]["url"]["examples"],
-            ["https://example.com"],
-        )
+        self.assertNotIn("format", sent_schema["properties"]["url"])
+        self.assertNotIn("examples", sent_schema["properties"]["url"])
         self.assertEqual(sent_schema["properties"]["score"]["minimum"], 0)
         self.assertEqual(sent_schema["properties"]["score"]["maximum"], 1)
         self.assertEqual(sent_schema["properties"]["bulletPoints"]["minItems"], 1)
         self.assertEqual(sent_schema["properties"]["bulletPoints"]["maxItems"], 3)
-        self.assertEqual(sent_schema["properties"]["title"]["minLength"], 20)
-        self.assertEqual(sent_schema["properties"]["title"]["maxLength"], 100)
-        self.assertEqual(
-            sent_schema["properties"]["image"]["properties"]["prompt"]["minWords"],
-            2,
+        self.assertNotIn("minLength", sent_schema["properties"]["title"])
+        self.assertNotIn("maxLength", sent_schema["properties"]["title"])
+        self.assertNotIn(
+            "minWords",
+            sent_schema["properties"]["image"]["properties"]["prompt"],
         )
-        self.assertEqual(
-            sent_schema["properties"]["image"]["properties"]["prompt"]["maxWords"],
-            5,
+        self.assertNotIn(
+            "maxWords",
+            sent_schema["properties"]["image"]["properties"]["prompt"],
         )
         self.assertEqual(schema["properties"]["url"]["format"], "uri")
         self.assertEqual(schema["properties"]["title"]["minLength"], 20)
 
-    def test_openai_tools_preserve_json_schema_keywords(self):
+    def test_openai_tools_process_strict_json_schema_keywords(self):
         client = OpenAIClient(config=OpenAIClientConfig(api_key="test"))
         schema = {
             "type": "object",
@@ -1236,8 +1269,8 @@ class ClientBehaviorTests(unittest.TestCase):
 
         parameters = tools[0]["function"]["parameters"]
         self.assertEqual(parameters["properties"]["email"]["format"], "email")
-        self.assertEqual(parameters["properties"]["url"]["format"], "uri")
-        self.assertEqual(parameters["properties"]["title"]["minLength"], 20)
+        self.assertNotIn("format", parameters["properties"]["url"])
+        self.assertNotIn("minLength", parameters["properties"]["title"])
         self.assertEqual(schema["properties"]["url"]["format"], "uri")
         self.assertEqual(schema["properties"]["title"]["minLength"], 20)
 

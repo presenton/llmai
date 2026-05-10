@@ -70,7 +70,7 @@ from llmai.shared.responses import (
     ResponseStreamToolChunk,
     ResponseUsage,
 )
-from llmai.shared.schema import get_schema_as_dict
+from llmai.shared.schema import get_schema_as_dict, process_schema
 from llmai.shared.tools import (
     LLMTool,
     Tool,
@@ -84,6 +84,38 @@ from llmai.shared.tools import (
 class OpenAIClient(BaseClient):
     PROVIDER_NAME = "openai"
     PROVIDER_LABEL = "OpenAI"
+    STRICT_SUPPORTED_STRING_FORMATS = [
+        "date-time",
+        "time",
+        "date",
+        "duration",
+        "email",
+        "hostname",
+        "ipv4",
+        "ipv6",
+        "uuid",
+    ]
+    STRICT_SUPPORTED_SCHEMA_FIELDS = [
+        "$defs",
+        "$ref",
+        "additionalProperties",
+        "anyOf",
+        "description",
+        "enum",
+        "exclusiveMaximum",
+        "exclusiveMinimum",
+        "format",
+        "items",
+        "maxItems",
+        "maximum",
+        "minItems",
+        "minimum",
+        "multipleOf",
+        "pattern",
+        "properties",
+        "required",
+        "type",
+    ]
 
     def __init__(
         self,
@@ -399,21 +431,18 @@ class OpenAIClient(BaseClient):
         response_format: ResponseFormat | None,
     ) -> OpenAIResponseFormat | Omit:
         if isinstance(response_format, JSONSchemaResponse):
+            strict = get_response_format_strict(response_format, default=True)
             return ResponseFormatJSONSchema(
                 type="json_schema",
                 json_schema={
                     "name": get_response_format_name(
                         response_format, default="response"
                     ),
-                    "schema": get_response_schema(
-                        response_format,
-                        strict=get_response_format_strict(
-                            response_format,
-                            default=False,
-                        ),
-                    )
-                    or {},
-                    "strict": get_response_format_strict(response_format, default=True),
+                    "schema": self._openai_schema(
+                        get_response_schema(response_format, strict=strict) or {},
+                        strict=strict,
+                    ),
+                    "strict": strict,
                 },
             )
 
@@ -430,6 +459,7 @@ class OpenAIClient(BaseClient):
         response_format: ResponseFormat | None,
     ) -> dict[str, object] | Omit:
         if isinstance(response_format, JSONSchemaResponse):
+            strict = get_response_format_strict(response_format, default=True)
             return {
                 "format": {
                     "type": "json_schema",
@@ -437,15 +467,11 @@ class OpenAIClient(BaseClient):
                         response_format,
                         default="response",
                     ),
-                    "schema": get_response_schema(
-                        response_format,
-                        strict=get_response_format_strict(
-                            response_format,
-                            default=False,
-                        ),
-                    )
-                    or {},
-                    "strict": get_response_format_strict(response_format, default=True),
+                    "schema": self._openai_schema(
+                        get_response_schema(response_format, strict=strict) or {},
+                        strict=strict,
+                    ),
+                    "strict": strict,
                 }
             }
 
@@ -461,6 +487,23 @@ class OpenAIClient(BaseClient):
 
         return Omit()
 
+    def _openai_schema(
+        self,
+        schema: dict,
+        *,
+        strict: bool,
+    ) -> dict:
+        if not strict:
+            return schema
+
+        return process_schema(
+            schema,
+            flatten_refs_defs=False,
+            flatten_anyof_allof=True,
+            supported_string_types=self.STRICT_SUPPORTED_STRING_FORMATS,
+            supported_schema_fields=self.STRICT_SUPPORTED_SCHEMA_FIELDS,
+        )
+
     def _llm_tools_to_openai_tools(
         self,
         tools: list[Tool],
@@ -471,8 +514,8 @@ class OpenAIClient(BaseClient):
                 function=FunctionDefinition(
                     name=tool.name,
                     description=tool.description,
-                    parameters=get_schema_as_dict(
-                        tool.input_schema,
+                    parameters=self._openai_schema(
+                        get_schema_as_dict(tool.input_schema, strict=tool.strict),
                         strict=tool.strict,
                     ),
                     strict=tool.strict,
@@ -490,8 +533,8 @@ class OpenAIClient(BaseClient):
                 "type": "function",
                 "name": tool.name,
                 "description": tool.description,
-                "parameters": get_schema_as_dict(
-                    tool.input_schema,
+                "parameters": self._openai_schema(
+                    get_schema_as_dict(tool.input_schema, strict=tool.strict),
                     strict=tool.strict,
                 ),
                 "strict": tool.strict,
