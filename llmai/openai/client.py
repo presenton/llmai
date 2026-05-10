@@ -81,41 +81,6 @@ from llmai.shared.tools import (
     resolve_tools,
 )
 
-OPENAI_SUPPORTED_STRING_FORMATS = {
-    "date-time",
-    "time",
-    "date",
-    "duration",
-    "email",
-    "hostname",
-    "ipv4",
-    "ipv6",
-    "uuid",
-}
-OPENAI_SUPPORTED_SCHEMA_KEYS = {
-    "$defs",
-    "$ref",
-    "additionalProperties",
-    "anyOf",
-    "const",
-    "description",
-    "enum",
-    "exclusiveMaximum",
-    "exclusiveMinimum",
-    "format",
-    "items",
-    "maximum",
-    "maxItems",
-    "minimum",
-    "minItems",
-    "multipleOf",
-    "pattern",
-    "properties",
-    "required",
-    "type",
-}
-
-
 class OpenAIClient(BaseClient):
     PROVIDER_NAME = "openai"
     PROVIDER_LABEL = "OpenAI"
@@ -442,8 +407,6 @@ class OpenAIClient(BaseClient):
                     ),
                     "schema": get_response_schema(
                         response_format,
-                        supported_keys=OPENAI_SUPPORTED_SCHEMA_KEYS,
-                        supported_string_formats=OPENAI_SUPPORTED_STRING_FORMATS,
                         strict=get_response_format_strict(
                             response_format,
                             default=False,
@@ -476,8 +439,6 @@ class OpenAIClient(BaseClient):
                     ),
                     "schema": get_response_schema(
                         response_format,
-                        supported_keys=OPENAI_SUPPORTED_SCHEMA_KEYS,
-                        supported_string_formats=OPENAI_SUPPORTED_STRING_FORMATS,
                         strict=get_response_format_strict(
                             response_format,
                             default=False,
@@ -512,8 +473,6 @@ class OpenAIClient(BaseClient):
                     description=tool.description,
                     parameters=get_schema_as_dict(
                         tool.input_schema,
-                        supported_keys=OPENAI_SUPPORTED_SCHEMA_KEYS,
-                        supported_string_formats=OPENAI_SUPPORTED_STRING_FORMATS,
                         strict=tool.strict,
                     ),
                     strict=tool.strict,
@@ -533,8 +492,6 @@ class OpenAIClient(BaseClient):
                 "description": tool.description,
                 "parameters": get_schema_as_dict(
                     tool.input_schema,
-                    supported_keys=OPENAI_SUPPORTED_SCHEMA_KEYS,
-                    supported_string_formats=OPENAI_SUPPORTED_STRING_FORMATS,
                     strict=tool.strict,
                 ),
                 "strict": tool.strict,

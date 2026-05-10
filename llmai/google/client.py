@@ -63,55 +63,6 @@ from llmai.shared.tools import (
     resolve_tools,
 )
 
-GOOGLE_SUPPORTED_RESPONSE_SCHEMA_KEYS = {
-    "$anchor",
-    "$defs",
-    "$id",
-    "$ref",
-    "additionalProperties",
-    "anyOf",
-    "description",
-    "enum",
-    "format",
-    "items",
-    "maximum",
-    "maxItems",
-    "minimum",
-    "minItems",
-    "oneOf",
-    "prefixItems",
-    "properties",
-    "propertyOrdering",
-    "required",
-    "title",
-    "type",
-}
-GOOGLE_SUPPORTED_TOOL_SCHEMA_KEYS = {
-    "$defs",
-    "$ref",
-    "anyOf",
-    "description",
-    "enum",
-    "format",
-    "items",
-    "maximum",
-    "maxItems",
-    "maxLength",
-    "maxProperties",
-    "minimum",
-    "minItems",
-    "minLength",
-    "minProperties",
-    "nullable",
-    "pattern",
-    "properties",
-    "propertyOrdering",
-    "required",
-    "title",
-    "type",
-}
-
-
 class GoogleClient(BaseClient):
     PROVIDER_NAME = "google"
     PROVIDER_LABEL = "Google Gemini"
@@ -353,8 +304,6 @@ class GoogleClient(BaseClient):
     ) -> dict | None:
         return get_response_schema(
             response_format,
-            supported_keys=GOOGLE_SUPPORTED_RESPONSE_SCHEMA_KEYS,
-            supported_string_formats=None,
             strict=get_response_format_strict(response_format, default=False),
         )
 
@@ -367,8 +316,6 @@ class GoogleClient(BaseClient):
                         "description": tool.description,
                         "parameters": get_schema_as_dict(
                             tool.input_schema,
-                            supported_keys=GOOGLE_SUPPORTED_TOOL_SCHEMA_KEYS,
-                            supported_string_formats=None,
                             strict=tool.strict,
                         ),
                     }

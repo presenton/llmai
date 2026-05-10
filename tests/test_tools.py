@@ -152,7 +152,7 @@ class ResolveToolsTests(unittest.TestCase):
 
 
 class SchemaTests(unittest.TestCase):
-    def test_get_schema_as_dict_filters_to_supported_keys_and_formats(self):
+    def test_get_schema_as_dict_keeps_strict_schema_intact(self):
         schema = {
             "type": "object",
             "properties": {
@@ -184,45 +184,24 @@ class SchemaTests(unittest.TestCase):
             "required": ["title", "email", "url", "score", "bullet_points"],
         }
 
-        filtered = get_schema_as_dict(
+        cleaned = get_schema_as_dict(
             schema,
-            supported_keys={
-                "$defs",
-                "$ref",
-                "additionalProperties",
-                "allOf",
-                "anyOf",
-                "const",
-                "definitions",
-                "description",
-                "enum",
-                "exclusiveMaximum",
-                "exclusiveMinimum",
-                "format",
-                "items",
-                "maximum",
-                "maxItems",
-                "minimum",
-                "minItems",
-                "multipleOf",
-                "pattern",
-                "properties",
-                "required",
-                "type",
-            },
-            supported_string_formats={"email"},
             strict=True,
         )
 
-        self.assertFalse(filtered["additionalProperties"])
-        self.assertEqual(filtered["properties"]["email"]["format"], "email")
-        self.assertNotIn("format", filtered["properties"]["url"])
-        self.assertNotIn("examples", filtered["properties"]["url"])
-        self.assertNotIn("minLength", filtered["properties"]["title"])
-        self.assertEqual(filtered["properties"]["score"]["minimum"], 0)
-        self.assertEqual(filtered["properties"]["score"]["maximum"], 1)
-        self.assertEqual(filtered["properties"]["bullet_points"]["minItems"], 1)
-        self.assertEqual(filtered["properties"]["bullet_points"]["maxItems"], 3)
+        self.assertNotIn("additionalProperties", cleaned)
+        self.assertEqual(cleaned["properties"]["email"]["format"], "email")
+        self.assertEqual(cleaned["properties"]["url"]["format"], "uri")
+        self.assertEqual(
+            cleaned["properties"]["url"]["examples"],
+            ["https://example.com"],
+        )
+        self.assertEqual(cleaned["properties"]["title"]["minLength"], 20)
+        self.assertEqual(cleaned["properties"]["score"]["minimum"], 0)
+        self.assertEqual(cleaned["properties"]["score"]["maximum"], 1)
+        self.assertEqual(cleaned["properties"]["bullet_points"]["minItems"], 1)
+        self.assertEqual(cleaned["properties"]["bullet_points"]["maxItems"], 3)
+        self.assertIsNot(cleaned, schema)
         self.assertEqual(schema["properties"]["url"]["format"], "uri")
         self.assertEqual(schema["properties"]["title"]["minLength"], 20)
 
@@ -245,13 +224,6 @@ class SchemaTests(unittest.TestCase):
 
         preserved = get_schema_as_dict(
             schema,
-            supported_keys={
-                "format",
-                "properties",
-                "required",
-                "type",
-            },
-            supported_string_formats={"email"},
             strict=False,
         )
 
@@ -263,7 +235,7 @@ class SchemaTests(unittest.TestCase):
         )
         self.assertEqual(preserved["properties"]["title"]["minLength"], 20)
 
-    def test_get_schema_as_dict_flattens_all_of_and_ref_in_strict_cleanup(self):
+    def test_get_schema_as_dict_keeps_all_of_and_ref_in_strict_schema(self):
         schema = {
             "type": "object",
             "properties": {
@@ -297,28 +269,20 @@ class SchemaTests(unittest.TestCase):
 
         cleaned = get_schema_as_dict(
             schema,
-            supported_keys={
-                "$defs",
-                "$ref",
-                "additionalProperties",
-                "allOf",
-                "description",
-                "format",
-                "properties",
-                "required",
-                "type",
-            },
-            supported_string_formats={"email"},
             strict=True,
         )
 
         result = cleaned["properties"]["result"]
-        self.assertNotIn("allOf", result)
-        self.assertNotIn("$ref", result)
-        self.assertEqual(result["type"], "object")
+        self.assertEqual(result["allOf"], [{"$ref": "#/$defs/Result"}])
         self.assertEqual(result["description"], "Resolved result")
-        self.assertEqual(result["properties"]["email"]["format"], "email")
-        self.assertNotIn("format", result["properties"]["url"])
+        self.assertEqual(
+            cleaned["$defs"]["Result"]["properties"]["email"]["format"],
+            "email",
+        )
+        self.assertEqual(
+            cleaned["$defs"]["Result"]["properties"]["url"]["format"],
+            "uri",
+        )
 
 
 if __name__ == "__main__":

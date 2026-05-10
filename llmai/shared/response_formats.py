@@ -2,7 +2,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from llmai.shared.schema import SchemaLike, cleanup_schema_dict, get_schema_as_dict
+from llmai.shared.schema import SchemaLike, get_schema_as_dict
 
 
 class ResponseFormat(BaseModel):
@@ -27,25 +27,16 @@ class TextResponse(ResponseFormat):
 def get_response_schema(
     response_format: ResponseFormat | None,
     *,
-    supported_keys: set[str] | None = None,
-    supported_string_formats: set[str] | None = None,
     strict: bool = False,
 ) -> dict | None:
     if isinstance(response_format, JSONSchemaResponse):
         return get_schema_as_dict(
             response_format.json_schema,
-            supported_keys=supported_keys,
-            supported_string_formats=supported_string_formats,
             strict=strict,
         )
 
     if isinstance(response_format, JSONObjectResponse):
-        if strict:
-            return cleanup_schema_dict(
-                {"type": "object"},
-                supported_keys=supported_keys,
-                supported_string_formats=supported_string_formats,
-            )
+        del strict
         return {"type": "object"}
 
     return None

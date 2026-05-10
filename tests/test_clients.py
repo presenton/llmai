@@ -449,7 +449,7 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertIsInstance(openai_tools, openai.Omit)
         self.assertIsInstance(tool_choice, openai.Omit)
 
-    def test_openai_strict_tool_schemas_strip_unsupported_keywords(self):
+    def test_openai_strict_tool_schemas_keep_all_of(self):
         client = OpenAIClient(config=OpenAIClientConfig(api_key="test"))
 
         openai_tools = client._llm_tools_to_openai_tools(
@@ -475,8 +475,10 @@ class ClientBehaviorTests(unittest.TestCase):
         )
 
         parameters = openai_tools[0]["function"]["parameters"]
-        self.assertNotIn("allOf", parameters["properties"]["location"])
-        self.assertEqual(parameters["properties"]["location"]["type"], "string")
+        self.assertEqual(
+            parameters["properties"]["location"]["allOf"],
+            [{"type": "string"}],
+        )
         self.assertEqual(
             parameters["properties"]["location"]["description"],
             "Resolved location",
@@ -1092,7 +1094,7 @@ class ClientBehaviorTests(unittest.TestCase):
             "object",
         )
 
-    def test_openai_generate_sanitizes_unsupported_json_schema_keywords(self):
+    def test_openai_generate_preserves_json_schema_keywords(self):
         fake_message = SimpleNamespace(
             content='{"answer":"pong"}',
             tool_calls=None,
@@ -1167,37 +1169,40 @@ class ClientBehaviorTests(unittest.TestCase):
             response_format=JSONSchemaResponse(json_schema=schema),
         )
 
-        sanitized_schema = fake_completions.calls[0]["response_format"]["json_schema"][
+        sent_schema = fake_completions.calls[0]["response_format"]["json_schema"][
             "schema"
         ]
         self.assertEqual(
-            sanitized_schema["properties"]["email"]["format"],
+            sent_schema["properties"]["email"]["format"],
             "email",
         )
         self.assertEqual(
-            sanitized_schema["properties"]["username"]["pattern"],
+            sent_schema["properties"]["username"]["pattern"],
             "^@[a-zA-Z0-9_]+$",
         )
-        self.assertNotIn("format", sanitized_schema["properties"]["url"])
-        self.assertNotIn("examples", sanitized_schema["properties"]["url"])
-        self.assertEqual(sanitized_schema["properties"]["score"]["minimum"], 0)
-        self.assertEqual(sanitized_schema["properties"]["score"]["maximum"], 1)
-        self.assertEqual(sanitized_schema["properties"]["bulletPoints"]["minItems"], 1)
-        self.assertEqual(sanitized_schema["properties"]["bulletPoints"]["maxItems"], 3)
-        self.assertNotIn("minLength", sanitized_schema["properties"]["title"])
-        self.assertNotIn("maxLength", sanitized_schema["properties"]["title"])
-        self.assertNotIn(
-            "minWords",
-            sanitized_schema["properties"]["image"]["properties"]["prompt"],
+        self.assertEqual(sent_schema["properties"]["url"]["format"], "uri")
+        self.assertEqual(
+            sent_schema["properties"]["url"]["examples"],
+            ["https://example.com"],
         )
-        self.assertNotIn(
-            "maxWords",
-            sanitized_schema["properties"]["image"]["properties"]["prompt"],
+        self.assertEqual(sent_schema["properties"]["score"]["minimum"], 0)
+        self.assertEqual(sent_schema["properties"]["score"]["maximum"], 1)
+        self.assertEqual(sent_schema["properties"]["bulletPoints"]["minItems"], 1)
+        self.assertEqual(sent_schema["properties"]["bulletPoints"]["maxItems"], 3)
+        self.assertEqual(sent_schema["properties"]["title"]["minLength"], 20)
+        self.assertEqual(sent_schema["properties"]["title"]["maxLength"], 100)
+        self.assertEqual(
+            sent_schema["properties"]["image"]["properties"]["prompt"]["minWords"],
+            2,
+        )
+        self.assertEqual(
+            sent_schema["properties"]["image"]["properties"]["prompt"]["maxWords"],
+            5,
         )
         self.assertEqual(schema["properties"]["url"]["format"], "uri")
         self.assertEqual(schema["properties"]["title"]["minLength"], 20)
 
-    def test_openai_tools_sanitize_unsupported_json_schema_keywords(self):
+    def test_openai_tools_preserve_json_schema_keywords(self):
         client = OpenAIClient(config=OpenAIClientConfig(api_key="test"))
         schema = {
             "type": "object",
@@ -1231,8 +1236,8 @@ class ClientBehaviorTests(unittest.TestCase):
 
         parameters = tools[0]["function"]["parameters"]
         self.assertEqual(parameters["properties"]["email"]["format"], "email")
-        self.assertNotIn("format", parameters["properties"]["url"])
-        self.assertNotIn("minLength", parameters["properties"]["title"])
+        self.assertEqual(parameters["properties"]["url"]["format"], "uri")
+        self.assertEqual(parameters["properties"]["title"]["minLength"], 20)
         self.assertEqual(schema["properties"]["url"]["format"], "uri")
         self.assertEqual(schema["properties"]["title"]["minLength"], 20)
 
@@ -2589,7 +2594,7 @@ class ClientBehaviorTests(unittest.TestCase):
         )
         self.assertEqual(tool_choice, {"type": "tool", "name": "web_search"})
 
-    def test_anthropic_tool_schemas_strip_max_items(self):
+    def test_anthropic_tool_schemas_keep_strict_keywords(self):
         client = AnthropicClient(config=AnthropicClientConfig(api_key="test"))
 
         anthropic_tools, _ = client._get_anthropic_tools_and_tool_choice_or_omit(
@@ -2616,7 +2621,7 @@ class ClientBehaviorTests(unittest.TestCase):
         )
 
         input_schema = anthropic_tools[0]["input_schema"]
-        self.assertNotIn("maxItems", input_schema["properties"]["cities"])
+        self.assertEqual(input_schema["properties"]["cities"]["maxItems"], 3)
 
     def test_anthropic_tool_schemas_keep_non_strict_keywords(self):
         client = AnthropicClient(config=AnthropicClientConfig(api_key="test"))
@@ -3165,7 +3170,7 @@ class ClientBehaviorTests(unittest.TestCase):
             ["weather"],
         )
 
-    def test_google_tool_schemas_strip_unsupported_keywords_when_strict(self):
+    def test_google_tool_schemas_keep_strict_keywords(self):
         client = GoogleClient(config=GoogleClientConfig(api_key="test"))
 
         google_tools, _ = client._get_google_tools_and_tool_config(
@@ -3197,8 +3202,15 @@ class ClientBehaviorTests(unittest.TestCase):
 
         parameters = google_tools[0].function_declarations[0].parameters
         payload = parameters.model_dump(exclude_none=True, by_alias=True)
-        self.assertNotIn("example", payload["properties"]["location"]["properties"]["city"])
+        self.assertEqual(
+            payload["properties"]["location"]["properties"]["city"]["example"],
+            "Kathmandu",
+        )
         self.assertNotIn("additionalProperties", payload)
+        self.assertNotIn(
+            "additionalProperties",
+            payload["properties"]["location"],
+        )
         self.assertNotIn("additional_properties", payload)
 
     def test_google_tool_schemas_keep_non_strict_keywords(self):
@@ -3848,7 +3860,7 @@ class ClientBehaviorTests(unittest.TestCase):
             fake_runtime.calls[0]["outputConfig"]["textFormat"]["structure"]["jsonSchema"]["schema"],
         )
 
-    def test_bedrock_native_structured_output_sanitizes_response_schema_for_both_strict_values(self):
+    def test_bedrock_native_structured_output_preserves_response_schema_for_both_strict_values(self):
         schema = {
             "type": "object",
             "properties": {
@@ -3893,10 +3905,13 @@ class ClientBehaviorTests(unittest.TestCase):
                 sent_schema = json.loads(
                     fake_runtime.calls[0]["outputConfig"]["textFormat"]["structure"]["jsonSchema"]["schema"]
                 )
-                self.assertNotIn("maxItems", sent_schema["properties"]["bulletPoints"])
-                self.assertNotIn(
-                    "minWords",
-                    sent_schema["properties"]["image"]["properties"]["prompt"],
+                self.assertEqual(
+                    sent_schema["properties"]["bulletPoints"]["maxItems"],
+                    3,
+                )
+                self.assertEqual(
+                    sent_schema["properties"]["image"]["properties"]["prompt"]["minWords"],
+                    2,
                 )
 
     def test_bedrock_ignores_web_search_tool(self):

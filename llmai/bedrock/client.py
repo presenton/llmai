@@ -45,7 +45,7 @@ from llmai.shared.responses import (
     ResponseStreamToolChunk,
     ResponseUsage,
 )
-from llmai.shared.schema import cleanup_schema_dict, get_schema_as_dict
+from llmai.shared.schema import get_schema_as_dict
 from llmai.shared.tools import (
     LLMTool,
     Tool,
@@ -53,20 +53,6 @@ from llmai.shared.tools import (
     filter_resolved_tools_for_provider,
     resolve_tools,
 )
-
-
-BEDROCK_SUPPORTED_RESPONSE_SCHEMA_KEYS = {
-    "$defs",
-    "$ref",
-    "additionalProperties",
-    "anyOf",
-    "description",
-    "enum",
-    "items",
-    "properties",
-    "required",
-    "type",
-}
 
 
 class _StaticBearerTokenProvider:
@@ -324,8 +310,6 @@ class BedrockClient(BaseClient):
                     "inputSchema": {
                         "json": get_schema_as_dict(
                             tool.input_schema,
-                            supported_keys=None,
-                            supported_string_formats=None,
                             strict=tool.strict,
                         )
                     },
@@ -341,18 +325,12 @@ class BedrockClient(BaseClient):
     ) -> dict | None:
         response_schema = get_response_schema(
             response_format,
-            supported_keys=None,
-            supported_string_formats=None,
             strict=get_response_format_strict(response_format, default=False),
         )
         if response_schema is None:
             return None
 
-        return cleanup_schema_dict(
-            response_schema,
-            supported_keys=BEDROCK_SUPPORTED_RESPONSE_SCHEMA_KEYS,
-            supported_string_formats=None,
-        )
+        return response_schema
 
     def _get_bedrock_tool_config(
         self,

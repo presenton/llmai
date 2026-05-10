@@ -59,20 +59,6 @@ from llmai.shared.tools import (
     resolve_tools,
 )
 
-ANTHROPIC_SUPPORTED_SCHEMA_KEYS = {
-    "$defs",
-    "$ref",
-    "additionalProperties",
-    "anyOf",
-    "description",
-    "enum",
-    "items",
-    "properties",
-    "required",
-    "type",
-}
-
-
 class AnthropicClient(BaseClient):
     def __init__(
         self,
@@ -253,8 +239,6 @@ class AnthropicClient(BaseClient):
     ) -> dict:
         return get_schema_as_dict(
             schema,
-            supported_keys=ANTHROPIC_SUPPORTED_SCHEMA_KEYS,
-            supported_string_formats=None,
             strict=strict,
         )
 
@@ -290,8 +274,6 @@ class AnthropicClient(BaseClient):
 
         response_schema = get_response_schema(
             response_format,
-            supported_keys=ANTHROPIC_SUPPORTED_SCHEMA_KEYS,
-            supported_string_formats=None,
             strict=get_response_format_strict(response_format, default=False),
         )
         response_schema_tool_name: str | None = None
@@ -443,8 +425,6 @@ class AnthropicClient(BaseClient):
                 get_response_format_name(response_format, default="response")
                 if get_response_schema(
                     response_format,
-                    supported_keys=ANTHROPIC_SUPPORTED_SCHEMA_KEYS,
-                    supported_string_formats=None,
                     strict=get_response_format_strict(response_format, default=False),
                 )
                 else None
@@ -522,8 +502,6 @@ class AnthropicClient(BaseClient):
             get_response_format_name(response_format, default="response")
             if get_response_schema(
                 response_format,
-                supported_keys=ANTHROPIC_SUPPORTED_SCHEMA_KEYS,
-                supported_string_formats=None,
                 strict=get_response_format_strict(response_format, default=False),
             )
             else None

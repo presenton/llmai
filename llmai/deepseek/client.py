@@ -9,8 +9,6 @@ from openai.types.chat import ChatCompletionFunctionToolParam
 from openai.types.shared_params.function_definition import FunctionDefinition
 
 from llmai.openai.client import (
-    OPENAI_SUPPORTED_SCHEMA_KEYS,
-    OPENAI_SUPPORTED_STRING_FORMATS,
     OpenAIApiType,
     OpenAIClient,
 )
@@ -106,8 +104,6 @@ class DeepSeekClient(OpenAIClient):
     ) -> dict | None:
         return get_response_schema(
             response_format,
-            supported_keys=OPENAI_SUPPORTED_SCHEMA_KEYS,
-            supported_string_formats=OPENAI_SUPPORTED_STRING_FORMATS,
             strict=get_response_format_strict(response_format, default=False),
         )
 

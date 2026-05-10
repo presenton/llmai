@@ -58,39 +58,6 @@ from llmai.shared.tools import (
 )
 
 CHATGPT_DEFAULT_INSTRUCTIONS = "Follow the prompt"
-OPENAI_SUPPORTED_STRING_FORMATS = {
-    "date-time",
-    "time",
-    "date",
-    "duration",
-    "email",
-    "hostname",
-    "ipv4",
-    "ipv6",
-    "uuid",
-}
-OPENAI_SUPPORTED_SCHEMA_KEYS = {
-    "$defs",
-    "$ref",
-    "additionalProperties",
-    "anyOf",
-    "const",
-    "description",
-    "enum",
-    "exclusiveMaximum",
-    "exclusiveMinimum",
-    "format",
-    "items",
-    "maximum",
-    "maxItems",
-    "minimum",
-    "minItems",
-    "multipleOf",
-    "pattern",
-    "properties",
-    "required",
-    "type",
-}
 
 
 class ChatGPTClient(BaseClient):
@@ -313,8 +280,6 @@ class ChatGPTClient(BaseClient):
                     ),
                     "schema": get_response_schema(
                         response_format,
-                        supported_keys=OPENAI_SUPPORTED_SCHEMA_KEYS,
-                        supported_string_formats=OPENAI_SUPPORTED_STRING_FORMATS,
                         strict=get_response_format_strict(
                             response_format,
                             default=False,
@@ -348,8 +313,6 @@ class ChatGPTClient(BaseClient):
                 "description": tool.description,
                 "parameters": get_schema_as_dict(
                     tool.input_schema,
-                    supported_keys=OPENAI_SUPPORTED_SCHEMA_KEYS,
-                    supported_string_formats=OPENAI_SUPPORTED_STRING_FORMATS,
                     strict=tool.strict,
                 ),
                 "strict": tool.strict,

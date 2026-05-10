@@ -72,8 +72,6 @@ from llmai.shared.responses import (
 )
 from llmai.shared.schema import (
     SchemaLike,
-    cleanup_schema_dict,
-    filter_schema_dict,
     get_schema_as_dict,
 )
 from llmai.shared.tools import (
@@ -148,11 +146,9 @@ __all__ = [
     "VertexAIClientConfig",
     "WebSearchTool",
     "collapse_content_parts",
-    "cleanup_schema_dict",
     "content_from_text",
     "content_has_images",
     "flatten_thinking_content",
-    "filter_schema_dict",
     "get_response_schema",
     "get_schema_as_dict",
     "normalize_content_parts",
