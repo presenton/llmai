@@ -18,6 +18,18 @@ def make_client() -> DeepSeekClient:
     )
 
 
+def make_reasoning_effort() -> ReasoningEffort:
+    return ReasoningEffort(summary=ReasoningSummary.DETAILED)
+
+
+def make_response_format(*, strict: bool = False) -> JSONSchemaResponse:
+    return JSONSchemaResponse(
+        name="ResponseSchema",
+        strict=strict,
+        json_schema=SLIDE_SCHEMA,
+    )
+
+
 def test_generate():
     client = make_client()
 
@@ -26,9 +38,6 @@ def test_generate():
         messages=[
             UserMessage(content="What is presentation?"),
         ],
-        reasoning_effort=ReasoningEffort(
-            summary=ReasoningSummary.DETAILED,
-        ),
     )
     print("DeepSeek plain generation")
     print(response)
@@ -43,13 +52,24 @@ def test_generate_structured():
         messages=[
             UserMessage(content="What is presentation?"),
         ],
-        response_format=JSONSchemaResponse(
-            name="ResponseSchema",
-            strict=True,
-            json_schema=SLIDE_SCHEMA,
-        ),
+        response_format=make_response_format(),
     )
     print("DeepSeek structured generation")
+    print(response)
+    print("-" * 50)
+
+
+def test_generate_structured_strict():
+    client = make_client()
+
+    response = client.generate(
+        model=MODEL,
+        messages=[
+            UserMessage(content="What is presentation?"),
+        ],
+        response_format=make_response_format(strict=True),
+    )
+    print("DeepSeek strict structured generation")
     print(response)
     print("-" * 50)
 
@@ -111,10 +131,23 @@ def test_stream_structured():
         messages=[
             UserMessage(content="What is presentation?"),
         ],
-        response_format=JSONSchemaResponse(
-            name="ResponseSchema", strict=True, json_schema=SLIDE_SCHEMA
-        ),
-        reasoning_effort=ReasoningEffort(summary=ReasoningSummary.DETAILED),
+        response_format=make_response_format(),
+        stream=True,
+    ):
+        print(chunk)
+    print("-" * 50)
+
+
+def test_stream_structured_strict():
+    client = make_client()
+
+    print("DeepSeek strict structured stream")
+    for chunk in client.generate(
+        model=MODEL,
+        messages=[
+            UserMessage(content="What is presentation?"),
+        ],
+        response_format=make_response_format(strict=True),
         stream=True,
     ):
         print(chunk)
@@ -156,11 +189,50 @@ def test_stream_web_search():
     print("-" * 50)
 
 
+def test_generate_reasoning():
+    client = make_client()
+
+    response = client.generate(
+        model=MODEL,
+        messages=[
+            UserMessage(
+                content="Think carefully about whether AI or humans are better at math."
+            ),
+        ],
+        reasoning_effort=make_reasoning_effort(),
+    )
+    print("DeepSeek reasoning generation")
+    print(response)
+    print("-" * 50)
+
+
+def test_stream_reasoning():
+    client = make_client()
+
+    print("DeepSeek reasoning stream")
+    for chunk in client.generate(
+        model=MODEL,
+        messages=[
+            UserMessage(
+                content="Think carefully about whether AI or humans are better at math."
+            ),
+        ],
+        reasoning_effort=make_reasoning_effort(),
+        stream=True,
+    ):
+        print(chunk)
+    print("-" * 50)
+
+
 # test_generate()
 test_generate_structured()
+# test_generate_structured_strict()
 # test_generate_tool_calls()
 # test_generate_web_search()
 # test_stream()
 # test_stream_structured()
+# test_stream_structured_strict()
 # test_stream_tool_calls()
 # test_stream_web_search()
+# test_generate_reasoning()
+# test_stream_reasoning()
