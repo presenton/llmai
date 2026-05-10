@@ -7,15 +7,31 @@ from time import perf_counter
 from google import genai
 from google.genai.types import (
     Content as GoogleContent,
+)
+from google.genai.types import (
     FunctionCallingConfig as GoogleFunctionCallingConfig,
+)
+from google.genai.types import (
     FunctionCallingConfigMode as GoogleFunctionCallingConfigMode,
+)
+from google.genai.types import (
     GenerateContentConfig,
     GoogleSearch,
     HttpOptions,
+)
+from google.genai.types import (
     Part as GooglePart,
+)
+from google.genai.types import (
     ThinkingConfig as GoogleThinkingConfig,
+)
+from google.genai.types import (
     ThinkingLevel as GoogleThinkingLevel,
+)
+from google.genai.types import (
     Tool as GoogleTool,
+)
+from google.genai.types import (
     ToolConfig as GoogleToolConfig,
 )
 
@@ -37,8 +53,8 @@ from llmai.shared.messages import (
 )
 from llmai.shared.reasoning import ReasoningEffort
 from llmai.shared.response_formats import (
-    JSONSchemaResponse,
     JSONObjectResponse,
+    JSONSchemaResponse,
     ResponseFormat,
     get_response_format_strict,
     get_response_schema,
@@ -49,8 +65,8 @@ from llmai.shared.responses import (
     ResponseStreamCompletionChunk,
     ResponseStreamContentChunk,
     ResponseStreamThinkingChunk,
-    ResponseStreamToolCompleteChunk,
     ResponseStreamToolChunk,
+    ResponseStreamToolCompleteChunk,
     ResponseUsage,
 )
 from llmai.shared.schema import get_schema_as_dict
@@ -62,6 +78,7 @@ from llmai.shared.tools import (
     filter_resolved_tools_for_provider,
     resolve_tools,
 )
+
 
 class GoogleClient(BaseClient):
     PROVIDER_NAME = "google"
@@ -377,9 +394,8 @@ class GoogleClient(BaseClient):
         text_content = "".join(
             part.text for part in (content or []) if isinstance(part, TextContentPart)
         )
-        if (
-            text_content
-            and isinstance(response_format, (JSONSchemaResponse, JSONObjectResponse))
+        if text_content and isinstance(
+            response_format, (JSONSchemaResponse, JSONObjectResponse)
         ):
             return json.loads(text_content)
 
@@ -408,7 +424,9 @@ class GoogleClient(BaseClient):
             output_tokens = (output_token_count or 0) + thoughts_token_count
 
         total_tokens = raw_usage.get("total_token_count")
-        if total_tokens is None and (input_tokens is not None or output_tokens is not None):
+        if total_tokens is None and (
+            input_tokens is not None or output_tokens is not None
+        ):
             total_tokens = (input_tokens or 0) + (output_tokens or 0)
 
         details = dict(raw_usage)
@@ -586,7 +604,9 @@ class GoogleClient(BaseClient):
                 contents=self._messages_to_google_messages(messages),
                 config=config,
             ):
-                event_usage = self._response_usage(getattr(event, "usage_metadata", None))
+                event_usage = self._response_usage(
+                    getattr(event, "usage_metadata", None)
+                )
                 if event_usage is not None:
                     usage = event_usage
 
@@ -597,7 +617,9 @@ class GoogleClient(BaseClient):
                 ):
                     continue
 
-                for part_index, each_part in enumerate(event.candidates[0].content.parts):
+                for part_index, each_part in enumerate(
+                    event.candidates[0].content.parts
+                ):
                     text = getattr(each_part, "text", None)
                     if text:
                         if getattr(each_part, "thought", False):
@@ -692,9 +714,12 @@ class GoogleClient(BaseClient):
                         continue
 
                     tool_name = function_call.name
-                    tool_id = function_call.id or generated_tool_ids_by_part_index.setdefault(
-                        part_index,
-                        self._tool_call_id(),
+                    tool_id = (
+                        function_call.id
+                        or generated_tool_ids_by_part_index.setdefault(
+                            part_index,
+                            self._tool_call_id(),
+                        )
                     )
                     arguments = json.dumps(function_call.args or {})
 
