@@ -1,4 +1,22 @@
+import logging
+import os
+
 from llmai.shared.tools import Tool, ToolChoiceMode, WebSearchTool
+
+
+def get_dev_logger(name: str) -> logging.Logger:
+    logger = logging.getLogger(f"llmai.dev.{name}")
+    if not logger.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+        )
+        logger.addHandler(handler)
+        logger.propagate = False
+
+    logger.setLevel(os.getenv("LLMAI_LOG_LEVEL", "INFO").upper())
+    return logger
+
 
 STRING_DEFS = {
     "ShortLabel": {

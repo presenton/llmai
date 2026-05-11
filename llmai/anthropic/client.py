@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from contextlib import ExitStack
 import json
 from logging import Logger
 from time import perf_counter
@@ -19,6 +20,7 @@ from anthropic.types import (
 from llmai.shared.base import BaseClient
 from llmai.shared.configs import AnthropicClientConfig
 from llmai.shared.errors import raise_llm_error
+from llmai.shared.logs import LogLevel
 from llmai.shared.messages import (
     AssistantMessage,
     AssistantToolCall,
@@ -48,7 +50,7 @@ from llmai.shared.responses import (
     ResponseStreamToolChunk,
     ResponseUsage,
 )
-from llmai.shared.schema import get_schema_as_dict
+from llmai.shared.schema import get_schema_as_dict, process_schema
 from llmai.shared.tools import (
     LLMTool,
     Tool,
@@ -59,7 +61,36 @@ from llmai.shared.tools import (
     resolve_tools,
 )
 
+
 class AnthropicClient(BaseClient):
+    STRICT_SUPPORTED_STRING_FORMATS = [
+        "date-time",
+        "time",
+        "date",
+        "duration",
+        "email",
+        "hostname",
+        "uri",
+        "ipv4",
+        "ipv6",
+        "uuid",
+    ]
+    STRICT_SUPPORTED_SCHEMA_FIELDS = [
+        "$defs",
+        "$ref",
+        "additionalProperties",
+        "allOf",
+        "anyOf",
+        "description",
+        "enum",
+        "format",
+        "items",
+        "properties",
+        "required",
+        "title",
+        "type",
+    ]
+
     def __init__(
         self,
         *,
@@ -207,15 +238,20 @@ class AnthropicClient(BaseClient):
 
         return anthropic_messages
 
-    def _llm_tools_to_anthropic_tools(self, tools: list[Tool]) -> list[ToolParam]:
+    def _llm_tools_to_anthropic_tools(
+        self,
+        tools: list[Tool],
+        *,
+        strict_override: bool | None = None,
+    ) -> list[ToolParam]:
         return [
             ToolParam(
                 name=tool.name,
                 description=tool.description,
-                strict=tool.strict,
+                strict=tool.strict if strict_override is None else strict_override,
                 input_schema=self._anthropic_input_schema(
                     tool.input_schema,
-                    strict=tool.strict,
+                    strict=tool.strict if strict_override is None else strict_override,
                 ),
             )
             for tool in tools
@@ -237,20 +273,35 @@ class AnthropicClient(BaseClient):
         *,
         strict: bool,
     ) -> dict:
-        return get_schema_as_dict(
+        schema_dict = get_schema_as_dict(
             schema,
             strict=strict,
+        )
+        if not strict:
+            return schema_dict
+
+        return process_schema(
+            schema_dict,
+            ensure_additional_properties=True,
+            supported_string_types=self.STRICT_SUPPORTED_STRING_FORMATS,
+            supported_schema_fields=self.STRICT_SUPPORTED_SCHEMA_FIELDS,
         )
 
     def _response_schema_tool(
         self,
         response_format: ResponseFormat | None,
         response_schema: dict,
+        *,
+        strict_override: bool | None = None,
     ) -> dict[str, object]:
         return {
             "name": get_response_format_name(response_format, default="response"),
             "description": "Provide the final response to the user",
-            "strict": get_response_format_strict(response_format, default=True),
+            "strict": (
+                get_response_format_strict(response_format, default=True)
+                if strict_override is None
+                else strict_override
+            ),
             "input_schema": response_schema,
         }
 
@@ -259,23 +310,41 @@ class AnthropicClient(BaseClient):
         tools: list[LLMTool] | None,
         tool_choice: ToolChoice | None,
         response_format: ResponseFormat | None,
+        *,
+        strict_override: bool | None = None,
     ) -> tuple[list[dict[str, object]] | Omit, dict[str, object] | Omit]:
         resolved = filter_resolved_tools_for_provider(
             resolve_tools(tools, tool_choice),
             supports_web_search=True,
         )
         anthropic_tools: list[dict[str, object]] = list(
-            self._llm_tools_to_anthropic_tools(resolved.function_tools)
+            self._llm_tools_to_anthropic_tools(
+                resolved.function_tools,
+                strict_override=strict_override,
+            )
         )
         if resolved.web_search_tool is not None:
             anthropic_tools.append(
                 self._web_search_tool_to_anthropic_tool(resolved.web_search_tool)
             )
 
+        response_schema_strict = (
+            get_response_format_strict(
+                response_format,
+                default=False,
+            )
+            if strict_override is None
+            else strict_override
+        )
         response_schema = get_response_schema(
             response_format,
-            strict=get_response_format_strict(response_format, default=False),
+            strict=response_schema_strict,
         )
+        if response_schema:
+            response_schema = self._anthropic_input_schema(
+                response_schema,
+                strict=response_schema_strict,
+            )
         response_schema_tool_name: str | None = None
         if response_schema:
             response_schema_tool_name = get_response_format_name(
@@ -283,7 +352,11 @@ class AnthropicClient(BaseClient):
                 default="response",
             )
             anthropic_tools.append(
-                self._response_schema_tool(response_format, response_schema)
+                self._response_schema_tool(
+                    response_format,
+                    response_schema,
+                    strict_override=strict_override,
+                )
             )
 
         anthropic_tool_choice: dict[str, object] | Omit = Omit()
@@ -305,6 +378,42 @@ class AnthropicClient(BaseClient):
                 }
 
         return anthropic_tools or Omit(), anthropic_tool_choice
+
+    def _uses_strict_tools(self, tools: list[dict[str, object]] | Omit) -> bool:
+        if isinstance(tools, Omit):
+            return False
+
+        return any(bool(tool.get("strict")) for tool in tools)
+
+    def _is_strict_tool_retryable_error(self, exc: Exception) -> bool:
+        status_code = getattr(exc, "status_code", None) or getattr(exc, "code", None)
+        if status_code != 400:
+            return False
+
+        message = getattr(exc, "message", None)
+        if not isinstance(message, str) or not message:
+            message = str(exc)
+
+        lowered = message.lower()
+        return (
+            "compiled grammar is too large" in lowered
+            or "does not support strict tools" in lowered
+        )
+
+    def _should_retry_without_strict_tools(
+        self,
+        exc: Exception,
+        tools: list[dict[str, object]] | Omit,
+    ) -> bool:
+        return self._uses_strict_tools(
+            tools
+        ) and self._is_strict_tool_retryable_error(exc)
+
+    def _log_strict_tool_fallback(self) -> None:
+        self.log(
+            LogLevel.WARNING,
+            "Anthropic rejected strict tool schemas; retrying with strict=False.",
+        )
 
     def _response_usage(self, usage: object | None) -> ResponseUsage | None:
         raw_usage = self._dump_model(usage)
@@ -405,17 +514,42 @@ class AnthropicClient(BaseClient):
 
         try:
             start_time = perf_counter()
-            response: AnthropicMessage = self._client.messages.create(
-                model=model,
-                system=self._get_system_prompt(messages),
-                messages=self._messages_to_anthropic_messages(messages),
-                tools=anthropic_tools,
-                tool_choice=anthropic_tool_choice,
-                thinking=self._get_anthropic_thinking_or_omit(reasoning_effort),
-                max_tokens=max_tokens or 8000,
-                temperature=temperature or Omit(),
-                extra_body=extra_body,
-            )
+            try:
+                response: AnthropicMessage = self._client.messages.create(
+                    model=model,
+                    system=self._get_system_prompt(messages),
+                    messages=self._messages_to_anthropic_messages(messages),
+                    tools=anthropic_tools,
+                    tool_choice=anthropic_tool_choice,
+                    thinking=self._get_anthropic_thinking_or_omit(reasoning_effort),
+                    max_tokens=max_tokens or 8000,
+                    temperature=temperature or Omit(),
+                    extra_body=extra_body,
+                )
+            except Exception as exc:
+                if not self._should_retry_without_strict_tools(exc, anthropic_tools):
+                    raise
+
+                self._log_strict_tool_fallback()
+                anthropic_tools, anthropic_tool_choice = (
+                    self._get_anthropic_tools_and_tool_choice_or_omit(
+                        tools,
+                        tool_choice,
+                        response_format,
+                        strict_override=False,
+                    )
+                )
+                response = self._client.messages.create(
+                    model=model,
+                    system=self._get_system_prompt(messages),
+                    messages=self._messages_to_anthropic_messages(messages),
+                    tools=anthropic_tools,
+                    tool_choice=anthropic_tool_choice,
+                    thinking=self._get_anthropic_thinking_or_omit(reasoning_effort),
+                    max_tokens=max_tokens or 8000,
+                    temperature=temperature or Omit(),
+                    extra_body=extra_body,
+                )
             duration_seconds = perf_counter() - start_time
 
             text_chunks: list[str] = []
@@ -514,17 +648,55 @@ class AnthropicClient(BaseClient):
         usage: ResponseUsage | None = None
 
         try:
-            with self._client.messages.stream(
-                model=model,
-                system=self._get_system_prompt(messages),
-                messages=self._messages_to_anthropic_messages(messages),
-                tools=anthropic_tools,
-                tool_choice=anthropic_tool_choice,
-                thinking=self._get_anthropic_thinking_or_omit(reasoning_effort),
-                max_tokens=max_tokens or 8000,
-                temperature=temperature or Omit(),
-                extra_body=extra_body,
-            ) as stream_response:
+            with ExitStack() as stack:
+                try:
+                    stream_response = stack.enter_context(
+                        self._client.messages.stream(
+                            model=model,
+                            system=self._get_system_prompt(messages),
+                            messages=self._messages_to_anthropic_messages(messages),
+                            tools=anthropic_tools,
+                            tool_choice=anthropic_tool_choice,
+                            thinking=self._get_anthropic_thinking_or_omit(
+                                reasoning_effort
+                            ),
+                            max_tokens=max_tokens or 8000,
+                            temperature=temperature or Omit(),
+                            extra_body=extra_body,
+                        )
+                    )
+                except Exception as exc:
+                    if not self._should_retry_without_strict_tools(
+                        exc,
+                        anthropic_tools,
+                    ):
+                        raise
+
+                    self._log_strict_tool_fallback()
+                    anthropic_tools, anthropic_tool_choice = (
+                        self._get_anthropic_tools_and_tool_choice_or_omit(
+                            tools,
+                            tool_choice,
+                            response_format,
+                            strict_override=False,
+                        )
+                    )
+                    stream_response = stack.enter_context(
+                        self._client.messages.stream(
+                            model=model,
+                            system=self._get_system_prompt(messages),
+                            messages=self._messages_to_anthropic_messages(messages),
+                            tools=anthropic_tools,
+                            tool_choice=anthropic_tool_choice,
+                            thinking=self._get_anthropic_thinking_or_omit(
+                                reasoning_effort
+                            ),
+                            max_tokens=max_tokens or 8000,
+                            temperature=temperature or Omit(),
+                            extra_body=extra_body,
+                        )
+                    )
+
                 for event in stream_response:
                     if event.type == "content_block_start":
                         if event.content_block.type == "tool_use":

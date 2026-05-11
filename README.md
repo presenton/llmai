@@ -1,6 +1,6 @@
 # llmai
 
-`llmai` is a Python library for working with OpenAI, Azure OpenAI, Vertex AI, Anthropic, Google Gemini, DeepSeek, Bedrock, and ChatGPT through a shared set of message, tool, schema, and response primitives.
+`llmai` is a Python library for working with OpenAI, Azure OpenAI, Vertex AI, Anthropic, Google Gemini, DeepSeek, OpenRouter, Cerebras, Bedrock, and ChatGPT through a shared set of message, tool, schema, and response primitives.
 
 Today the repository includes adapters for:
 
@@ -9,6 +9,8 @@ Today the repository includes adapters for:
 - Azure OpenAI
 - Vertex AI
 - DeepSeek
+- OpenRouter
+- Cerebras
 - Anthropic
 - Google Gemini
 - Amazon Bedrock
@@ -169,6 +171,52 @@ print(result.content)
 ```
 
 `DeepSeekClient` uses the OpenAI SDK against DeepSeek's OpenAI-compatible API and requires an explicit `DeepSeekClientConfig`. For structured output, it always uses an internal function-tool schema because DeepSeek does not support `response_format={"type":"json_schema"}`. During streaming, the internal response tool is surfaced as incremental JSON `content` chunks, and the stream still ends with parsed JSON on the final completion chunk's `content`. If you need DeepSeek's server-side `strict` tool enforcement, point `base_url` at `https://api.deepseek.com/beta`.
+
+## OpenRouter
+
+```python
+from llmai import OpenRouterClient, OpenRouterClientConfig
+from llmai.shared import UserMessage
+
+
+client = OpenRouterClient(
+    config=OpenRouterClientConfig(api_key="<your-openrouter-api-key>"),
+)
+
+result = client.generate(
+    model="openai/gpt-5.4-mini",
+    messages=[
+        UserMessage(content="Write a two-line poem about clean interfaces."),
+    ],
+)
+
+print(result.content)
+```
+
+`OpenRouterClient` uses the OpenAI SDK against OpenRouter's OpenAI-compatible chat-completions API. The default base URL is `https://openrouter.ai/api/v1`.
+
+## Cerebras
+
+```python
+from llmai import CerebrasClient, CerebrasClientConfig
+from llmai.shared import UserMessage
+
+
+client = CerebrasClient(
+    config=CerebrasClientConfig(api_key="<your-cerebras-api-key>"),
+)
+
+result = client.generate(
+    model="llama-4-scout-17b-16e-instruct",
+    messages=[
+        UserMessage(content="Write a two-line poem about clean interfaces."),
+    ],
+)
+
+print(result.content)
+```
+
+`CerebrasClient` uses the OpenAI SDK against Cerebras' OpenAI-compatible API. The default base URL is `https://api.cerebras.ai/v1`.
 
 ## Amazon Bedrock
 
@@ -389,6 +437,8 @@ for chunk in client.generate(
 - `llmai/azure`: Azure OpenAI adapter
 - `llmai/vertex`: Vertex AI adapter
 - `llmai/deepseek`: DeepSeek adapter
+- `llmai/openrouter`: OpenRouter adapter
+- `llmai/cerebras`: Cerebras adapter
 - `llmai/anthropic`: Anthropic adapter
 - `llmai/google`: Google Gemini adapter
 - `llmai/bedrock`: Amazon Bedrock adapter

@@ -63,8 +63,8 @@ def _strip_schema_keys(
 def process_schema(
     schema: dict,
     *,
-    flatten_refs: bool,
-    flatten_allof: bool,
+    flatten_refs: bool = False,
+    flatten_allof: bool = False,
     ensure_additional_properties: bool = False,
     remove_additional_properties: bool = False,
     supported_string_types: list[str] | None = None,

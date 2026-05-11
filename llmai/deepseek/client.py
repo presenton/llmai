@@ -87,6 +87,15 @@ class DeepSeekClient(OpenAIClient):
     def _supports_strict_tools(self) -> bool:
         return self._base_url.rstrip("/").endswith("/beta")
 
+    def _openai_schema(
+        self,
+        schema: dict,
+        *,
+        strict: bool,
+    ) -> dict:
+        del strict
+        return schema
+
     def _parse_tool_arguments(self, arguments: str | None) -> dict:
         if not arguments:
             return {}

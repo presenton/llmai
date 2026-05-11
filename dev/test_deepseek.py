@@ -1,20 +1,27 @@
 import os
 
-from dev.shared import SLIDE_SCHEMA, TOOL_CHOICE, TOOL_DEFINITIONS, WEB_SEARCH_TOOL
+from dev.shared import (
+    SLIDE_SCHEMA,
+    TOOL_CHOICE,
+    TOOL_DEFINITIONS,
+    WEB_SEARCH_TOOL,
+    get_dev_logger,
+)
 from llmai import DeepSeekClient, DeepSeekClientConfig
 from llmai.shared.messages import UserMessage
 from llmai.shared.reasoning import ReasoningEffort, ReasoningSummary
 from llmai.shared.response_formats import JSONSchemaResponse
 
-
 MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-coder")
+LOGGER = get_dev_logger("deepseek")
 
 
 def make_client() -> DeepSeekClient:
     return DeepSeekClient(
         config=DeepSeekClientConfig(
             api_key=os.getenv("DEEPSEEK_API_KEY"),
-        )
+        ),
+        logger=LOGGER,
     )
 
 
@@ -225,7 +232,7 @@ def test_stream_reasoning():
 
 
 # test_generate()
-test_generate_structured()
+# test_generate_structured()
 # test_generate_structured_strict()
 # test_generate_tool_calls()
 # test_generate_web_search()

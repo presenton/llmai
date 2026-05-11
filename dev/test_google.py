@@ -1,6 +1,12 @@
 import os
 
-from dev.shared import SLIDE_SCHEMA, TOOL_CHOICE, TOOL_DEFINITIONS, WEB_SEARCH_TOOL
+from dev.shared import (
+    SLIDE_SCHEMA,
+    TOOL_CHOICE,
+    TOOL_DEFINITIONS,
+    WEB_SEARCH_TOOL,
+    get_dev_logger,
+)
 from llmai.google import GoogleClient, GoogleClientConfig
 from llmai.shared.messages import UserMessage
 from llmai.shared.reasoning import (
@@ -11,13 +17,15 @@ from llmai.shared.reasoning import (
 from llmai.shared.response_formats import JSONSchemaResponse
 
 MODEL = os.getenv("GOOGLE_MODEL", "gemini-3-flash-preview")
+LOGGER = get_dev_logger("google")
 
 
 def make_client() -> GoogleClient:
     return GoogleClient(
         config=GoogleClientConfig(
             api_key=os.getenv("GOOGLE_API_KEY"),
-        )
+        ),
+        logger=LOGGER,
     )
 
 

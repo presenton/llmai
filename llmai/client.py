@@ -6,20 +6,24 @@ from typing import TypeVar
 from llmai.anthropic.client import AnthropicClient
 from llmai.azure.client import AzureOpenAIClient
 from llmai.bedrock.client import BedrockClient
+from llmai.cerebras.client import CerebrasClient
 from llmai.chatgpt.client import ChatGPTClient
 from llmai.deepseek.client import DeepSeekClient
 from llmai.google.client import GoogleClient
 from llmai.openai.client import OpenAIClient
+from llmai.openrouter.client import OpenRouterClient
 from llmai.shared.base import BaseClient
 from llmai.shared.configs import (
     AnthropicClientConfig,
     AzureOpenAIClientConfig,
     BedrockClientConfig,
+    CerebrasClientConfig,
     ChatGPTClientConfig,
     ClientConfig,
     DeepSeekClientConfig,
     GoogleClientConfig,
     OpenAIClientConfig,
+    OpenRouterClientConfig,
     VertexAIClientConfig,
 )
 from llmai.shared.errors import configuration_error
@@ -84,6 +88,26 @@ def get_client(
                 provider,
                 config,
                 DeepSeekClientConfig,
+            ),
+            logger=logger,
+        )
+
+    if provider == "openrouter":
+        return OpenRouterClient(
+            config=_require_config(
+                provider,
+                config,
+                OpenRouterClientConfig,
+            ),
+            logger=logger,
+        )
+
+    if provider == "cerebras":
+        return CerebrasClient(
+            config=_require_config(
+                provider,
+                config,
+                CerebrasClientConfig,
             ),
             logger=logger,
         )

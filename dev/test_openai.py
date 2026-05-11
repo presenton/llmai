@@ -1,6 +1,12 @@
 import os
 
-from dev.shared import SLIDE_SCHEMA, TOOL_CHOICE, TOOL_DEFINITIONS, WEB_SEARCH_TOOL
+from dev.shared import (
+    SLIDE_SCHEMA,
+    TOOL_CHOICE,
+    TOOL_DEFINITIONS,
+    WEB_SEARCH_TOOL,
+    get_dev_logger,
+)
 from llmai.openai import OpenAIApiType, OpenAIClient, OpenAIClientConfig
 from llmai.shared.messages import SystemMessage, UserMessage
 from llmai.shared.reasoning import (
@@ -11,6 +17,7 @@ from llmai.shared.reasoning import (
 from llmai.shared.response_formats import JSONSchemaResponse
 
 MODEL = os.getenv("OPENAI_MODEL", "gpt-5.4-mini")
+LOGGER = get_dev_logger("openai")
 
 
 def make_client(api_type: OpenAIApiType) -> OpenAIClient:
@@ -18,7 +25,8 @@ def make_client(api_type: OpenAIApiType) -> OpenAIClient:
         config=OpenAIClientConfig(
             api_key=os.getenv("OPENAI_API_KEY"),
             api_type=api_type,
-        )
+        ),
+        logger=LOGGER,
     )
 
 

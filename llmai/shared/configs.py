@@ -63,6 +63,14 @@ class DeepSeekClientConfig(APIKeyClientConfig):
     provider: Literal["deepseek"] = "deepseek"
 
 
+class OpenRouterClientConfig(APIKeyClientConfig):
+    provider: Literal["openrouter"] = "openrouter"
+
+
+class CerebrasClientConfig(APIKeyClientConfig):
+    provider: Literal["cerebras"] = "cerebras"
+
+
 class GoogleClientConfig(APIKeyClientConfig):
     provider: Literal["google"] = "google"
 
@@ -194,6 +202,8 @@ ClientConfig = (
     | VertexAIClientConfig
     | ChatGPTClientConfig
     | DeepSeekClientConfig
+    | OpenRouterClientConfig
+    | CerebrasClientConfig
     | GoogleClientConfig
     | AnthropicClientConfig
     | BedrockClientConfig
@@ -206,10 +216,12 @@ __all__ = [
     "AzureOpenAIClientConfig",
     "BaseClientConfig",
     "BedrockClientConfig",
+    "CerebrasClientConfig",
     "ChatGPTClientConfig",
     "ClientConfig",
     "DeepSeekClientConfig",
     "GoogleClientConfig",
+    "OpenRouterClientConfig",
     "OpenAIApiType",
     "OpenAIClientConfig",
     "VertexAIClientConfig",

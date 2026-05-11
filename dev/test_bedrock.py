@@ -1,6 +1,12 @@
 import os
 
-from dev.shared import SLIDE_SCHEMA, TOOL_CHOICE, TOOL_DEFINITIONS, WEB_SEARCH_TOOL
+from dev.shared import (
+    SLIDE_SCHEMA,
+    TOOL_CHOICE,
+    TOOL_DEFINITIONS,
+    WEB_SEARCH_TOOL,
+    get_dev_logger,
+)
 from llmai.bedrock import BedrockClient, BedrockClientConfig
 from llmai.shared.messages import UserMessage
 from llmai.shared.reasoning import ReasoningEffort
@@ -11,6 +17,7 @@ MODEL = os.getenv(
     "BEDROCK_MODEL",
     "arn:aws:bedrock:eu-central-1:471112542209:inference-profile/eu.anthropic.claude-haiku-4-5-20251001-v1:0",
 )
+LOGGER = get_dev_logger("bedrock")
 
 
 def make_client() -> BedrockClient:
@@ -22,7 +29,8 @@ def make_client() -> BedrockClient:
             aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
             aws_session_token=os.getenv("AWS_SESSION_TOKEN"),
             profile_name=os.getenv("AWS_PROFILE"),
-        )
+        ),
+        logger=LOGGER,
     )
 
 

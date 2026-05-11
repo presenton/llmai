@@ -1,25 +1,39 @@
 import os
 
-from dev.shared import SLIDE_SCHEMA, TOOL_CHOICE, TOOL_DEFINITIONS, WEB_SEARCH_TOOL
+from dev.shared import (
+    SLIDE_SCHEMA,
+    TOOL_CHOICE,
+    TOOL_DEFINITIONS,
+    WEB_SEARCH_TOOL,
+    get_dev_logger,
+)
 from llmai.anthropic import AnthropicClient, AnthropicClientConfig
 from llmai.shared.messages import UserMessage
-from llmai.shared.reasoning import ReasoningEffort
+from llmai.shared.reasoning import (
+    ReasoningEffort,
+    ReasoningEffortValue,
+    ReasoningSummary,
+)
 from llmai.shared.response_formats import JSONSchemaResponse
 
-
-MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
+MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
+LOGGER = get_dev_logger("anthropic")
 
 
 def make_client() -> AnthropicClient:
     return AnthropicClient(
         config=AnthropicClientConfig(
             api_key=os.getenv("ANTHROPIC_API_KEY"),
-        )
+        ),
+        logger=LOGGER,
     )
 
 
 def make_reasoning_effort() -> ReasoningEffort:
-    return ReasoningEffort(tokens=2048)
+    return ReasoningEffort(
+        effort=ReasoningEffortValue.LOW,
+        summary=ReasoningSummary.DETAILED,
+    )
 
 
 def make_response_format(*, strict: bool = False) -> JSONSchemaResponse:
@@ -96,7 +110,9 @@ def test_generate_web_search():
     response = client.generate(
         model=MODEL,
         messages=[
-            UserMessage(content="What was a positive news story from today? Cite sources."),
+            UserMessage(
+                content="What was a positive news story from today? Cite sources."
+            ),
         ],
         tools=[WEB_SEARCH_TOOL],
     )
@@ -176,7 +192,9 @@ def test_stream_web_search():
     for chunk in client.generate(
         model=MODEL,
         messages=[
-            UserMessage(content="What was a positive news story from today? Cite sources."),
+            UserMessage(
+                content="What was a positive news story from today? Cite sources."
+            ),
         ],
         tools=[WEB_SEARCH_TOOL],
         stream=True,
@@ -223,7 +241,7 @@ def test_stream_reasoning():
 # test_generate()
 # test_generate_structured()
 # test_generate_structured_strict()
-test_generate_tool_calls()
+# test_generate_tool_calls()
 # test_generate_web_search()
 # test_stream()
 # test_stream_structured()

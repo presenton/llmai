@@ -1,6 +1,12 @@
 import os
 
-from dev.shared import SLIDE_SCHEMA, TOOL_CHOICE, TOOL_DEFINITIONS, WEB_SEARCH_TOOL
+from dev.shared import (
+    SLIDE_SCHEMA,
+    TOOL_CHOICE,
+    TOOL_DEFINITIONS,
+    WEB_SEARCH_TOOL,
+    get_dev_logger,
+)
 from llmai import ChatGPTClient, ChatGPTClientConfig
 from llmai.shared.messages import UserMessage
 from llmai.shared.reasoning import (
@@ -12,6 +18,7 @@ from llmai.shared.response_formats import JSONSchemaResponse
 
 
 MODEL = os.getenv("CHATGPT_MODEL", "gpt-5.4-mini")
+LOGGER = get_dev_logger("chatgpt")
 
 
 def make_client() -> ChatGPTClient:
@@ -19,7 +26,8 @@ def make_client() -> ChatGPTClient:
         config=ChatGPTClientConfig(
             access_token=os.getenv("CHATGPT_ACCESS_TOKEN"),
             account_id=os.getenv("CHATGPT_ACCOUNT_ID"),
-        )
+        ),
+        logger=LOGGER,
     )
 
 

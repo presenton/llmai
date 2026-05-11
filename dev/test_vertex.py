@@ -1,6 +1,12 @@
 import os
 
-from dev.shared import SLIDE_SCHEMA, TOOL_CHOICE, TOOL_DEFINITIONS, WEB_SEARCH_TOOL
+from dev.shared import (
+    SLIDE_SCHEMA,
+    TOOL_CHOICE,
+    TOOL_DEFINITIONS,
+    WEB_SEARCH_TOOL,
+    get_dev_logger,
+)
 from llmai.shared.messages import UserMessage
 from llmai.shared.reasoning import (
     ReasoningEffort,
@@ -12,6 +18,7 @@ from llmai.vertex import VertexAIClient, VertexAIClientConfig
 
 
 MODEL = os.getenv("VERTEX_MODEL", "gemini-2.5-flash")
+LOGGER = get_dev_logger("vertex")
 
 
 def make_client() -> VertexAIClient:
@@ -29,7 +36,8 @@ def make_client() -> VertexAIClient:
             config_kwargs["location"] = location or "us-central1"
 
     return VertexAIClient(
-        config=VertexAIClientConfig(**config_kwargs)
+        config=VertexAIClientConfig(**config_kwargs),
+        logger=LOGGER,
     )
 
 

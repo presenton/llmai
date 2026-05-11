@@ -19,6 +19,8 @@ from llmai import (
     AzureOpenAIClientConfig,
     BedrockClient,
     BedrockClientConfig,
+    CerebrasClient,
+    CerebrasClientConfig,
     ChatGPTClient,
     ChatGPTClientConfig,
     DeepSeekClient,
@@ -28,6 +30,8 @@ from llmai import (
     OpenAIApiType,
     OpenAIClient,
     OpenAIClientConfig,
+    OpenRouterClient,
+    OpenRouterClientConfig,
     VertexAIClient,
     VertexAIClientConfig,
     get_client,
@@ -164,6 +168,16 @@ class FakeAnthropicStream:
         return self.final_message
 
 
+class FakeAnthropicGrammarTooLargeError(Exception):
+    status_code = 400
+    message = "The compiled grammar is too large, which would cause performance issues."
+
+
+class FakeAnthropicStrictToolsUnsupportedError(Exception):
+    status_code = 400
+    message = "'claude-sonnet-4-20250514' does not support strict tools."
+
+
 class FakeGoogleModels:
     def __init__(self, response=None, stream_response=None):
         self.response = response
@@ -283,6 +297,30 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertIs(client, deepseek_client_cls.return_value)
         deepseek_client_cls.assert_called_once_with(config=config, logger=None)
 
+    def test_get_client_openrouter_uses_explicit_config(self):
+        config = OpenRouterClientConfig(
+            api_key="openrouter-key",
+            base_url="https://openrouter.example/api/v1",
+        )
+
+        with patch("llmai.client.OpenRouterClient") as openrouter_client_cls:
+            client = get_client(config=config)
+
+        self.assertIs(client, openrouter_client_cls.return_value)
+        openrouter_client_cls.assert_called_once_with(config=config, logger=None)
+
+    def test_get_client_cerebras_uses_explicit_config(self):
+        config = CerebrasClientConfig(
+            api_key="cerebras-key",
+            base_url="https://cerebras.example/v1",
+        )
+
+        with patch("llmai.client.CerebrasClient") as cerebras_client_cls:
+            client = get_client(config=config)
+
+        self.assertIs(client, cerebras_client_cls.return_value)
+        cerebras_client_cls.assert_called_once_with(config=config, logger=None)
+
     def test_get_client_google_uses_explicit_config(self):
         config = GoogleClientConfig(api_key="google-key")
 
@@ -326,6 +364,14 @@ class ClientBehaviorTests(unittest.TestCase):
     def test_get_client_uses_provider_literal_from_config(self):
         self.assertEqual(OpenAIClientConfig(api_key="openai-key").provider, "openai")
         self.assertEqual(
+            OpenRouterClientConfig(api_key="openrouter-key").provider,
+            "openrouter",
+        )
+        self.assertEqual(
+            CerebrasClientConfig(api_key="cerebras-key").provider,
+            "cerebras",
+        )
+        self.assertEqual(
             ChatGPTClientConfig(access_token="chatgpt-token").provider,
             "chatgpt",
         )
@@ -358,6 +404,8 @@ class ClientBehaviorTests(unittest.TestCase):
             AzureOpenAIClient,
             ChatGPTClient,
             DeepSeekClient,
+            OpenRouterClient,
+            CerebrasClient,
             AnthropicClient,
             GoogleClient,
             VertexAIClient,
@@ -2352,6 +2400,283 @@ class ClientBehaviorTests(unittest.TestCase):
             api_key="explicit-key",
         )
 
+    def test_openrouter_init_uses_default_base_url(self):
+        with patch("llmai.openai.client.OpenAI") as openai_cls:
+            OpenRouterClient(config=OpenRouterClientConfig(api_key="openrouter-key"))
+
+        openai_cls.assert_called_once_with(
+            base_url="https://openrouter.ai/api/v1",
+            api_key="openrouter-key",
+        )
+
+    def test_openrouter_init_uses_custom_base_url(self):
+        with patch("llmai.openai.client.OpenAI") as openai_cls:
+            OpenRouterClient(
+                config=OpenRouterClientConfig(
+                    api_key="openrouter-key",
+                    base_url="https://openrouter.example/api/v1",
+                )
+            )
+
+        openai_cls.assert_called_once_with(
+            base_url="https://openrouter.example/api/v1",
+            api_key="openrouter-key",
+        )
+
+    def test_cerebras_init_uses_default_base_url(self):
+        with patch("llmai.openai.client.OpenAI") as openai_cls:
+            CerebrasClient(config=CerebrasClientConfig(api_key="cerebras-key"))
+
+        openai_cls.assert_called_once_with(
+            base_url="https://api.cerebras.ai/v1",
+            api_key="cerebras-key",
+        )
+
+    def test_cerebras_init_uses_custom_base_url(self):
+        with patch("llmai.openai.client.OpenAI") as openai_cls:
+            CerebrasClient(
+                config=CerebrasClientConfig(
+                    api_key="cerebras-key",
+                    base_url="https://cerebras.example/v1",
+                )
+            )
+
+        openai_cls.assert_called_once_with(
+            base_url="https://cerebras.example/v1",
+            api_key="cerebras-key",
+        )
+
+    def test_deepseek_strict_tool_schemas_are_not_cleaned_up(self):
+        client = DeepSeekClient(config=DeepSeekClientConfig(api_key="test"))
+
+        tools = client._llm_tools_to_openai_tools(
+            [
+                Tool(
+                    name="weather",
+                    description="weather description",
+                    strict=True,
+                    schema={
+                        "type": "object",
+                        "properties": {
+                            "cities": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "maxItems": 3,
+                            },
+                            "location": {
+                                "allOf": [
+                                    {"type": "string"},
+                                ],
+                            },
+                        },
+                    },
+                )
+            ]
+        )
+
+        parameters = tools[0]["function"]["parameters"]
+        self.assertNotIn("additionalProperties", parameters)
+        self.assertEqual(parameters["properties"]["cities"]["maxItems"], 3)
+        self.assertIn("allOf", parameters["properties"]["location"])
+
+    def test_openrouter_strict_schemas_are_not_cleaned_up(self):
+        client = OpenRouterClient(config=OpenRouterClientConfig(api_key="test"))
+
+        response_format = client._get_openai_response_format_or_omit(
+            JSONSchemaResponse(
+                name="final_answer",
+                strict=True,
+                json_schema={
+                    "type": "object",
+                    "properties": {
+                        "cities": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "maxItems": 3,
+                        },
+                    },
+                },
+            )
+        )
+        tools = client._llm_tools_to_openai_tools(
+            [
+                Tool(
+                    name="weather",
+                    description="weather description",
+                    strict=True,
+                    schema={
+                        "type": "object",
+                        "properties": {
+                            "location": {
+                                "allOf": [
+                                    {"type": "string"},
+                                ],
+                            }
+                        },
+                    },
+                )
+            ]
+        )
+
+        schema = response_format["json_schema"]["schema"]
+        parameters = tools[0]["function"]["parameters"]
+        self.assertNotIn("additionalProperties", schema)
+        self.assertEqual(schema["properties"]["cities"]["maxItems"], 3)
+        self.assertIn("allOf", parameters["properties"]["location"])
+
+    def test_cerebras_strict_schemas_use_supported_schema_fields(self):
+        client = CerebrasClient(config=CerebrasClientConfig(api_key="test"))
+
+        response_format = client._get_openai_response_format_or_omit(
+            JSONSchemaResponse(
+                name="final_answer",
+                strict=True,
+                json_schema={
+                    "type": "object",
+                    "properties": {
+                        "cities": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "maxItems": 3,
+                            "minItems": 1,
+                        },
+                        "email": {
+                            "type": "string",
+                            "format": "email",
+                            "pattern": ".+@.+",
+                            "description": "Contact email",
+                        },
+                        "score": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1,
+                            "multipleOf": 0.1,
+                        },
+                    },
+                },
+            )
+        )
+        tools = client._llm_tools_to_openai_tools(
+            [
+                Tool(
+                    name="weather",
+                    description="weather description",
+                    strict=True,
+                    schema={
+                        "type": "object",
+                        "properties": {
+                            "location": {
+                                "allOf": [
+                                    {"type": "string"},
+                                ],
+                                "description": "Location to resolve",
+                            }
+                        },
+                    },
+                )
+            ]
+        )
+
+        schema = response_format["json_schema"]["schema"]
+        parameters = tools[0]["function"]["parameters"]
+        self.assertFalse(schema["additionalProperties"])
+        self.assertNotIn("maxItems", schema["properties"]["cities"])
+        self.assertNotIn("minItems", schema["properties"]["cities"])
+        self.assertNotIn("format", schema["properties"]["email"])
+        self.assertNotIn("pattern", schema["properties"]["email"])
+        self.assertNotIn("description", schema["properties"]["email"])
+        self.assertEqual(schema["properties"]["score"]["minimum"], 0)
+        self.assertEqual(schema["properties"]["score"]["maximum"], 1)
+        self.assertEqual(schema["properties"]["score"]["multipleOf"], 0.1)
+        self.assertNotIn("allOf", parameters["properties"]["location"])
+        self.assertNotIn("description", parameters["properties"]["location"])
+        self.assertEqual(parameters["properties"]["location"]["type"], "string")
+
+    def test_cerebras_mixed_tool_strict_values_are_sent_all_strict(self):
+        client = CerebrasClient(config=CerebrasClientConfig(api_key="test"))
+
+        tools = client._llm_tools_to_openai_tools(
+            [
+                Tool(
+                    name="strict_weather",
+                    description="strict weather description",
+                    strict=True,
+                    schema={
+                        "type": "object",
+                        "properties": {
+                            "email": {
+                                "type": "string",
+                                "format": "email",
+                            }
+                        },
+                    },
+                ),
+                Tool(
+                    name="loose_time",
+                    description="loose time description",
+                    strict=False,
+                    schema={
+                        "type": "object",
+                        "properties": {
+                            "timezone": {
+                                "type": "string",
+                                "format": "date-time",
+                            }
+                        },
+                    },
+                ),
+            ]
+        )
+
+        self.assertTrue(tools[0]["function"]["strict"])
+        self.assertTrue(tools[1]["function"]["strict"])
+        self.assertFalse(tools[0]["function"]["parameters"]["additionalProperties"])
+        self.assertFalse(tools[1]["function"]["parameters"]["additionalProperties"])
+        self.assertNotIn(
+            "format",
+            tools[0]["function"]["parameters"]["properties"]["email"],
+        )
+        self.assertNotIn(
+            "format",
+            tools[1]["function"]["parameters"]["properties"]["timezone"],
+        )
+
+    def test_cerebras_non_strict_tools_are_sent_all_non_strict(self):
+        client = CerebrasClient(config=CerebrasClientConfig(api_key="test"))
+
+        tools = client._llm_tools_to_openai_tools(
+            [
+                Tool(
+                    name="weather",
+                    description="weather description",
+                    strict=False,
+                    schema={
+                        "type": "object",
+                        "properties": {
+                            "email": {
+                                "type": "string",
+                                "format": "email",
+                            }
+                        },
+                    },
+                ),
+                Tool(
+                    name="time",
+                    description="time description",
+                    strict=False,
+                    schema={"type": "object"},
+                ),
+            ]
+        )
+
+        self.assertFalse(tools[0]["function"]["strict"])
+        self.assertFalse(tools[1]["function"]["strict"])
+        self.assertNotIn("additionalProperties", tools[0]["function"]["parameters"])
+        self.assertEqual(
+            tools[0]["function"]["parameters"]["properties"]["email"]["format"],
+            "email",
+        )
+
     def test_deepseek_init_requires_explicit_api_key(self):
         with self.assertRaises(ValidationError):
             DeepSeekClientConfig(api_key="")
@@ -2670,7 +2995,7 @@ class ClientBehaviorTests(unittest.TestCase):
         )
         self.assertEqual(tool_choice, {"type": "tool", "name": "web_search"})
 
-    def test_anthropic_tool_schemas_keep_strict_keywords(self):
+    def test_anthropic_strict_tool_schemas_drop_unsupported_keywords(self):
         client = AnthropicClient(config=AnthropicClientConfig(api_key="test"))
 
         anthropic_tools, _ = client._get_anthropic_tools_and_tool_choice_or_omit(
@@ -2685,7 +3010,9 @@ class ClientBehaviorTests(unittest.TestCase):
                             "cities": {
                                 "type": "array",
                                 "items": {"type": "string"},
+                                "description": "Cities to check",
                                 "maxItems": 3,
+                                "minItems": 2,
                             }
                         },
                         "required": ["cities"],
@@ -2696,8 +3023,60 @@ class ClientBehaviorTests(unittest.TestCase):
             None,
         )
 
+        self.assertTrue(anthropic_tools[0]["strict"])
         input_schema = anthropic_tools[0]["input_schema"]
-        self.assertEqual(input_schema["properties"]["cities"]["maxItems"], 3)
+        self.assertEqual(
+            input_schema["properties"]["cities"]["description"],
+            "Cities to check",
+        )
+        self.assertNotIn("maxItems", input_schema["properties"]["cities"])
+        self.assertNotIn("minItems", input_schema["properties"]["cities"])
+
+    def test_anthropic_strict_tool_schemas_ensure_additional_properties_false(self):
+        client = AnthropicClient(config=AnthropicClientConfig(api_key="test"))
+
+        anthropic_tools, _ = client._get_anthropic_tools_and_tool_choice_or_omit(
+            [
+                Tool(
+                    name="weather",
+                    description="weather description",
+                    strict=True,
+                    schema={
+                        "type": "object",
+                        "properties": {
+                            "location": {
+                                "type": "object",
+                                "properties": {
+                                    "city": {
+                                        "type": "string",
+                                    }
+                                },
+                            }
+                        },
+                        "$defs": {
+                            "Address": {
+                                "type": "object",
+                                "properties": {
+                                    "line": {
+                                        "type": "string",
+                                    }
+                                },
+                            }
+                        },
+                    },
+                )
+            ],
+            None,
+            None,
+        )
+
+        self.assertTrue(anthropic_tools[0]["strict"])
+        input_schema = anthropic_tools[0]["input_schema"]
+        self.assertFalse(input_schema["additionalProperties"])
+        self.assertFalse(
+            input_schema["properties"]["location"]["additionalProperties"]
+        )
+        self.assertFalse(input_schema["$defs"]["Address"]["additionalProperties"])
 
     def test_anthropic_tool_schemas_keep_non_strict_keywords(self):
         client = AnthropicClient(config=AnthropicClientConfig(api_key="test"))
@@ -2727,6 +3106,80 @@ class ClientBehaviorTests(unittest.TestCase):
 
         input_schema = anthropic_tools[0]["input_schema"]
         self.assertEqual(input_schema["properties"]["cities"]["maxItems"], 3)
+
+    def test_anthropic_non_strict_tool_schemas_do_not_ensure_additional_properties(self):
+        client = AnthropicClient(config=AnthropicClientConfig(api_key="test"))
+
+        anthropic_tools, _ = client._get_anthropic_tools_and_tool_choice_or_omit(
+            [
+                Tool(
+                    name="weather",
+                    description="weather description",
+                    strict=False,
+                    schema={
+                        "type": "object",
+                        "properties": {
+                            "location": {
+                                "type": "object",
+                                "properties": {
+                                    "city": {
+                                        "type": "string",
+                                    }
+                                },
+                            }
+                        },
+                    },
+                )
+            ],
+            None,
+            None,
+        )
+
+        input_schema = anthropic_tools[0]["input_schema"]
+        self.assertNotIn("additionalProperties", input_schema)
+        self.assertNotIn(
+            "additionalProperties",
+            input_schema["properties"]["location"],
+        )
+
+    def test_anthropic_strict_response_schema_ensures_additional_properties_false(self):
+        client = AnthropicClient(config=AnthropicClientConfig(api_key="test"))
+
+        anthropic_tools, _ = client._get_anthropic_tools_and_tool_choice_or_omit(
+            None,
+            None,
+            JSONSchemaResponse(
+                name="final_answer",
+                strict=True,
+                json_schema={
+                    "type": "object",
+                    "properties": {
+                        "result": {
+                            "type": "object",
+                            "properties": {
+                                "answer": {
+                                    "type": "string",
+                                },
+                                "citations": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                    "maxItems": 3,
+                                }
+                            },
+                        }
+                    },
+                },
+            ),
+        )
+
+        self.assertTrue(anthropic_tools[0]["strict"])
+        input_schema = anthropic_tools[0]["input_schema"]
+        self.assertFalse(input_schema["additionalProperties"])
+        self.assertFalse(input_schema["properties"]["result"]["additionalProperties"])
+        self.assertNotIn(
+            "maxItems",
+            input_schema["properties"]["result"]["properties"]["citations"],
+        )
 
     def test_anthropic_serializes_user_image_parts(self):
         client = AnthropicClient(config=AnthropicClientConfig(api_key="test"))
@@ -2868,6 +3321,168 @@ class ClientBehaviorTests(unittest.TestCase):
 
         self.assertEqual(context.exception.status_code, 429)
         self.assertEqual(context.exception.provider, "anthropic")
+
+    def test_anthropic_generate_retries_strict_tools_without_strict_on_large_grammar(
+        self,
+    ):
+        fake_response = SimpleNamespace(
+            content=[SimpleNamespace(type="text", text="final answer")],
+        )
+
+        class RetryMessages(FakeAnthropicMessages):
+            def create(self, **kwargs):
+                self.calls.append(kwargs)
+                if len(self.calls) == 1:
+                    raise FakeAnthropicGrammarTooLargeError()
+                return fake_response
+
+        logger = SimpleNamespace(warnings=[])
+        logger.warning = logger.warnings.append
+        fake_messages = RetryMessages()
+
+        client = AnthropicClient(
+            config=AnthropicClientConfig(api_key="test"),
+            logger=logger,
+        )
+        client._client = SimpleNamespace(messages=fake_messages)
+
+        result = client.generate(
+            model="claude-test",
+            messages=[UserMessage(content=text_parts("Answer me"))],
+            tools=[
+                Tool(
+                    name="weather",
+                    description="weather description",
+                    strict=True,
+                    schema={
+                        "type": "object",
+                        "properties": {
+                            "cities": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "maxItems": 3,
+                            }
+                        },
+                    },
+                )
+            ],
+        )
+
+        self.assertEqual(result.content[0].text, "final answer")
+        self.assertEqual(len(fake_messages.calls), 2)
+        self.assertTrue(fake_messages.calls[0]["tools"][0]["strict"])
+        self.assertNotIn(
+            "maxItems",
+            fake_messages.calls[0]["tools"][0]["input_schema"]["properties"][
+                "cities"
+            ],
+        )
+        self.assertFalse(fake_messages.calls[1]["tools"][0]["strict"])
+        self.assertEqual(
+            fake_messages.calls[1]["tools"][0]["input_schema"]["properties"][
+                "cities"
+            ]["maxItems"],
+            3,
+        )
+        self.assertEqual(len(logger.warnings), 1)
+
+    def test_anthropic_generate_retries_when_model_does_not_support_strict_tools(
+        self,
+    ):
+        fake_response = SimpleNamespace(
+            content=[SimpleNamespace(type="text", text="final answer")],
+        )
+
+        class RetryMessages(FakeAnthropicMessages):
+            def create(self, **kwargs):
+                self.calls.append(kwargs)
+                if len(self.calls) == 1:
+                    raise FakeAnthropicStrictToolsUnsupportedError()
+                return fake_response
+
+        fake_messages = RetryMessages()
+
+        client = AnthropicClient(config=AnthropicClientConfig(api_key="test"))
+        client._client = SimpleNamespace(messages=fake_messages)
+
+        result = client.generate(
+            model="claude-test",
+            messages=[UserMessage(content=text_parts("Answer me"))],
+            tools=[
+                Tool(
+                    name="weather",
+                    description="weather description",
+                    strict=True,
+                )
+            ],
+        )
+
+        self.assertEqual(result.content[0].text, "final answer")
+        self.assertEqual(len(fake_messages.calls), 2)
+        self.assertTrue(fake_messages.calls[0]["tools"][0]["strict"])
+        self.assertFalse(fake_messages.calls[1]["tools"][0]["strict"])
+
+    def test_anthropic_stream_retries_strict_tools_without_strict_on_large_grammar(
+        self,
+    ):
+        fake_stream = FakeAnthropicStream(
+            events=[
+                SimpleNamespace(
+                    type="content_block_delta",
+                    delta=SimpleNamespace(type="text_delta", text="Hello"),
+                ),
+            ],
+        )
+
+        class RetryMessages(FakeAnthropicMessages):
+            def stream(self, **kwargs):
+                self.stream_calls.append(kwargs)
+                if len(self.stream_calls) == 1:
+                    raise FakeAnthropicGrammarTooLargeError()
+                return fake_stream
+
+        logger = SimpleNamespace(warnings=[])
+        logger.warning = logger.warnings.append
+        fake_messages = RetryMessages()
+
+        client = AnthropicClient(
+            config=AnthropicClientConfig(api_key="test"),
+            logger=logger,
+        )
+        client._client = SimpleNamespace(messages=fake_messages)
+
+        chunks = list(
+            client.generate(
+                model="claude-test",
+                messages=[UserMessage(content=text_parts("Answer me"))],
+                tools=[
+                    Tool(
+                        name="weather",
+                        description="weather description",
+                        strict=True,
+                        schema={
+                            "type": "object",
+                            "properties": {
+                                "cities": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                    "maxItems": 3,
+                                }
+                            },
+                        },
+                    )
+                ],
+                stream=True,
+            )
+        )
+
+        payload_chunks = stream_payload_chunks(chunks)
+
+        self.assertEqual(payload_chunks[-1].content[0].text, "Hello")
+        self.assertEqual(len(fake_messages.stream_calls), 2)
+        self.assertTrue(fake_messages.stream_calls[0]["tools"][0]["strict"])
+        self.assertFalse(fake_messages.stream_calls[1]["tools"][0]["strict"])
+        self.assertEqual(len(logger.warnings), 1)
 
     def test_anthropic_stream_returns_usage_and_duration(self):
         fake_stream = FakeAnthropicStream(
