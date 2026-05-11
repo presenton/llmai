@@ -45,7 +45,7 @@ from llmai.shared.responses import (
     ResponseStreamToolChunk,
     ResponseUsage,
 )
-from llmai.shared.schema import get_schema_as_dict
+from llmai.shared.schema import get_schema_as_dict, process_schema
 from llmai.shared.tools import (
     LLMTool,
     Tool,
@@ -67,6 +67,18 @@ class _StaticBearerTokenProvider:
 
 
 class BedrockClient(BaseClient):
+    STRUCTURED_OUTPUT_SUPPORTED_SCHEMA_FIELDS = [
+        "$defs",
+        "$ref",
+        "additionalProperties",
+        "description",
+        "enum",
+        "items",
+        "properties",
+        "required",
+        "type",
+    ]
+
     def __init__(
         self,
         *,
@@ -308,9 +320,11 @@ class BedrockClient(BaseClient):
                     "name": tool.name,
                     "description": tool.description,
                     "inputSchema": {
-                        "json": get_schema_as_dict(
-                            tool.input_schema,
-                            strict=tool.strict,
+                        "json": self._bedrock_schema(
+                            get_schema_as_dict(
+                                tool.input_schema,
+                                strict=tool.strict,
+                            )
                         )
                     },
                     "strict": tool.strict,
@@ -318,6 +332,16 @@ class BedrockClient(BaseClient):
             }
             for tool in tools
         ]
+
+    def _bedrock_schema(self, schema: dict) -> dict:
+        return process_schema(
+            schema,
+            flatten_refs=True,
+            flatten_allof=True,
+            collapse_anyof=True,
+            forbid_additional_properties=True,
+            supported_schema_fields=self.STRUCTURED_OUTPUT_SUPPORTED_SCHEMA_FIELDS,
+        )
 
     def _get_bedrock_response_schema(
         self,
@@ -330,7 +354,7 @@ class BedrockClient(BaseClient):
         if response_schema is None:
             return None
 
-        return response_schema
+        return self._bedrock_schema(response_schema)
 
     def _get_bedrock_tool_config(
         self,
@@ -479,6 +503,37 @@ class BedrockClient(BaseClient):
         )
         return assistant_message, user_tool_calls
 
+    def _get_bedrock_thinking(
+        self,
+        reasoning_effort: ReasoningEffort | None,
+    ) -> dict[str, object] | None:
+        if reasoning_effort is None:
+            return None
+
+        if reasoning_effort.effort == "none" or reasoning_effort.tokens == 0:
+            return {"type": "disabled"}
+
+        if reasoning_effort.tokens is not None:
+            return {
+                "type": "enabled",
+                "budget_tokens": reasoning_effort.tokens,
+            }
+
+        thinking: dict[str, object] = {"type": "adaptive"}
+        if reasoning_effort.effort is not None:
+            thinking["effort"] = reasoning_effort.effort
+        return thinking
+
+    def _additional_model_request_fields(
+        self,
+        *,
+        reasoning_effort: ReasoningEffort | None,
+        extra_body: dict | None,
+    ) -> dict[str, object] | None:
+        fields = dict(extra_body or {})
+        fields.setdefault("thinking", self._get_bedrock_thinking(reasoning_effort))
+        return {key: value for key, value in fields.items() if value is not None} or None
+
     def _converse_kwargs(
         self,
         *,
@@ -489,6 +544,7 @@ class BedrockClient(BaseClient):
         tool_choice: ToolChoice | None,
         response_format: ResponseFormat | None,
         max_tokens: int | None,
+        reasoning_effort: ReasoningEffort | None,
         extra_body: dict | None,
     ) -> dict[str, object]:
         kwargs: dict[str, object] = {
@@ -519,8 +575,12 @@ class BedrockClient(BaseClient):
         if output_config:
             kwargs["outputConfig"] = output_config
 
-        if extra_body is not None:
-            kwargs["additionalModelRequestFields"] = extra_body
+        additional_fields = self._additional_model_request_fields(
+            reasoning_effort=reasoning_effort,
+            extra_body=extra_body,
+        )
+        if additional_fields is not None:
+            kwargs["additionalModelRequestFields"] = additional_fields
 
         return kwargs
 
@@ -590,8 +650,6 @@ class BedrockClient(BaseClient):
         reasoning_effort: ReasoningEffort | None = None,
         extra_body: dict | None = None,
     ) -> ResponseContent:
-        del reasoning_effort
-
         try:
             start_time = perf_counter()
             response = self._client.converse(
@@ -603,6 +661,7 @@ class BedrockClient(BaseClient):
                     tool_choice=tool_choice,
                     response_format=response_format,
                     max_tokens=max_tokens,
+                    reasoning_effort=reasoning_effort,
                     extra_body=extra_body,
                 )
             )
@@ -642,8 +701,6 @@ class BedrockClient(BaseClient):
         reasoning_effort: ReasoningEffort | None = None,
         extra_body: dict | None = None,
     ):
-        del reasoning_effort
-
         try:
             start_time = perf_counter()
             response = self._client.converse_stream(
@@ -655,6 +712,7 @@ class BedrockClient(BaseClient):
                     tool_choice=tool_choice,
                     response_format=response_format,
                     max_tokens=max_tokens,
+                    reasoning_effort=reasoning_effort,
                     extra_body=extra_body,
                 )
             )

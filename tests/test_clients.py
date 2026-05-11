@@ -4596,6 +4596,129 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(fake_runtime.calls[0]["inferenceConfig"]["temperature"], 0.2)
         self.assertEqual(fake_runtime.calls[0]["inferenceConfig"]["maxTokens"], 123)
 
+    def test_bedrock_generate_passes_reasoning_tokens_as_thinking_budget(self):
+        fake_runtime = FakeBedrockRuntimeClient(
+            response={
+                "output": {
+                    "message": {
+                        "role": "assistant",
+                        "content": [{"text": "hello from bedrock"}],
+                    }
+                },
+            }
+        )
+        client, _, _ = self.make_bedrock_client(
+            fake_runtime,
+            region="us-east-1",
+            aws_access_key_id="aws-id",
+            aws_secret_access_key="aws-secret",
+        )
+
+        client.generate(
+            model="anthropic.claude-sonnet-4-20250514-v1:0",
+            messages=[UserMessage(content=text_parts("Hello"))],
+            reasoning_effort=ReasoningEffort(tokens=2048),
+        )
+
+        self.assertEqual(
+            fake_runtime.calls[0]["additionalModelRequestFields"]["thinking"],
+            {"type": "enabled", "budget_tokens": 2048},
+        )
+
+    def test_bedrock_generate_passes_reasoning_effort_as_adaptive_thinking(self):
+        fake_runtime = FakeBedrockRuntimeClient(
+            response={
+                "output": {
+                    "message": {
+                        "role": "assistant",
+                        "content": [{"text": "hello from bedrock"}],
+                    }
+                },
+            }
+        )
+        client, _, _ = self.make_bedrock_client(
+            fake_runtime,
+            region="us-east-1",
+            aws_access_key_id="aws-id",
+            aws_secret_access_key="aws-secret",
+        )
+
+        client.generate(
+            model="anthropic.claude-opus-4-6-v1",
+            messages=[UserMessage(content=text_parts("Hello"))],
+            reasoning_effort=ReasoningEffort(effort=ReasoningEffortValue.LOW),
+        )
+
+        self.assertEqual(
+            fake_runtime.calls[0]["additionalModelRequestFields"]["thinking"],
+            {"type": "adaptive", "effort": "low"},
+        )
+
+    def test_bedrock_generate_disables_thinking_for_none_effort(self):
+        fake_runtime = FakeBedrockRuntimeClient(
+            response={
+                "output": {
+                    "message": {
+                        "role": "assistant",
+                        "content": [{"text": "hello from bedrock"}],
+                    }
+                },
+            }
+        )
+        client, _, _ = self.make_bedrock_client(
+            fake_runtime,
+            region="us-east-1",
+            aws_access_key_id="aws-id",
+            aws_secret_access_key="aws-secret",
+        )
+
+        client.generate(
+            model="anthropic.claude-sonnet-4-20250514-v1:0",
+            messages=[UserMessage(content=text_parts("Hello"))],
+            reasoning_effort=ReasoningEffort(effort=ReasoningEffortValue.NONE),
+        )
+
+        self.assertEqual(
+            fake_runtime.calls[0]["additionalModelRequestFields"]["thinking"],
+            {"type": "disabled"},
+        )
+
+    def test_bedrock_extra_body_thinking_takes_precedence_over_reasoning_effort(self):
+        fake_runtime = FakeBedrockRuntimeClient(
+            response={
+                "output": {
+                    "message": {
+                        "role": "assistant",
+                        "content": [{"text": "hello from bedrock"}],
+                    }
+                },
+            }
+        )
+        client, _, _ = self.make_bedrock_client(
+            fake_runtime,
+            region="us-east-1",
+            aws_access_key_id="aws-id",
+            aws_secret_access_key="aws-secret",
+        )
+
+        client.generate(
+            model="anthropic.claude-opus-4-6-v1",
+            messages=[UserMessage(content=text_parts("Hello"))],
+            reasoning_effort=ReasoningEffort(effort=ReasoningEffortValue.LOW),
+            extra_body={
+                "thinking": {"type": "adaptive", "effort": "high"},
+                "anthropic_beta": ["interleaved-thinking-2025-05-14"],
+            },
+        )
+
+        self.assertEqual(
+            fake_runtime.calls[0]["additionalModelRequestFields"],
+            {
+                "thinking": {"type": "adaptive", "effort": "high"},
+                "anthropic_beta": ["interleaved-thinking-2025-05-14"],
+            },
+        )
+
     def test_bedrock_generate_uses_native_structured_output(self):
         fake_runtime = FakeBedrockRuntimeClient(
             response={
@@ -4630,7 +4753,7 @@ class ClientBehaviorTests(unittest.TestCase):
             fake_runtime.calls[0]["outputConfig"]["textFormat"]["structure"]["jsonSchema"]["schema"],
         )
 
-    def test_bedrock_native_structured_output_preserves_response_schema_for_both_strict_values(self):
+    def test_bedrock_native_structured_output_forbids_additional_properties_for_both_strict_values(self):
         schema = {
             "type": "object",
             "properties": {
@@ -4638,16 +4761,23 @@ class ClientBehaviorTests(unittest.TestCase):
                     "type": "array",
                     "items": {"type": "string"},
                     "maxItems": 3,
+                    "minItems": 1,
                 },
                 "image": {
                     "type": "object",
                     "properties": {
                         "prompt": {
                             "type": "string",
+                            "description": "Prompt to render",
+                            "format": "email",
                             "minWords": 2,
+                        },
+                        "style": {
+                            "type": "string",
+                            "enum": ["photo", "diagram"],
                         }
                     },
-                    "required": ["prompt"],
+                    "required": ["prompt", "style"],
                 },
             },
             "required": ["bulletPoints", "image"],
@@ -4675,13 +4805,19 @@ class ClientBehaviorTests(unittest.TestCase):
                 sent_schema = json.loads(
                     fake_runtime.calls[0]["outputConfig"]["textFormat"]["structure"]["jsonSchema"]["schema"]
                 )
+                self.assertNotIn("maxItems", sent_schema["properties"]["bulletPoints"])
+                self.assertNotIn("minItems", sent_schema["properties"]["bulletPoints"])
+                prompt_schema = sent_schema["properties"]["image"]["properties"]["prompt"]
+                self.assertEqual(prompt_schema["description"], "Prompt to render")
+                self.assertNotIn("format", prompt_schema)
+                self.assertNotIn("minWords", prompt_schema)
                 self.assertEqual(
-                    sent_schema["properties"]["bulletPoints"]["maxItems"],
-                    3,
+                    sent_schema["properties"]["image"]["properties"]["style"]["enum"],
+                    ["photo", "diagram"],
                 )
-                self.assertEqual(
-                    sent_schema["properties"]["image"]["properties"]["prompt"]["minWords"],
-                    2,
+                self.assertFalse(sent_schema["additionalProperties"])
+                self.assertFalse(
+                    sent_schema["properties"]["image"]["additionalProperties"]
                 )
 
     def test_bedrock_ignores_web_search_tool(self):
@@ -4699,6 +4835,121 @@ class ClientBehaviorTests(unittest.TestCase):
         )
 
         self.assertIsNone(tool_config)
+
+    def test_bedrock_tool_schemas_forbid_additional_properties_and_strip_unsupported_fields(self):
+        fake_runtime = FakeBedrockRuntimeClient(response={})
+        client, _, _ = self.make_bedrock_client(
+            fake_runtime,
+            region="us-east-1",
+            aws_access_key_id="aws-id",
+            aws_secret_access_key="aws-secret",
+        )
+
+        tool_config = client._get_bedrock_tool_config(
+            [
+                Tool(
+                    name="get_weather",
+                    description="weather description",
+                    strict=True,
+                    schema={
+                        "type": "object",
+                        "properties": {
+                            "cities": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "maxItems": 3,
+                            },
+                            "location": {
+                                "type": "object",
+                                "properties": {
+                                    "city": {
+                                        "type": "string",
+                                        "format": "email",
+                                    }
+                                },
+                                "required": ["city"],
+                            },
+                        },
+                        "required": ["cities", "location"],
+                    },
+                )
+            ],
+            None,
+        )
+
+        input_schema = tool_config["tools"][0]["toolSpec"]["inputSchema"]["json"]
+        self.assertFalse(input_schema["additionalProperties"])
+        self.assertNotIn("maxItems", input_schema["properties"]["cities"])
+        self.assertFalse(input_schema["properties"]["location"]["additionalProperties"])
+        self.assertNotIn(
+            "format",
+            input_schema["properties"]["location"]["properties"]["city"],
+        )
+
+    def test_bedrock_tool_schemas_resolve_refs_inside_all_of(self):
+        fake_runtime = FakeBedrockRuntimeClient(response={})
+        client, _, _ = self.make_bedrock_client(
+            fake_runtime,
+            region="us-east-1",
+            aws_access_key_id="aws-id",
+            aws_secret_access_key="aws-secret",
+        )
+
+        tool_config = client._get_bedrock_tool_config(
+            [
+                Tool(
+                    name="get_weather",
+                    description="weather description",
+                    schema={
+                        "type": "object",
+                        "properties": {
+                            "city": {
+                                "allOf": [
+                                    {
+                                        "$ref": "#/$defs/LocationText",
+                                    }
+                                ],
+                                "description": "City name, optionally including a region.",
+                            }
+                        },
+                        "$defs": {
+                            "LocationText": {
+                                "anyOf": [
+                                    {
+                                        "$ref": "#/$defs/CityName",
+                                    },
+                                    {
+                                        "$ref": "#/$defs/CityWithRegion",
+                                    },
+                                ],
+                            },
+                            "CityName": {
+                                "type": "string",
+                                "minLength": 2,
+                            },
+                            "CityWithRegion": {
+                                "type": "string",
+                                "minLength": 5,
+                            }
+                        },
+                    },
+                )
+            ],
+            None,
+        )
+
+        city_schema = tool_config["tools"][0]["toolSpec"]["inputSchema"]["json"][
+            "properties"
+        ]["city"]
+        self.assertEqual(city_schema["type"], "string")
+        self.assertEqual(
+            city_schema["description"],
+            "City name, optionally including a region.",
+        )
+        self.assertNotIn("$ref", city_schema)
+        self.assertNotIn("allOf", city_schema)
+        self.assertNotIn("anyOf", city_schema)
+        self.assertNotIn("minLength", city_schema)
 
     def test_bedrock_generate_returns_tool_calls(self):
         fake_runtime = FakeBedrockRuntimeClient(

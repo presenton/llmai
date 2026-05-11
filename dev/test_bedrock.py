@@ -12,7 +12,6 @@ from llmai.shared.messages import UserMessage
 from llmai.shared.reasoning import ReasoningEffort
 from llmai.shared.response_formats import JSONSchemaResponse
 
-
 MODEL = os.getenv(
     "BEDROCK_MODEL",
     "arn:aws:bedrock:eu-central-1:471112542209:inference-profile/eu.anthropic.claude-haiku-4-5-20251001-v1:0",
@@ -112,7 +111,9 @@ def test_generate_web_search():
     response = client.generate(
         model=MODEL,
         messages=[
-            UserMessage(content="What was a positive news story from today? Cite sources."),
+            UserMessage(
+                content="What was a positive news story from today? Cite sources."
+            ),
         ],
         tools=[WEB_SEARCH_TOOL],
     )
@@ -192,7 +193,9 @@ def test_stream_web_search():
     for chunk in client.generate(
         model=MODEL,
         messages=[
-            UserMessage(content="What was a positive news story from today? Cite sources."),
+            UserMessage(
+                content="What was a positive news story from today? Cite sources."
+            ),
         ],
         tools=[WEB_SEARCH_TOOL],
         stream=True,
@@ -237,7 +240,7 @@ def test_stream_reasoning():
 
 
 # test_generate()
-test_generate_structured()
+# test_generate_structured()
 # test_generate_structured_strict()
 # test_generate_tool_calls()
 # test_generate_web_search()
@@ -247,4 +250,4 @@ test_generate_structured()
 # test_stream_tool_calls()
 # test_stream_web_search()
 # test_generate_reasoning()
-# test_stream_reasoning()
+test_stream_reasoning()

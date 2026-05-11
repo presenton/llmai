@@ -65,14 +65,16 @@ def process_schema(
     *,
     flatten_refs: bool = False,
     flatten_allof: bool = False,
+    collapse_anyof: bool = False,
     ensure_additional_properties: bool = False,
+    forbid_additional_properties: bool = False,
     remove_additional_properties: bool = False,
     supported_string_types: list[str] | None = None,
     supported_schema_fields: list[str] | None = None,
 ) -> dict:
     processed = deepcopy(schema)
 
-    if flatten_refs or flatten_allof:
+    if flatten_refs or flatten_allof or collapse_anyof:
         original_definitions = {
             key: deepcopy(value)
             for key, value in processed.items()
@@ -84,6 +86,7 @@ def process_schema(
             seen_refs=frozenset(),
             flatten_refs=flatten_refs,
             flatten_allof=flatten_allof,
+            collapse_anyof=collapse_anyof,
             in_definition=False,
             in_allof=False,
         )
@@ -101,7 +104,7 @@ def process_schema(
         in_named_schema_map=False,
     )
 
-    if ensure_additional_properties:
+    if ensure_additional_properties or forbid_additional_properties:
         processed = _ensure_additional_properties(processed)
 
     if remove_additional_properties:
@@ -120,6 +123,7 @@ def _flatten_schema(
     seen_refs: frozenset[str],
     flatten_refs: bool,
     flatten_allof: bool,
+    collapse_anyof: bool,
     in_definition: bool,
     in_allof: bool,
 ) -> object:
@@ -131,6 +135,7 @@ def _flatten_schema(
                 seen_refs=seen_refs,
                 flatten_refs=flatten_refs,
                 flatten_allof=flatten_allof,
+                collapse_anyof=collapse_anyof,
                 in_definition=key in {"$defs", "definitions"},
                 in_allof=in_allof or key == "allOf",
             )
@@ -159,6 +164,7 @@ def _flatten_schema(
                         seen_refs=seen_refs | {ref},
                         flatten_refs=flatten_refs,
                         flatten_allof=flatten_allof,
+                        collapse_anyof=collapse_anyof,
                         in_definition=in_definition,
                         in_allof=in_allof,
                     ),
@@ -167,6 +173,9 @@ def _flatten_schema(
 
         if flatten_allof:
             flattened = _merge_allof(flattened)
+
+        if collapse_anyof:
+            flattened = _collapse_anyof(flattened)
 
         return flattened
 
@@ -178,6 +187,7 @@ def _flatten_schema(
                 seen_refs=seen_refs,
                 flatten_refs=flatten_refs,
                 flatten_allof=flatten_allof,
+                collapse_anyof=collapse_anyof,
                 in_definition=in_definition,
                 in_allof=in_allof,
             )
@@ -192,6 +202,42 @@ def _merge_allof(schema: dict) -> dict:
         return _merge_subschema_keyword(schema, "allOf")
 
     return schema
+
+
+def _collapse_anyof(schema: dict) -> dict:
+    subschemas = schema.get("anyOf")
+    if not isinstance(subschemas, list) or not subschemas:
+        return schema
+
+    if not all(isinstance(item, dict) for item in subschemas):
+        return schema
+
+    schema_types = [item.get("type") for item in subschemas]
+    if not all(isinstance(item_type, str) for item_type in schema_types):
+        return schema
+
+    common_type = schema_types[0]
+    if any(item_type != common_type for item_type in schema_types):
+        return schema
+
+    collapsed: dict = {"type": common_type}
+    enums: list[object] = []
+    all_have_enum = True
+    for item in subschemas:
+        item_enum = item.get("enum")
+        if not isinstance(item_enum, list):
+            all_have_enum = False
+            continue
+
+        for value in item_enum:
+            if value not in enums:
+                enums.append(value)
+
+    if all_have_enum and enums:
+        collapsed["enum"] = enums
+
+    siblings = {key: value for key, value in schema.items() if key != "anyOf"}
+    return _merge_schema_dicts(collapsed, siblings)
 
 
 def _merge_subschema_keyword(schema: dict, key: str) -> dict:

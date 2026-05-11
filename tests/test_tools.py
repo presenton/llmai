@@ -491,6 +491,24 @@ class SchemaTests(unittest.TestCase):
         self.assertFalse(processed["$defs"]["Existing"]["additionalProperties"])
         self.assertNotIn("additionalProperties", processed["properties"]["name"])
 
+    def test_process_schema_can_forbid_additional_properties(self):
+        processed = process_schema(
+            {
+                "type": "object",
+                "properties": {
+                    "metadata": {
+                        "type": "object",
+                    },
+                },
+            },
+            forbid_additional_properties=True,
+        )
+
+        self.assertFalse(processed["additionalProperties"])
+        self.assertFalse(
+            processed["properties"]["metadata"]["additionalProperties"]
+        )
+
     def test_process_schema_can_remove_additional_properties(self):
         schema = {
             "type": "object",
@@ -646,6 +664,44 @@ class SchemaTests(unittest.TestCase):
                     },
                 ],
                 "description": "Wrapped value",
+            },
+        )
+
+    def test_process_schema_can_collapse_same_type_any_of(self):
+        processed = process_schema(
+            {
+                "type": "object",
+                "properties": {
+                    "units": {
+                        "anyOf": [
+                            {"type": "string", "enum": ["celsius", "metric"]},
+                            {"type": "string", "enum": ["fahrenheit", "imperial"]},
+                        ],
+                    },
+                    "location": {
+                        "anyOf": [
+                            {"type": "string"},
+                            {"type": "string"},
+                        ],
+                        "description": "City name",
+                    },
+                },
+            },
+            collapse_anyof=True,
+        )
+
+        self.assertEqual(
+            processed["properties"]["units"],
+            {
+                "type": "string",
+                "enum": ["celsius", "metric", "fahrenheit", "imperial"],
+            },
+        )
+        self.assertEqual(
+            processed["properties"]["location"],
+            {
+                "type": "string",
+                "description": "City name",
             },
         )
 
