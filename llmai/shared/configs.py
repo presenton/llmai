@@ -5,7 +5,14 @@ from enum import Enum
 from typing import Annotated, Any, Literal
 
 from google.auth.credentials import Credentials
-from pydantic import BaseModel, BeforeValidator, ConfigDict, StringConstraints, model_validator
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    model_validator,
+)
 
 from llmai.shared.errors import configuration_error
 
@@ -196,6 +203,14 @@ class BedrockClientConfig(BaseClientConfig):
         return self
 
 
+class LiteLLMClientConfig(BaseClientConfig):
+    provider: Literal["litellm"] = "litellm"
+    api_key: OptionalStr = None
+    base_url: OptionalStr = None
+    api_type: OpenAIApiType = OpenAIApiType.COMPLETIONS
+    extra_kwargs: dict[str, Any] = Field(default_factory=dict)
+
+
 ClientConfig = (
     OpenAIClientConfig
     | AzureOpenAIClientConfig
@@ -207,6 +222,7 @@ ClientConfig = (
     | GoogleClientConfig
     | AnthropicClientConfig
     | BedrockClientConfig
+    | LiteLLMClientConfig
 )
 
 
@@ -221,6 +237,7 @@ __all__ = [
     "ClientConfig",
     "DeepSeekClientConfig",
     "GoogleClientConfig",
+    "LiteLLMClientConfig",
     "OpenRouterClientConfig",
     "OpenAIApiType",
     "OpenAIClientConfig",

@@ -27,6 +27,8 @@ from llmai import (
     DeepSeekClientConfig,
     GoogleClient,
     GoogleClientConfig,
+    LiteLLMClient,
+    LiteLLMClientConfig,
     OpenAIApiType,
     OpenAIClient,
     OpenAIClientConfig,
@@ -124,6 +126,18 @@ class FakeOpenAIResponses:
         self.calls = []
 
     def create(self, **kwargs):
+        self.calls.append(kwargs)
+        if isinstance(self.response, Exception):
+            raise self.response
+        return self.response
+
+
+class FakeLiteLLMCompletion:
+    def __init__(self, response):
+        self.response = response
+        self.calls = []
+
+    def __call__(self, **kwargs):
         self.calls.append(kwargs)
         if isinstance(self.response, Exception):
             raise self.response
@@ -351,6 +365,18 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertIs(client, bedrock_client_cls.return_value)
         bedrock_client_cls.assert_called_once_with(config=config, logger=None)
 
+    def test_get_client_litellm_uses_explicit_config(self):
+        config = LiteLLMClientConfig(
+            api_key="litellm-key",
+            base_url="https://litellm.example/v1",
+        )
+
+        with patch("llmai.client.LiteLLMClient") as litellm_client_cls:
+            client = get_client(config=config)
+
+        self.assertIs(client, litellm_client_cls.return_value)
+        litellm_client_cls.assert_called_once_with(config=config, logger=None)
+
     def test_get_client_rejects_mismatched_config_type(self):
         config = OpenAIClientConfig(api_key="openai-key")
         config.provider = "google"  # type: ignore[assignment]
@@ -375,6 +401,17 @@ class ClientBehaviorTests(unittest.TestCase):
             ChatGPTClientConfig(access_token="chatgpt-token").provider,
             "chatgpt",
         )
+        self.assertEqual(LiteLLMClientConfig().provider, "litellm")
+
+    def test_litellm_config_defaults_to_completions_api_type(self):
+        config = LiteLLMClientConfig()
+
+        self.assertEqual(config.api_type, OpenAIApiType.COMPLETIONS)
+
+    def test_litellm_config_coerces_api_type_to_enum(self):
+        config = LiteLLMClientConfig(api_type="responses")
+
+        self.assertEqual(config.api_type, OpenAIApiType.RESPONSES)
 
     def test_openai_config_coerces_api_type_to_enum(self):
         config = OpenAIClientConfig(
@@ -410,6 +447,7 @@ class ClientBehaviorTests(unittest.TestCase):
             GoogleClient,
             VertexAIClient,
             BedrockClient,
+            LiteLLMClient,
         ):
             with self.subTest(client=client_type.__name__):
                 self.assertEqual(
@@ -1220,6 +1258,134 @@ class ClientBehaviorTests(unittest.TestCase):
             fake_completions.calls[0]["response_format"]["json_schema"]["schema"]["type"],
             "object",
         )
+
+    def test_litellm_generate_uses_openai_client_completions(self):
+        fake_message = SimpleNamespace(
+            content='{"answer":"pong"}',
+            tool_calls=None,
+        )
+        fake_response = SimpleNamespace(
+            choices=[SimpleNamespace(message=fake_message)],
+            usage=SimpleNamespace(
+                prompt_tokens=9,
+                completion_tokens=3,
+                total_tokens=12,
+            ),
+        )
+        fake_completions = FakeOpenAICompletions(fake_response)
+        fake_openai = SimpleNamespace(
+            chat=SimpleNamespace(completions=fake_completions),
+        )
+
+        with patch(
+            "llmai.litellm.client.OpenAI",
+            return_value=fake_openai,
+        ) as openai_cls:
+            client = LiteLLMClient(
+                config=LiteLLMClientConfig(
+                    api_key="litellm-key",
+                    base_url="https://litellm.example/v1",
+                    extra_kwargs={"top_p": 0.8},
+                )
+            )
+
+        result = client.generate(
+            model="openai/gpt-test",
+            messages=[UserMessage(content=text_parts("Answer in JSON"))],
+            response_format=JSONSchemaResponse(json_schema=AnswerSchema),
+            max_tokens=128,
+            reasoning_effort=ReasoningEffort(effort=ReasoningEffortValue.LOW),
+            extra_body={"timeout": 30},
+        )
+
+        self.assertEqual(result.content, {"answer": "pong"})
+        self.assertEqual(result.usage.input_tokens, 9)
+        self.assertEqual(result.usage.output_tokens, 3)
+        openai_cls.assert_called_once_with(
+            base_url="https://litellm.example/v1",
+            api_key="litellm-key",
+        )
+        call = fake_completions.calls[0]
+        self.assertEqual(call["model"], "openai/gpt-test")
+        self.assertEqual(call["extra_body"], {"top_p": 0.8, "timeout": 30})
+        self.assertEqual(call["max_completion_tokens"], 128)
+        self.assertEqual(call["reasoning_effort"], "low")
+        self.assertNotIn("max_tokens", call)
+
+    def test_litellm_responses_api_type_uses_openai_client_responses(self):
+        completed_response = SimpleNamespace(
+            output=[
+                SimpleNamespace(
+                    type="message",
+                    content=[
+                        SimpleNamespace(
+                            type="output_text",
+                            text="final answer",
+                        )
+                    ],
+                )
+            ],
+            usage=SimpleNamespace(
+                input_tokens=5,
+                output_tokens=2,
+                total_tokens=7,
+            ),
+        )
+        fake_responses = FakeOpenAIResponses(completed_response)
+        fake_completions = FakeOpenAICompletions(Exception("completion unused"))
+        fake_openai = SimpleNamespace(
+            chat=SimpleNamespace(completions=fake_completions),
+            responses=fake_responses,
+        )
+
+        with patch(
+            "llmai.litellm.client.OpenAI",
+            return_value=fake_openai,
+        ) as openai_cls:
+            client = LiteLLMClient(
+                config=LiteLLMClientConfig(
+                    api_type=OpenAIApiType.RESPONSES,
+                    api_key="litellm-key",
+                    base_url="https://litellm.example/v1",
+                    extra_kwargs={"top_p": 0.8},
+                )
+            )
+
+        result = client.generate(
+            model="openai/gpt-test",
+            messages=[UserMessage(content=text_parts("Hello"))],
+            temperature=0.2,
+            max_tokens=64,
+            extra_body={"timeout": 30},
+        )
+
+        self.assertEqual(result.content[0].text, "final answer")
+        self.assertEqual(result.usage.input_tokens, 5)
+        openai_cls.assert_called_once_with(
+            base_url="https://litellm.example/v1",
+            api_key="litellm-key",
+        )
+        self.assertFalse(fake_completions.calls)
+        call = fake_responses.calls[0]
+        self.assertEqual(call["model"], "openai/gpt-test")
+        self.assertEqual(call["temperature"], 0.2)
+        self.assertEqual(call["max_output_tokens"], 64)
+        self.assertEqual(call["extra_body"], {"top_p": 0.8, "timeout": 30})
+
+    def test_litellm_keeps_response_schema_unprocessed(self):
+        client = LiteLLMClient(config=LiteLLMClientConfig(api_key="litellm-key"))
+        schema = {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "format": "uri",
+                    "examples": ["https://example.com"],
+                },
+            },
+        }
+
+        self.assertIs(client._openai_schema(schema, strict=True), schema)
 
     def test_openai_generate_processes_strict_json_schema_keywords(self):
         fake_message = SimpleNamespace(

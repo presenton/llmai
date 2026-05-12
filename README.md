@@ -1,6 +1,6 @@
 # llmai
 
-`llmai` is a Python library for working with OpenAI, Azure OpenAI, Vertex AI, Anthropic, Google Gemini, DeepSeek, OpenRouter, Cerebras, Bedrock, and ChatGPT through a shared set of message, tool, schema, and response primitives.
+`llmai` is a Python library for working with OpenAI, Azure OpenAI, Vertex AI, Anthropic, Google Gemini, DeepSeek, OpenRouter, Cerebras, Bedrock, LiteLLM, and ChatGPT through a shared set of message, tool, schema, and response primitives.
 
 Today the repository includes adapters for:
 
@@ -14,6 +14,7 @@ Today the repository includes adapters for:
 - Anthropic
 - Google Gemini
 - Amazon Bedrock
+- LiteLLM
 
 Each provider client exposes the same core entrypoint:
 
@@ -248,6 +249,32 @@ result = client.generate(
 print(result.content)
 ```
 
+## LiteLLM
+
+```python
+from llmai import LiteLLMClient, LiteLLMClientConfig
+from llmai.shared import UserMessage
+
+
+client = LiteLLMClient(
+    config=LiteLLMClientConfig(
+        api_key="litellm-proxy-key",
+        base_url="https://litellm.example/v1",
+    )
+)
+
+result = client.generate(
+    model="gpt-5.4-mini",
+    messages=[
+        UserMessage(content="Write a two-line poem about clean interfaces."),
+    ],
+)
+
+print(result.content)
+```
+
+`LiteLLMClient` uses the OpenAI Python client against an OpenAI-compatible LiteLLM proxy. Set `LiteLLMClientConfig(api_type=OpenAIApiType.RESPONSES)` to call the proxy's Responses API instead of chat completions. Pass the proxy key and URL through `api_key` and `base_url`; config-level `extra_kwargs` and per-call `generate(..., extra_body={...})` are forwarded as request `extra_body`.
+
 ## Structured Output
 
 ```python
@@ -442,6 +469,7 @@ for chunk in client.generate(
 - `llmai/anthropic`: Anthropic adapter
 - `llmai/google`: Google Gemini adapter
 - `llmai/bedrock`: Amazon Bedrock adapter
+- `llmai/litellm`: LiteLLM adapter
 - `llmai/shared`: common message, tool, schema, and response models
 
 ## Core Types

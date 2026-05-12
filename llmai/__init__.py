@@ -6,6 +6,7 @@ from llmai.chatgpt import ChatGPTClient
 from llmai.client import LLMProvider, get_client
 from llmai.deepseek import DeepSeekClient
 from llmai.google import GoogleClient
+from llmai.litellm import LiteLLMClient
 from llmai.openai import OpenAIApiType, OpenAIClient
 from llmai.openrouter import OpenRouterClient
 from llmai.vertex import VertexAIClient
@@ -17,9 +18,10 @@ from llmai.shared import (
     ChatGPTClientConfig,
     HostedToolType,
     LLMTool,
-    OpenAIClientConfig,
     DeepSeekClientConfig,
     GoogleClientConfig,
+    LiteLLMClientConfig,
+    OpenAIClientConfig,
     OpenRouterClientConfig,
     ReasoningEffort,
     ReasoningEffortValue,
@@ -47,6 +49,8 @@ __all__ = [
     "HostedToolType",
     "LLMTool",
     "LLMProvider",
+    "LiteLLMClient",
+    "LiteLLMClientConfig",
     "OpenAIApiType",
     "OpenAIClient",
     "OpenAIClientConfig",

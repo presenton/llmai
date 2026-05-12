@@ -12,3 +12,4 @@ class LLMProvider(Enum):
     GOOGLE = "google"
     ANTHROPIC = "anthropic"
     BEDROCK = "bedrock"
+    LITELLM = "litellm"
