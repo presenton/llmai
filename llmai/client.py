@@ -10,6 +10,7 @@ from llmai.cerebras.client import CerebrasClient
 from llmai.chatgpt.client import ChatGPTClient
 from llmai.deepseek.client import DeepSeekClient
 from llmai.google.client import GoogleClient
+from llmai.litellm.client import LiteLLMClient
 from llmai.openai.client import OpenAIClient
 from llmai.openrouter.client import OpenRouterClient
 from llmai.shared.base import BaseClient
@@ -22,6 +23,7 @@ from llmai.shared.configs import (
     ClientConfig,
     DeepSeekClientConfig,
     GoogleClientConfig,
+    LiteLLMClientConfig,
     OpenAIClientConfig,
     OpenRouterClientConfig,
     VertexAIClientConfig,
@@ -138,6 +140,16 @@ def get_client(
                 provider,
                 config,
                 BedrockClientConfig,
+            ),
+            logger=logger,
+        )
+
+    if provider == "litellm":
+        return LiteLLMClient(
+            config=_require_config(
+                provider,
+                config,
+                LiteLLMClientConfig,
             ),
             logger=logger,
         )
