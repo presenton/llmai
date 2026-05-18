@@ -374,7 +374,7 @@ def test_stream_reasoning_responses():
 # test_generate_structured_responses()
 # test_generate_structured_strict_completions()
 # test_generate_structured_strict_responses()
-test_generate_tool_calls_completions()
+# test_generate_tool_calls_completions()
 # test_generate_tool_calls_responses()
 # test_generate_web_search_responses()
 # test_stream_completions()
