@@ -1,4 +1,3 @@
-import json
 import os
 
 from dev.shared import (
@@ -9,7 +8,7 @@ from dev.shared import (
     get_dev_logger,
 )
 from llmai import TogetherAIClient, TogetherAIClientConfig
-from llmai.shared.messages import SystemMessage, UserMessage
+from llmai.shared.messages import UserMessage
 from llmai.shared.reasoning import (
     ReasoningEffort,
     ReasoningEffortValue,
@@ -17,7 +16,7 @@ from llmai.shared.reasoning import (
 )
 from llmai.shared.response_formats import JSONSchemaResponse
 
-MODEL = os.getenv("TOGETHERAI_MODEL", "openai/gpt-oss-20b")
+MODEL = os.getenv("TOGETHERAI_MODEL", "zai-org/GLM-5.1")
 REASONING_MODEL = os.getenv("TOGETHERAI_REASONING_MODEL", MODEL)
 MAX_TOKENS = int(os.getenv("TOGETHERAI_MAX_TOKENS", "4096"))
 LOGGER = get_dev_logger("togetherai")
@@ -48,18 +47,6 @@ def make_response_format(*, strict: bool = False) -> JSONSchemaResponse:
     )
 
 
-def make_structured_messages(prompt: str):
-    return [
-        SystemMessage(
-            content=(
-                "Only answer in JSON. Follow this JSON schema exactly: "
-                f"{json.dumps(SLIDE_SCHEMA)}"
-            ),
-        ),
-        UserMessage(content=prompt),
-    ]
-
-
 def test_generate():
     client = make_client()
 
@@ -79,7 +66,9 @@ def test_generate_structured():
 
     response = client.generate(
         model=MODEL,
-        messages=make_structured_messages("What is presentation?"),
+        messages=[
+            UserMessage(content="What is presentation?"),
+        ],
         response_format=make_response_format(),
         max_tokens=MAX_TOKENS,
     )
@@ -93,7 +82,9 @@ def test_generate_structured_strict():
 
     response = client.generate(
         model=MODEL,
-        messages=make_structured_messages("What is presentation?"),
+        messages=[
+            UserMessage(content="What is presentation?"),
+        ],
         response_format=make_response_format(strict=True),
         max_tokens=MAX_TOKENS,
     )
@@ -205,5 +196,5 @@ def test_stream_tool_calls():
 # test_generate_web_search()
 # test_generate_reasoning()
 # test_stream()
-# test_stream_reasoning()
+test_stream_reasoning()
 # test_stream_tool_calls()
