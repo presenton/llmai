@@ -80,11 +80,11 @@ class LiteLLMClient(OpenAIClient):
             stream=stream,
         )
 
-    # def _openai_schema(
-    #     self,
-    #     schema: dict,
-    #     *,
-    #     strict: bool,
-    # ) -> dict:
-    #     del strict
-    #     return schema
+    def _openai_schema(
+        self,
+        schema: dict,
+        *,
+        strict: bool,
+    ) -> dict:
+        del strict
+        return schema

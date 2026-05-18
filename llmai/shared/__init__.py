@@ -15,6 +15,7 @@ from llmai.shared.configs import (
     OpenAIApiType,
     OpenAIClientConfig,
     OpenRouterClientConfig,
+    TogetherAIClientConfig,
     VertexAIClientConfig,
 )
 from llmai.shared.errors import (
@@ -124,6 +125,7 @@ __all__ = [
     "OpenAIClientConfig",
     "OpenAIApiType",
     "OpenRouterClientConfig",
+    "TogetherAIClientConfig",
     "ResponseContent",
     "ResponseResult",
     "ResponseFormat",

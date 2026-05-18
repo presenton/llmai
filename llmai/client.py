@@ -28,10 +28,12 @@ from llmai.shared.configs import (
     LiteLLMClientConfig,
     OpenAIClientConfig,
     OpenRouterClientConfig,
+    TogetherAIClientConfig,
     VertexAIClientConfig,
 )
 from llmai.shared.errors import configuration_error
 from llmai.shared.providers import LLMProvider
+from llmai.togetherai.client import TogetherAIClient
 from llmai.vertex.client import VertexAIClient
 
 __all__ = ["LLMProvider", "get_client"]
@@ -122,6 +124,16 @@ def get_client(
                 provider,
                 config,
                 FireworksClientConfig,
+            ),
+            logger=logger,
+        )
+
+    if provider == "togetherai":
+        return TogetherAIClient(
+            config=_require_config(
+                provider,
+                config,
+                TogetherAIClientConfig,
             ),
             logger=logger,
         )

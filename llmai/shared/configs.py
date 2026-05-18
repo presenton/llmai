@@ -82,6 +82,10 @@ class FireworksClientConfig(APIKeyClientConfig):
     provider: Literal["fireworks"] = "fireworks"
 
 
+class TogetherAIClientConfig(APIKeyClientConfig):
+    provider: Literal["togetherai"] = "togetherai"
+
+
 class GoogleClientConfig(APIKeyClientConfig):
     provider: Literal["google"] = "google"
 
@@ -224,6 +228,7 @@ ClientConfig = (
     | OpenRouterClientConfig
     | CerebrasClientConfig
     | FireworksClientConfig
+    | TogetherAIClientConfig
     | GoogleClientConfig
     | AnthropicClientConfig
     | BedrockClientConfig
@@ -247,5 +252,6 @@ __all__ = [
     "OpenRouterClientConfig",
     "OpenAIApiType",
     "OpenAIClientConfig",
+    "TogetherAIClientConfig",
     "VertexAIClientConfig",
 ]

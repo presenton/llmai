@@ -707,6 +707,12 @@ class OpenAIClient(BaseClient):
 
         return reasoning_effort.effort
 
+    def _get_openai_chat_max_tokens_kwargs(
+        self,
+        max_tokens: int | None,
+    ) -> dict[str, int | None]:
+        return {"max_completion_tokens": max_tokens}
+
     def _responses_output_to_assistant_message(
         self,
         output: list[object],
@@ -865,7 +871,7 @@ class OpenAIClient(BaseClient):
                 ),
                 tools=openai_tools,
                 tool_choice=openai_tool_choice,
-                max_completion_tokens=max_tokens,
+                **self._get_openai_chat_max_tokens_kwargs(max_tokens),
                 reasoning_effort=self._get_openai_chat_reasoning_effort_or_omit(
                     reasoning_effort
                 ),
@@ -923,7 +929,7 @@ class OpenAIClient(BaseClient):
                 ),
                 tools=openai_tools,
                 tool_choice=openai_tool_choice,
-                max_completion_tokens=max_tokens,
+                **self._get_openai_chat_max_tokens_kwargs(max_tokens),
                 reasoning_effort=self._get_openai_chat_reasoning_effort_or_omit(
                     reasoning_effort
                 ),
