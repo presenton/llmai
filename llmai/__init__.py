@@ -7,6 +7,7 @@ from llmai.client import LLMProvider, get_client
 from llmai.deepseek import DeepSeekClient
 from llmai.fireworks import FireworksClient
 from llmai.google import GoogleClient
+from llmai.lmstudio import LMStudioClient
 from llmai.litellm import LiteLLMClient
 from llmai.openai import OpenAIApiType, OpenAIClient
 from llmai.openrouter import OpenRouterClient
@@ -23,6 +24,7 @@ from llmai.shared import (
     DeepSeekClientConfig,
     FireworksClientConfig,
     GoogleClientConfig,
+    LMStudioClientConfig,
     LiteLLMClientConfig,
     OpenAIClientConfig,
     OpenRouterClientConfig,
@@ -55,6 +57,8 @@ __all__ = [
     "HostedToolType",
     "LLMTool",
     "LLMProvider",
+    "LMStudioClient",
+    "LMStudioClientConfig",
     "LiteLLMClient",
     "LiteLLMClientConfig",
     "OpenAIApiType",

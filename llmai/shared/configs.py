@@ -86,6 +86,12 @@ class TogetherAIClientConfig(APIKeyClientConfig):
     provider: Literal["togetherai"] = "togetherai"
 
 
+class LMStudioClientConfig(BaseClientConfig):
+    provider: Literal["lmstudio"] = "lmstudio"
+    api_key: OptionalStr = None
+    base_url: OptionalStr = None
+
+
 class GoogleClientConfig(APIKeyClientConfig):
     provider: Literal["google"] = "google"
 
@@ -229,6 +235,7 @@ ClientConfig = (
     | CerebrasClientConfig
     | FireworksClientConfig
     | TogetherAIClientConfig
+    | LMStudioClientConfig
     | GoogleClientConfig
     | AnthropicClientConfig
     | BedrockClientConfig
@@ -248,6 +255,7 @@ __all__ = [
     "DeepSeekClientConfig",
     "FireworksClientConfig",
     "GoogleClientConfig",
+    "LMStudioClientConfig",
     "LiteLLMClientConfig",
     "OpenRouterClientConfig",
     "OpenAIApiType",
