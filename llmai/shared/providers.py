@@ -6,6 +6,7 @@ class LLMProvider(Enum):
     OPENAI = "openai"
     OPENROUTER = "openrouter"
     CEREBRAS = "cerebras"
+    FIREWORKS = "fireworks"
     AZURE = "azure"
     VERTEX = "vertex"
     DEEPSEEK = "deepseek"

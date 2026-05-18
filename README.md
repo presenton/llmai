@@ -1,6 +1,6 @@
 # llmai
 
-`llmai` is a Python library for working with OpenAI, Azure OpenAI, Vertex AI, Anthropic, Google Gemini, DeepSeek, OpenRouter, Cerebras, Bedrock, LiteLLM, and ChatGPT through a shared set of message, tool, schema, and response primitives.
+`llmai` is a Python library for working with OpenAI, Azure OpenAI, Vertex AI, Anthropic, Google Gemini, DeepSeek, OpenRouter, Cerebras, Fireworks, Bedrock, LiteLLM, and ChatGPT through a shared set of message, tool, schema, and response primitives.
 
 Today the repository includes adapters for:
 
@@ -11,6 +11,7 @@ Today the repository includes adapters for:
 - DeepSeek
 - OpenRouter
 - Cerebras
+- Fireworks
 - Anthropic
 - Google Gemini
 - Amazon Bedrock
@@ -195,6 +196,29 @@ print(result.content)
 ```
 
 `OpenRouterClient` uses the OpenAI SDK against OpenRouter's OpenAI-compatible chat-completions API. The default base URL is `https://openrouter.ai/api/v1`.
+
+## Fireworks
+
+```python
+from llmai import FireworksClient, FireworksClientConfig
+from llmai.shared import UserMessage
+
+
+client = FireworksClient(
+    config=FireworksClientConfig(api_key="<your-fireworks-api-key>"),
+)
+
+result = client.generate(
+    model="accounts/fireworks/models/llama-v3p1-8b-instruct",
+    messages=[
+        UserMessage(content="Write a two-line poem about clean interfaces."),
+    ],
+)
+
+print(result.content)
+```
+
+`FireworksClient` uses the OpenAI SDK against Fireworks' OpenAI-compatible chat-completions API. The default base URL is `https://api.fireworks.ai/inference/v1`.
 
 ## Cerebras
 
@@ -466,6 +490,7 @@ for chunk in client.generate(
 - `llmai/deepseek`: DeepSeek adapter
 - `llmai/openrouter`: OpenRouter adapter
 - `llmai/cerebras`: Cerebras adapter
+- `llmai/fireworks`: Fireworks adapter
 - `llmai/anthropic`: Anthropic adapter
 - `llmai/google`: Google Gemini adapter
 - `llmai/bedrock`: Amazon Bedrock adapter

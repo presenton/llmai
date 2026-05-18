@@ -1,7 +1,7 @@
 [project]
 name = "llmai"
 version = "0.2.4"
-description = "Unified Python client for OpenAI, Azure OpenAI, Vertex AI, Anthropic, Gemini, DeepSeek, OpenRouter, Cerebras, Bedrock, LiteLLM, and ChatGPT."
+description = "Unified Python client for OpenAI, Azure OpenAI, Vertex AI, Anthropic, Gemini, DeepSeek, OpenRouter, Cerebras, Fireworks, Bedrock, LiteLLM, and ChatGPT."
 readme = "README.md"
 authors = [{ name = "sauravniraula", email = "developmentsaurav@gmail.com" }]
 license = { file = "LICENSE" }
@@ -21,3 +21,6 @@ build-backend = "uv_build"
 [tool.uv.build-backend]
 module-name = "llmai"
 module-root = ""
+
+[tool.pyright]
+typeCheckingMode = "off"

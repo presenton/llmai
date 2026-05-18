@@ -9,6 +9,7 @@ from llmai.bedrock.client import BedrockClient
 from llmai.cerebras.client import CerebrasClient
 from llmai.chatgpt.client import ChatGPTClient
 from llmai.deepseek.client import DeepSeekClient
+from llmai.fireworks.client import FireworksClient
 from llmai.google.client import GoogleClient
 from llmai.litellm.client import LiteLLMClient
 from llmai.openai.client import OpenAIClient
@@ -22,6 +23,7 @@ from llmai.shared.configs import (
     ChatGPTClientConfig,
     ClientConfig,
     DeepSeekClientConfig,
+    FireworksClientConfig,
     GoogleClientConfig,
     LiteLLMClientConfig,
     OpenAIClientConfig,
@@ -110,6 +112,16 @@ def get_client(
                 provider,
                 config,
                 CerebrasClientConfig,
+            ),
+            logger=logger,
+        )
+
+    if provider == "fireworks":
+        return FireworksClient(
+            config=_require_config(
+                provider,
+                config,
+                FireworksClientConfig,
             ),
             logger=logger,
         )

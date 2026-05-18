@@ -25,6 +25,8 @@ from llmai import (
     ChatGPTClientConfig,
     DeepSeekClient,
     DeepSeekClientConfig,
+    FireworksClient,
+    FireworksClientConfig,
     GoogleClient,
     GoogleClientConfig,
     LiteLLMClient,
@@ -335,6 +337,18 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertIs(client, cerebras_client_cls.return_value)
         cerebras_client_cls.assert_called_once_with(config=config, logger=None)
 
+    def test_get_client_fireworks_uses_explicit_config(self):
+        config = FireworksClientConfig(
+            api_key="fireworks-key",
+            base_url="https://fireworks.example/inference/v1",
+        )
+
+        with patch("llmai.client.FireworksClient") as fireworks_client_cls:
+            client = get_client(config=config)
+
+        self.assertIs(client, fireworks_client_cls.return_value)
+        fireworks_client_cls.assert_called_once_with(config=config, logger=None)
+
     def test_get_client_google_uses_explicit_config(self):
         config = GoogleClientConfig(api_key="google-key")
 
@@ -398,6 +412,10 @@ class ClientBehaviorTests(unittest.TestCase):
             "cerebras",
         )
         self.assertEqual(
+            FireworksClientConfig(api_key="fireworks-key").provider,
+            "fireworks",
+        )
+        self.assertEqual(
             ChatGPTClientConfig(access_token="chatgpt-token").provider,
             "chatgpt",
         )
@@ -443,6 +461,7 @@ class ClientBehaviorTests(unittest.TestCase):
             DeepSeekClient,
             OpenRouterClient,
             CerebrasClient,
+            FireworksClient,
             AnthropicClient,
             GoogleClient,
             VertexAIClient,
@@ -2612,6 +2631,163 @@ class ClientBehaviorTests(unittest.TestCase):
             api_key="cerebras-key",
         )
 
+    def test_fireworks_init_uses_default_base_url(self):
+        with patch("llmai.openai.client.OpenAI") as openai_cls:
+            FireworksClient(config=FireworksClientConfig(api_key="fireworks-key"))
+
+        openai_cls.assert_called_once_with(
+            base_url="https://api.fireworks.ai/inference/v1",
+            api_key="fireworks-key",
+        )
+
+    def test_fireworks_init_uses_custom_base_url(self):
+        with patch("llmai.openai.client.OpenAI") as openai_cls:
+            FireworksClient(
+                config=FireworksClientConfig(
+                    api_key="fireworks-key",
+                    base_url="https://fireworks.example/inference/v1",
+                )
+            )
+
+        openai_cls.assert_called_once_with(
+            base_url="https://fireworks.example/inference/v1",
+            api_key="fireworks-key",
+        )
+
+    def test_fireworks_generate_returns_reasoning_content_as_thinking(self):
+        fake_message = SimpleNamespace(
+            content="final answer",
+            reasoning_content="private reasoning",
+            tool_calls=None,
+        )
+        fake_response = SimpleNamespace(choices=[SimpleNamespace(message=fake_message)])
+        fake_completions = FakeOpenAICompletions(fake_response)
+
+        client = FireworksClient(config=FireworksClientConfig(api_key="test"))
+        client._client = SimpleNamespace(
+            chat=SimpleNamespace(completions=fake_completions)
+        )
+
+        result = client.generate(
+            model="accounts/fireworks/models/reasoning-model",
+            messages=[UserMessage(content=text_parts("Think carefully"))],
+            reasoning_effort=ReasoningEffort(effort=ReasoningEffortValue.LOW),
+        )
+
+        self.assertEqual(result.content, text_parts("final answer"))
+        self.assertEqual(thinking_texts(result.thinking), ["private reasoning"])
+        self.assertEqual(
+            thinking_texts(result.messages[-1].thinking),
+            ["private reasoning"],
+        )
+        self.assertEqual(
+            fake_completions.calls[0]["reasoning_effort"],
+            ReasoningEffortValue.LOW,
+        )
+
+    def test_fireworks_stream_returns_reasoning_content_as_thinking(self):
+        events = [
+            SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        delta=SimpleNamespace(
+                            content=None,
+                            reasoning_content="first ",
+                            tool_calls=None,
+                        )
+                    )
+                ]
+            ),
+            SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        delta=SimpleNamespace(
+                            content=None,
+                            reasoning_content="second",
+                            tool_calls=None,
+                        )
+                    )
+                ]
+            ),
+            SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        delta=SimpleNamespace(
+                            content="final",
+                            reasoning_content=None,
+                            tool_calls=None,
+                        )
+                    )
+                ]
+            ),
+        ]
+        fake_completions = FakeOpenAICompletions(events)
+
+        client = FireworksClient(config=FireworksClientConfig(api_key="test"))
+        client._client = SimpleNamespace(
+            chat=SimpleNamespace(completions=fake_completions)
+        )
+
+        chunks = list(
+            client.generate(
+                model="accounts/fireworks/models/reasoning-model",
+                messages=[UserMessage(content=text_parts("Think carefully"))],
+                reasoning_effort=ReasoningEffort(effort=ReasoningEffortValue.LOW),
+                stream=True,
+            )
+        )
+
+        self.assertEqual(
+            [chunk.type for chunk in chunks],
+            [
+                "event",
+                "thinking",
+                "thinking",
+                "event",
+                "event",
+                "content",
+                "event",
+                "completion",
+            ],
+        )
+        self.assertEqual(
+            stream_marker_events(chunks),
+            [
+                ("start", "thinking", None),
+                ("end", "thinking", None),
+                ("start", "content", None),
+                ("end", "content", None),
+            ],
+        )
+        self.assertEqual(stream_payload_chunks(chunks)[0].chunk, "first ")
+        self.assertEqual(stream_payload_chunks(chunks)[1].chunk, "second")
+        self.assertEqual(
+            thinking_texts(stream_payload_chunks(chunks)[-1].thinking),
+            ["first second"],
+        )
+        self.assertEqual(
+            fake_completions.calls[0]["reasoning_effort"],
+            ReasoningEffortValue.LOW,
+        )
+
+    def test_fireworks_assistant_thinking_round_trips_as_reasoning_content(self):
+        client = FireworksClient(config=FireworksClientConfig(api_key="test"))
+
+        messages = client._messages_to_openai_messages(
+            [
+                AssistantMessage(
+                    content=text_parts("final answer"),
+                    thinking=thinking_items("first reason", "second reason"),
+                ),
+            ]
+        )
+
+        self.assertEqual(messages[0]["content"], "final answer")
+        self.assertEqual(
+            messages[0]["reasoning_content"],
+            "first reason\nsecond reason",
+        )
+
     def test_deepseek_strict_tool_schemas_are_not_cleaned_up(self):
         client = DeepSeekClient(config=DeepSeekClientConfig(api_key="test"))
 
@@ -2689,6 +2865,95 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertNotIn("additionalProperties", schema)
         self.assertEqual(schema["properties"]["cities"]["maxItems"], 3)
         self.assertIn("allOf", parameters["properties"]["location"])
+
+    def test_fireworks_schemas_use_supported_schema_fields(self):
+        client = FireworksClient(config=FireworksClientConfig(api_key="test"))
+
+        response_format = client._get_openai_response_format_or_omit(
+            JSONSchemaResponse(
+                name="final_answer",
+                strict=False,
+                json_schema={
+                    "type": "object",
+                    "properties": {
+                        "cities": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "maxItems": 3,
+                            "minItems": 1,
+                        },
+                        "email": {
+                            "type": "string",
+                            "format": "email",
+                            "pattern": ".+@.+",
+                            "description": "Contact email",
+                        },
+                        "nickname": {
+                            "$ref": "#/$defs/Nickname",
+                        },
+                        "units": {
+                            "anyOf": [
+                                {"type": "string", "enum": ["celsius", "metric"]},
+                                {"type": "string", "enum": ["fahrenheit", "imperial"]},
+                            ],
+                            "oneOf": [
+                                {"type": "string"},
+                            ],
+                        },
+                    },
+                    "additionalProperties": False,
+                    "$defs": {
+                        "Nickname": {
+                            "type": "string",
+                            "minLength": 2,
+                        },
+                    },
+                },
+            )
+        )
+        tools = client._llm_tools_to_openai_tools(
+            [
+                Tool(
+                    name="weather",
+                    description="weather description",
+                    strict=True,
+                    schema={
+                        "type": "object",
+                        "properties": {
+                            "location": {
+                                "allOf": [
+                                    {"type": "string", "format": "email"},
+                                ],
+                                "description": "Location to resolve",
+                            }
+                        },
+                        "additionalProperties": False,
+                    },
+                )
+            ]
+        )
+
+        schema = response_format["json_schema"]["schema"]
+        parameters = tools[0]["function"]["parameters"]
+        self.assertNotIn("strict", response_format["json_schema"])
+        self.assertNotIn("additionalProperties", schema)
+        self.assertNotIn("maxItems", schema["properties"]["cities"])
+        self.assertNotIn("minItems", schema["properties"]["cities"])
+        self.assertNotIn("format", schema["properties"]["email"])
+        self.assertNotIn("pattern", schema["properties"]["email"])
+        self.assertNotIn("$defs", schema)
+        self.assertNotIn("$ref", schema["properties"]["nickname"])
+        self.assertEqual(schema["properties"]["nickname"]["type"], "string")
+        self.assertNotIn("minLength", schema["properties"]["nickname"])
+        self.assertEqual(
+            schema["properties"]["units"]["anyOf"][0]["enum"],
+            ["celsius", "metric"],
+        )
+        self.assertNotIn("oneOf", schema["properties"]["units"])
+        self.assertNotIn("additionalProperties", parameters)
+        self.assertNotIn("allOf", parameters["properties"]["location"])
+        self.assertNotIn("format", parameters["properties"]["location"])
+        self.assertEqual(parameters["properties"]["location"]["type"], "string")
 
     def test_cerebras_strict_schemas_use_supported_schema_fields(self):
         client = CerebrasClient(config=CerebrasClientConfig(api_key="test"))

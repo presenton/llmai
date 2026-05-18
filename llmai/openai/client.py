@@ -154,6 +154,7 @@ class OpenAIClient(BaseClient):
     ) -> AssistantMessage:
         return AssistantMessage(
             content=content_from_text(message.content),
+            thinking=self._chat_completion_message_to_thinking_items(message) or None,
             tool_calls=[
                 AssistantToolCall(
                     id=tool_call.id,
@@ -163,6 +164,17 @@ class OpenAIClient(BaseClient):
                 for tool_call in (message.tool_calls or [])
             ],
         )
+
+    def _chat_completion_message_to_thinking_items(
+        self,
+        message: ChatCompletionMessage,
+    ) -> list[AssistantReasoningItem]:
+        del message
+        return []
+
+    def _chat_completion_delta_to_thinking_text(self, delta: object) -> str | None:
+        del delta
+        return None
 
     def _response_item_id(self, prefix: str = "item") -> str:
         return f"{prefix}_{uuid4().hex}"
@@ -923,6 +935,7 @@ class OpenAIClient(BaseClient):
             current_chunk_type = None
             current_tool = None
             content = ""
+            thinking = ""
             partial_tool_calls: dict[int, dict[str, str | None]] = {}
             tool_order: list[int] = []
             usage: ResponseUsage | None = None
@@ -936,6 +949,20 @@ class OpenAIClient(BaseClient):
                     continue
 
                 delta = event.choices[0].delta
+
+                thinking_delta = self._chat_completion_delta_to_thinking_text(delta)
+                if thinking_delta:
+                    thinking += thinking_delta
+                    current_chunk_type, current_tool, stream_chunks = (
+                        self._transition_stream_chunk(
+                            current_chunk_type=current_chunk_type,
+                            next_chunk_type="thinking",
+                            current_tool=current_tool,
+                        )
+                    )
+                    for stream_chunk in stream_chunks:
+                        yield stream_chunk
+                    yield ResponseStreamThinkingChunk(chunk=thinking_delta)
 
                 if delta.content:
                     content += delta.content
@@ -1011,6 +1038,9 @@ class OpenAIClient(BaseClient):
 
             assistant_message = AssistantMessage(
                 content=content_from_text(content or None),
+                thinking=(
+                    [AssistantReasoningItem(summary=[thinking])] if thinking else None
+                ),
                 tool_calls=tool_calls,
             )
             new_messages = [*messages, assistant_message]

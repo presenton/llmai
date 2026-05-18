@@ -5,6 +5,7 @@ from llmai.cerebras import CerebrasClient
 from llmai.chatgpt import ChatGPTClient
 from llmai.client import LLMProvider, get_client
 from llmai.deepseek import DeepSeekClient
+from llmai.fireworks import FireworksClient
 from llmai.google import GoogleClient
 from llmai.litellm import LiteLLMClient
 from llmai.openai import OpenAIApiType, OpenAIClient
@@ -19,6 +20,7 @@ from llmai.shared import (
     HostedToolType,
     LLMTool,
     DeepSeekClientConfig,
+    FireworksClientConfig,
     GoogleClientConfig,
     LiteLLMClientConfig,
     OpenAIClientConfig,
@@ -44,6 +46,8 @@ __all__ = [
     "ChatGPTClientConfig",
     "DeepSeekClient",
     "DeepSeekClientConfig",
+    "FireworksClient",
+    "FireworksClientConfig",
     "GoogleClient",
     "GoogleClientConfig",
     "HostedToolType",

@@ -78,6 +78,10 @@ class CerebrasClientConfig(APIKeyClientConfig):
     provider: Literal["cerebras"] = "cerebras"
 
 
+class FireworksClientConfig(APIKeyClientConfig):
+    provider: Literal["fireworks"] = "fireworks"
+
+
 class GoogleClientConfig(APIKeyClientConfig):
     provider: Literal["google"] = "google"
 
@@ -219,6 +223,7 @@ ClientConfig = (
     | DeepSeekClientConfig
     | OpenRouterClientConfig
     | CerebrasClientConfig
+    | FireworksClientConfig
     | GoogleClientConfig
     | AnthropicClientConfig
     | BedrockClientConfig
@@ -236,6 +241,7 @@ __all__ = [
     "ChatGPTClientConfig",
     "ClientConfig",
     "DeepSeekClientConfig",
+    "FireworksClientConfig",
     "GoogleClientConfig",
     "LiteLLMClientConfig",
     "OpenRouterClientConfig",
