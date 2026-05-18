@@ -29,6 +29,8 @@ from llmai import (
     FireworksClientConfig,
     GoogleClient,
     GoogleClientConfig,
+    LMStudioClient,
+    LMStudioClientConfig,
     LiteLLMClient,
     LiteLLMClientConfig,
     OpenAIApiType,
@@ -363,6 +365,18 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertIs(client, togetherai_client_cls.return_value)
         togetherai_client_cls.assert_called_once_with(config=config, logger=None)
 
+    def test_get_client_lmstudio_uses_explicit_config(self):
+        config = LMStudioClientConfig(
+            api_key="lmstudio-key",
+            base_url="http://localhost:1234/v1",
+        )
+
+        with patch("llmai.client.LMStudioClient") as lmstudio_client_cls:
+            client = get_client(config=config)
+
+        self.assertIs(client, lmstudio_client_cls.return_value)
+        lmstudio_client_cls.assert_called_once_with(config=config, logger=None)
+
     def test_get_client_google_uses_explicit_config(self):
         config = GoogleClientConfig(api_key="google-key")
 
@@ -433,11 +447,16 @@ class ClientBehaviorTests(unittest.TestCase):
             TogetherAIClientConfig(api_key="together-key").provider,
             "togetherai",
         )
+        self.assertEqual(LMStudioClientConfig().provider, "lmstudio")
         self.assertEqual(
             ChatGPTClientConfig(access_token="chatgpt-token").provider,
             "chatgpt",
         )
         self.assertEqual(LiteLLMClientConfig().provider, "litellm")
+
+    def test_lmstudio_config_rejects_api_type(self):
+        with self.assertRaises(ValidationError):
+            LMStudioClientConfig(api_type="responses")
 
     def test_litellm_config_defaults_to_completions_api_type(self):
         config = LiteLLMClientConfig()
@@ -481,6 +500,7 @@ class ClientBehaviorTests(unittest.TestCase):
             CerebrasClient,
             FireworksClient,
             TogetherAIClient,
+            LMStudioClient,
             AnthropicClient,
             GoogleClient,
             VertexAIClient,
@@ -1349,6 +1369,255 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(call["max_completion_tokens"], 128)
         self.assertEqual(call["reasoning_effort"], "low")
         self.assertNotIn("max_tokens", call)
+
+    def test_lmstudio_generate_uses_openai_client_completions(self):
+        fake_message = SimpleNamespace(
+            content="final answer",
+            tool_calls=None,
+        )
+        fake_response = SimpleNamespace(
+            choices=[SimpleNamespace(message=fake_message)],
+            usage=SimpleNamespace(
+                prompt_tokens=9,
+                completion_tokens=3,
+                total_tokens=12,
+            ),
+        )
+        fake_completions = FakeOpenAICompletions(fake_response)
+        fake_openai = SimpleNamespace(
+            chat=SimpleNamespace(completions=fake_completions),
+        )
+
+        with patch(
+            "llmai.openai.client.OpenAI",
+            return_value=fake_openai,
+        ) as openai_cls:
+            client = LMStudioClient(config=LMStudioClientConfig())
+
+        result = client.generate(
+            model="local-model",
+            messages=[UserMessage(content=text_parts("Hello"))],
+            max_tokens=128,
+        )
+
+        self.assertEqual(result.content, text_parts("final answer"))
+        self.assertEqual(result.usage.input_tokens, 9)
+        self.assertEqual(result.usage.output_tokens, 3)
+        openai_cls.assert_called_once_with(
+            base_url="http://localhost:1234/v1",
+            api_key="lm-studio",
+        )
+        call = fake_completions.calls[0]
+        self.assertEqual(call["model"], "local-model")
+        self.assertEqual(call["max_completion_tokens"], 128)
+        self.assertNotIn("max_tokens", call)
+
+    def test_lmstudio_generate_passes_reasoning_effort(self):
+        fake_message = SimpleNamespace(
+            content="final answer",
+            tool_calls=None,
+        )
+        fake_response = SimpleNamespace(
+            choices=[SimpleNamespace(message=fake_message)],
+        )
+        fake_completions = FakeOpenAICompletions(fake_response)
+        fake_openai = SimpleNamespace(
+            chat=SimpleNamespace(completions=fake_completions),
+        )
+
+        with patch(
+            "llmai.openai.client.OpenAI",
+            return_value=fake_openai,
+        ):
+            client = LMStudioClient(config=LMStudioClientConfig())
+
+        client.generate(
+            model="local-reasoning-model",
+            messages=[UserMessage(content=text_parts("Think carefully"))],
+            reasoning_effort=ReasoningEffort(effort=ReasoningEffortValue.LOW),
+        )
+
+        self.assertEqual(
+            fake_completions.calls[0]["reasoning_effort"],
+            "low",
+        )
+
+    def test_lmstudio_generate_returns_reasoning_content_as_thinking(self):
+        fake_message = SimpleNamespace(
+            content="final answer",
+            reasoning_content="private reasoning",
+            tool_calls=None,
+        )
+        fake_response = SimpleNamespace(choices=[SimpleNamespace(message=fake_message)])
+        fake_completions = FakeOpenAICompletions(fake_response)
+
+        client = LMStudioClient(config=LMStudioClientConfig())
+        client._client = SimpleNamespace(
+            chat=SimpleNamespace(completions=fake_completions)
+        )
+
+        result = client.generate(
+            model="local-reasoning-model",
+            messages=[UserMessage(content=text_parts("Think carefully"))],
+            reasoning_effort=ReasoningEffort(effort=ReasoningEffortValue.LOW),
+        )
+
+        self.assertEqual(result.content, text_parts("final answer"))
+        self.assertEqual(thinking_texts(result.thinking), ["private reasoning"])
+        self.assertEqual(
+            thinking_texts(result.messages[-1].thinking),
+            ["private reasoning"],
+        )
+
+    def test_lmstudio_stream_returns_reasoning_content_as_thinking(self):
+        events = [
+            SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        delta=SimpleNamespace(
+                            content=None,
+                            reasoning_content="first ",
+                            tool_calls=None,
+                        )
+                    )
+                ]
+            ),
+            SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        delta=SimpleNamespace(
+                            content=None,
+                            reasoning_content="second",
+                            tool_calls=None,
+                        )
+                    )
+                ]
+            ),
+            SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        delta=SimpleNamespace(
+                            content="final",
+                            reasoning_content=None,
+                            tool_calls=None,
+                        )
+                    )
+                ]
+            ),
+        ]
+        fake_completions = FakeOpenAICompletions(events)
+
+        client = LMStudioClient(config=LMStudioClientConfig())
+        client._client = SimpleNamespace(
+            chat=SimpleNamespace(completions=fake_completions)
+        )
+
+        chunks = list(
+            client.generate(
+                model="local-reasoning-model",
+                messages=[UserMessage(content=text_parts("Think carefully"))],
+                reasoning_effort=ReasoningEffort(effort=ReasoningEffortValue.LOW),
+                stream=True,
+            )
+        )
+
+        self.assertEqual(stream_payload_chunks(chunks)[0].chunk, "first ")
+        self.assertEqual(stream_payload_chunks(chunks)[1].chunk, "second")
+        self.assertEqual(
+            thinking_texts(stream_payload_chunks(chunks)[-1].thinking),
+            ["first second"],
+        )
+
+    def test_lmstudio_assistant_thinking_round_trips_as_reasoning_content(self):
+        client = LMStudioClient(config=LMStudioClientConfig())
+
+        messages = client._messages_to_openai_messages(
+            [
+                AssistantMessage(
+                    content=text_parts("final answer"),
+                    thinking=thinking_items("first reason", "second reason"),
+                ),
+            ]
+        )
+
+        self.assertEqual(messages[0]["content"], "final answer")
+        self.assertEqual(
+            messages[0]["reasoning_content"],
+            "first reason\nsecond reason",
+        )
+
+    def test_lmstudio_keeps_base_url_with_v1_suffix(self):
+        with patch("llmai.openai.client.OpenAI") as openai_cls:
+            LMStudioClient(
+                config=LMStudioClientConfig(base_url="http://localhost:4321/v1")
+            )
+
+        openai_cls.assert_called_once_with(
+            base_url="http://localhost:4321/v1",
+            api_key="lm-studio",
+        )
+
+    def test_lmstudio_appends_v1_to_base_url_without_suffix(self):
+        with patch("llmai.openai.client.OpenAI") as openai_cls:
+            LMStudioClient(
+                config=LMStudioClientConfig(base_url="http://localhost:4321")
+            )
+
+        openai_cls.assert_called_once_with(
+            base_url="http://localhost:4321/v1",
+            api_key="lm-studio",
+        )
+
+    def test_lmstudio_schemas_use_supported_schema_fields(self):
+        client = LMStudioClient(config=LMStudioClientConfig())
+
+        response_format = client._get_openai_response_format_or_omit(
+            JSONSchemaResponse(
+                name="final_answer",
+                strict=True,
+                json_schema={
+                    "type": "object",
+                    "properties": {
+                        "slug": {
+                            "type": "string",
+                            "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+                            "minLength": 3,
+                            "maxLength": 80,
+                        },
+                        "url": {
+                            "type": "string",
+                            "format": "uri",
+                            "examples": ["https://example.com"],
+                        },
+                        "note": {
+                            "allOf": [
+                                {
+                                    "type": "string",
+                                    "description": "A short note.",
+                                    "minWords": 2,
+                                }
+                            ],
+                        },
+                    },
+                    "required": ["slug", "url", "note"],
+                    "additionalProperties": False,
+                },
+            )
+        )
+
+        schema = response_format["json_schema"]["schema"]
+        slug_schema = schema["properties"]["slug"]
+        url_schema = schema["properties"]["url"]
+        note_schema = schema["properties"]["note"]
+        self.assertNotIn("pattern", slug_schema)
+        self.assertNotIn("minLength", slug_schema)
+        self.assertNotIn("maxLength", slug_schema)
+        self.assertNotIn("format", url_schema)
+        self.assertNotIn("examples", url_schema)
+        self.assertNotIn("allOf", note_schema)
+        self.assertNotIn("minWords", note_schema)
+        self.assertEqual(note_schema["description"], "A short note.")
+        self.assertFalse(schema["additionalProperties"])
 
     def test_litellm_responses_api_type_uses_openai_client_responses(self):
         completed_response = SimpleNamespace(
@@ -2694,6 +2963,29 @@ class ClientBehaviorTests(unittest.TestCase):
         openai_cls.assert_called_once_with(
             base_url="https://together.example/v1",
             api_key="together-key",
+        )
+
+    def test_lmstudio_init_uses_default_base_url_and_dummy_api_key(self):
+        with patch("llmai.openai.client.OpenAI") as openai_cls:
+            LMStudioClient(config=LMStudioClientConfig())
+
+        openai_cls.assert_called_once_with(
+            base_url="http://localhost:1234/v1",
+            api_key="lm-studio",
+        )
+
+    def test_lmstudio_init_uses_custom_base_url_and_api_key(self):
+        with patch("llmai.openai.client.OpenAI") as openai_cls:
+            LMStudioClient(
+                config=LMStudioClientConfig(
+                    api_key="lmstudio-key",
+                    base_url="http://localhost:4321/v1",
+                )
+            )
+
+        openai_cls.assert_called_once_with(
+            base_url="http://localhost:4321/v1",
+            api_key="lmstudio-key",
         )
 
     def test_fireworks_generate_returns_reasoning_content_as_thinking(self):

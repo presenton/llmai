@@ -8,6 +8,7 @@ class LLMProvider(Enum):
     CEREBRAS = "cerebras"
     FIREWORKS = "fireworks"
     TOGETHERAI = "togetherai"
+    LMSTUDIO = "lmstudio"
     AZURE = "azure"
     VERTEX = "vertex"
     DEEPSEEK = "deepseek"

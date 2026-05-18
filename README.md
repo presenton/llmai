@@ -1,6 +1,6 @@
 # llmai
 
-`llmai` is a Python library for working with OpenAI, Azure OpenAI, Vertex AI, Anthropic, Google Gemini, DeepSeek, OpenRouter, Cerebras, Fireworks, Together AI, Bedrock, LiteLLM, and ChatGPT through a shared set of message, tool, schema, and response primitives.
+`llmai` is a Python library for working with OpenAI, Azure OpenAI, Vertex AI, Anthropic, Google Gemini, DeepSeek, OpenRouter, Cerebras, Fireworks, Together AI, LM Studio, Bedrock, LiteLLM, and ChatGPT through a shared set of message, tool, schema, and response primitives.
 
 Today the repository includes adapters for:
 
@@ -13,6 +13,7 @@ Today the repository includes adapters for:
 - Cerebras
 - Fireworks
 - Together AI
+- LM Studio
 - Anthropic
 - Google Gemini
 - Amazon Bedrock
@@ -243,6 +244,31 @@ print(result.content)
 ```
 
 `TogetherAIClient` uses the OpenAI SDK against Together AI's OpenAI-compatible chat-completions API. The default base URL is `https://api.together.ai/v1`. Together AI does not support the OpenAI Responses API, so this adapter always uses chat completions.
+
+## LM Studio
+
+```python
+from llmai import LMStudioClient, LMStudioClientConfig
+from llmai.shared import UserMessage
+
+
+client = LMStudioClient(
+    config=LMStudioClientConfig(
+        base_url="http://localhost:1234",
+    ),
+)
+
+result = client.generate(
+    model="openai/gpt-oss-20b",
+    messages=[
+        UserMessage(content="Write a two-line poem about clean interfaces."),
+    ],
+)
+
+print(result.content)
+```
+
+`LMStudioClient` uses the OpenAI SDK against LM Studio's OpenAI-compatible chat-completions endpoint. The default base URL is `http://localhost:1234/v1`, custom base URLs have `/v1` appended automatically when omitted, and `api_key` is optional. Schemas are reduced to LM Studio's grammar-friendly core fields, so unsupported regex `pattern` constraints are removed before sending.
 
 ## Cerebras
 

@@ -11,6 +11,7 @@ from llmai.chatgpt.client import ChatGPTClient
 from llmai.deepseek.client import DeepSeekClient
 from llmai.fireworks.client import FireworksClient
 from llmai.google.client import GoogleClient
+from llmai.lmstudio.client import LMStudioClient
 from llmai.litellm.client import LiteLLMClient
 from llmai.openai.client import OpenAIClient
 from llmai.openrouter.client import OpenRouterClient
@@ -25,6 +26,7 @@ from llmai.shared.configs import (
     DeepSeekClientConfig,
     FireworksClientConfig,
     GoogleClientConfig,
+    LMStudioClientConfig,
     LiteLLMClientConfig,
     OpenAIClientConfig,
     OpenRouterClientConfig,
@@ -134,6 +136,16 @@ def get_client(
                 provider,
                 config,
                 TogetherAIClientConfig,
+            ),
+            logger=logger,
+        )
+
+    if provider == "lmstudio":
+        return LMStudioClient(
+            config=_require_config(
+                provider,
+                config,
+                LMStudioClientConfig,
             ),
             logger=logger,
         )
