@@ -1,6 +1,6 @@
 # llmai
 
-`llmai` is a Python library for working with OpenAI, Azure OpenAI, Vertex AI, Anthropic, Google Gemini, DeepSeek, OpenRouter, Cerebras, Fireworks, Bedrock, LiteLLM, and ChatGPT through a shared set of message, tool, schema, and response primitives.
+`llmai` is a Python library for working with OpenAI, Azure OpenAI, Vertex AI, Anthropic, Google Gemini, DeepSeek, OpenRouter, Cerebras, Fireworks, Together AI, Bedrock, LiteLLM, and ChatGPT through a shared set of message, tool, schema, and response primitives.
 
 Today the repository includes adapters for:
 
@@ -12,6 +12,7 @@ Today the repository includes adapters for:
 - OpenRouter
 - Cerebras
 - Fireworks
+- Together AI
 - Anthropic
 - Google Gemini
 - Amazon Bedrock
@@ -219,6 +220,29 @@ print(result.content)
 ```
 
 `FireworksClient` uses the OpenAI SDK against Fireworks' OpenAI-compatible chat-completions API. The default base URL is `https://api.fireworks.ai/inference/v1`.
+
+## Together AI
+
+```python
+from llmai import TogetherAIClient, TogetherAIClientConfig
+from llmai.shared import UserMessage
+
+
+client = TogetherAIClient(
+    config=TogetherAIClientConfig(api_key="<your-together-api-key>"),
+)
+
+result = client.generate(
+    model="openai/gpt-oss-20b",
+    messages=[
+        UserMessage(content="Write a two-line poem about clean interfaces."),
+    ],
+)
+
+print(result.content)
+```
+
+`TogetherAIClient` uses the OpenAI SDK against Together AI's OpenAI-compatible chat-completions API. The default base URL is `https://api.together.ai/v1`. Together AI does not support the OpenAI Responses API, so this adapter always uses chat completions.
 
 ## Cerebras
 

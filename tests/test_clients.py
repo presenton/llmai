@@ -36,6 +36,8 @@ from llmai import (
     OpenAIClientConfig,
     OpenRouterClient,
     OpenRouterClientConfig,
+    TogetherAIClient,
+    TogetherAIClientConfig,
     VertexAIClient,
     VertexAIClientConfig,
     get_client,
@@ -349,6 +351,18 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertIs(client, fireworks_client_cls.return_value)
         fireworks_client_cls.assert_called_once_with(config=config, logger=None)
 
+    def test_get_client_togetherai_uses_explicit_config(self):
+        config = TogetherAIClientConfig(
+            api_key="together-key",
+            base_url="https://together.example/v1",
+        )
+
+        with patch("llmai.client.TogetherAIClient") as togetherai_client_cls:
+            client = get_client(config=config)
+
+        self.assertIs(client, togetherai_client_cls.return_value)
+        togetherai_client_cls.assert_called_once_with(config=config, logger=None)
+
     def test_get_client_google_uses_explicit_config(self):
         config = GoogleClientConfig(api_key="google-key")
 
@@ -416,6 +430,10 @@ class ClientBehaviorTests(unittest.TestCase):
             "fireworks",
         )
         self.assertEqual(
+            TogetherAIClientConfig(api_key="together-key").provider,
+            "togetherai",
+        )
+        self.assertEqual(
             ChatGPTClientConfig(access_token="chatgpt-token").provider,
             "chatgpt",
         )
@@ -462,6 +480,7 @@ class ClientBehaviorTests(unittest.TestCase):
             OpenRouterClient,
             CerebrasClient,
             FireworksClient,
+            TogetherAIClient,
             AnthropicClient,
             GoogleClient,
             VertexAIClient,
@@ -2654,6 +2673,29 @@ class ClientBehaviorTests(unittest.TestCase):
             api_key="fireworks-key",
         )
 
+    def test_togetherai_init_uses_default_base_url(self):
+        with patch("llmai.openai.client.OpenAI") as openai_cls:
+            TogetherAIClient(config=TogetherAIClientConfig(api_key="together-key"))
+
+        openai_cls.assert_called_once_with(
+            base_url="https://api.together.ai/v1",
+            api_key="together-key",
+        )
+
+    def test_togetherai_init_uses_custom_base_url(self):
+        with patch("llmai.openai.client.OpenAI") as openai_cls:
+            TogetherAIClient(
+                config=TogetherAIClientConfig(
+                    api_key="together-key",
+                    base_url="https://together.example/v1",
+                )
+            )
+
+        openai_cls.assert_called_once_with(
+            base_url="https://together.example/v1",
+            api_key="together-key",
+        )
+
     def test_fireworks_generate_returns_reasoning_content_as_thinking(self):
         fake_message = SimpleNamespace(
             content="final answer",
@@ -2772,6 +2814,113 @@ class ClientBehaviorTests(unittest.TestCase):
 
     def test_fireworks_assistant_thinking_round_trips_as_reasoning_content(self):
         client = FireworksClient(config=FireworksClientConfig(api_key="test"))
+
+        messages = client._messages_to_openai_messages(
+            [
+                AssistantMessage(
+                    content=text_parts("final answer"),
+                    thinking=thinking_items("first reason", "second reason"),
+                ),
+            ]
+        )
+
+        self.assertEqual(messages[0]["content"], "final answer")
+        self.assertEqual(
+            messages[0]["reasoning_content"],
+            "first reason\nsecond reason",
+        )
+
+    def test_togetherai_generate_returns_reasoning_as_thinking(self):
+        fake_message = SimpleNamespace(
+            content="final answer",
+            reasoning="private reasoning",
+            tool_calls=None,
+        )
+        fake_response = SimpleNamespace(choices=[SimpleNamespace(message=fake_message)])
+        fake_completions = FakeOpenAICompletions(fake_response)
+
+        client = TogetherAIClient(config=TogetherAIClientConfig(api_key="test"))
+        client._client = SimpleNamespace(
+            chat=SimpleNamespace(completions=fake_completions)
+        )
+
+        result = client.generate(
+            model="openai/gpt-oss-20b",
+            messages=[UserMessage(content=text_parts("Think carefully"))],
+            reasoning_effort=ReasoningEffort(effort=ReasoningEffortValue.LOW),
+            max_tokens=256,
+        )
+
+        self.assertEqual(result.content, text_parts("final answer"))
+        self.assertEqual(thinking_texts(result.thinking), ["private reasoning"])
+        self.assertEqual(fake_completions.calls[0]["max_tokens"], 256)
+        self.assertNotIn("max_completion_tokens", fake_completions.calls[0])
+        self.assertEqual(
+            fake_completions.calls[0]["reasoning_effort"],
+            ReasoningEffortValue.LOW,
+        )
+
+    def test_togetherai_stream_returns_reasoning_as_thinking(self):
+        events = [
+            SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        delta=SimpleNamespace(
+                            content=None,
+                            reasoning="first ",
+                            tool_calls=None,
+                        )
+                    )
+                ]
+            ),
+            SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        delta=SimpleNamespace(
+                            content=None,
+                            reasoning="second",
+                            tool_calls=None,
+                        )
+                    )
+                ]
+            ),
+            SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        delta=SimpleNamespace(
+                            content="final",
+                            reasoning=None,
+                            tool_calls=None,
+                        )
+                    )
+                ]
+            ),
+        ]
+        fake_completions = FakeOpenAICompletions(events)
+
+        client = TogetherAIClient(config=TogetherAIClientConfig(api_key="test"))
+        client._client = SimpleNamespace(
+            chat=SimpleNamespace(completions=fake_completions)
+        )
+
+        chunks = list(
+            client.generate(
+                model="openai/gpt-oss-20b",
+                messages=[UserMessage(content=text_parts("Think carefully"))],
+                reasoning_effort=ReasoningEffort(effort=ReasoningEffortValue.LOW),
+                stream=True,
+            )
+        )
+
+        self.assertEqual(stream_payload_chunks(chunks)[0].chunk, "first ")
+        self.assertEqual(stream_payload_chunks(chunks)[1].chunk, "second")
+        self.assertEqual(
+            thinking_texts(stream_payload_chunks(chunks)[-1].thinking),
+            ["first second"],
+        )
+
+    def test_togetherai_assistant_thinking_round_trips_as_reasoning_content(self):
+        client = TogetherAIClient(config=TogetherAIClientConfig(api_key="test"))
 
         messages = client._messages_to_openai_messages(
             [

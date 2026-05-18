@@ -10,6 +10,7 @@ from llmai.google import GoogleClient
 from llmai.litellm import LiteLLMClient
 from llmai.openai import OpenAIApiType, OpenAIClient
 from llmai.openrouter import OpenRouterClient
+from llmai.togetherai import TogetherAIClient
 from llmai.vertex import VertexAIClient
 from llmai.shared import (
     AnthropicClientConfig,
@@ -28,6 +29,7 @@ from llmai.shared import (
     ReasoningEffort,
     ReasoningEffortValue,
     ReasoningSummary,
+    TogetherAIClientConfig,
     ToolChoiceMode,
     VertexAIClientConfig,
     WebSearchTool,
@@ -63,6 +65,8 @@ __all__ = [
     "ReasoningEffort",
     "ReasoningEffortValue",
     "ReasoningSummary",
+    "TogetherAIClient",
+    "TogetherAIClientConfig",
     "ToolChoiceMode",
     "VertexAIClient",
     "VertexAIClientConfig",
