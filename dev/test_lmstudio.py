@@ -29,7 +29,13 @@ def make_client() -> LMStudioClient:
     )
 
 
-def make_response_format(*, strict: bool = False) -> JSONSchemaResponse:
+def make_response_format(*, strict: bool | None = None) -> JSONSchemaResponse:
+    if strict is None:
+        return JSONSchemaResponse(
+            name="ResponseSchema",
+            json_schema=SLIDE_SCHEMA,
+        )
+
     return JSONSchemaResponse(
         name="ResponseSchema",
         strict=strict,
@@ -60,7 +66,9 @@ def test_generate_completions():
     _generate(make_client(), "LM Studio completions plain generation")
 
 
-def _generate_structured(client: LMStudioClient, label: str, *, strict: bool = False):
+def _generate_structured(
+    client: LMStudioClient, label: str, *, strict: bool | None = None
+):
     response = client.generate(
         model=MODEL,
         messages=[

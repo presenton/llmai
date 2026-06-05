@@ -12,7 +12,7 @@ class ResponseFormat(BaseModel):
 class JSONSchemaResponse(ResponseFormat):
     type: Literal["json_schema"] = "json_schema"
     name: str | None = None
-    strict: bool = True
+    strict: bool = False
     json_schema: SchemaLike
 
 

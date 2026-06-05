@@ -48,7 +48,13 @@ def make_reasoning_effort() -> ReasoningEffort:
     )
 
 
-def make_response_format(*, strict: bool = False) -> JSONSchemaResponse:
+def make_response_format(*, strict: bool | None = None) -> JSONSchemaResponse:
+    if strict is None:
+        return JSONSchemaResponse(
+            name="ResponseSchema",
+            json_schema=SLIDE_SCHEMA,
+        )
+
     return JSONSchemaResponse(
         name="ResponseSchema",
         strict=strict,

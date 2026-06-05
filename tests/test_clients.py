@@ -254,6 +254,11 @@ class AnswerSchema(BaseModel):
 
 
 class ClientBehaviorTests(unittest.TestCase):
+    def test_json_schema_response_defaults_to_non_strict(self):
+        response_format = JSONSchemaResponse(json_schema=AnswerSchema)
+
+        self.assertFalse(response_format.strict)
+
     def test_get_client_openai_uses_explicit_config(self):
         config = OpenAIClientConfig(
             api_key="openai-key",
@@ -1766,7 +1771,7 @@ class ClientBehaviorTests(unittest.TestCase):
         client.generate(
             model="gpt-test",
             messages=[UserMessage(content=text_parts("Answer in JSON"))],
-            response_format=JSONSchemaResponse(json_schema=schema),
+            response_format=JSONSchemaResponse(json_schema=schema, strict=True),
         )
 
         sent_schema = fake_completions.calls[0]["response_format"]["json_schema"][
