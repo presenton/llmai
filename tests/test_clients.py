@@ -688,6 +688,80 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertTrue(fake_responses.calls[0]["stream"])
         self.assertFalse(fake_completions.calls)
 
+    def test_chatgpt_generate_replays_store_false_history_without_item_ids(self):
+        completed_response = SimpleNamespace(
+            output=[
+                SimpleNamespace(
+                    type="message",
+                    content=[
+                        SimpleNamespace(
+                            type="output_text",
+                            text="final answer",
+                        )
+                    ],
+                )
+            ]
+        )
+        fake_responses = FakeOpenAIResponses(
+            iter(
+                [
+                    SimpleNamespace(
+                        type="response.completed",
+                        response=completed_response,
+                    )
+                ]
+            )
+        )
+
+        client = ChatGPTClient(
+            config=ChatGPTClientConfig(access_token="test")
+        )
+        client._client = SimpleNamespace(
+            responses=fake_responses,
+            chat=SimpleNamespace(completions=FakeOpenAICompletions(None)),
+        )
+
+        client.generate(
+            model="chatgpt-4o-latest",
+            messages=[
+                UserMessage(content=text_parts("Update the images.")),
+                AssistantMessage(
+                    id="msg_123",
+                    content=text_parts("I will update them."),
+                    thinking=[
+                        make_reasoning_item(
+                            "Need image tool",
+                            item_id="rs_123",
+                            encrypted_content="encrypted-reasoning",
+                        )
+                    ],
+                    tool_calls=[
+                        AssistantToolCall(
+                            id="call_123",
+                            name="generateAssets",
+                            arguments='{"query":"business"}',
+                        )
+                    ],
+                ),
+            ],
+        )
+
+        request_input = fake_responses.calls[0]["input"]
+        reasoning_item = request_input[1]
+        assistant_message = request_input[2]
+        function_call = request_input[3]
+
+        self.assertEqual(reasoning_item["type"], "reasoning")
+        self.assertNotIn("id", reasoning_item)
+        self.assertEqual(
+            reasoning_item["encrypted_content"],
+            "encrypted-reasoning",
+        )
+        self.assertEqual(assistant_message["role"], "assistant")
+        self.assertNotIn("id", assistant_message)
+        self.assertEqual(function_call["type"], "function_call")
+        self.assertEqual(function_call["call_id"], "call_123")
+
     def test_chatgpt_generate_attaches_web_search_tool(self):
         completed_response = SimpleNamespace(
             output=[

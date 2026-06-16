@@ -198,24 +198,41 @@ class ChatGPTClient(BaseClient):
     def _assistant_message_to_responses_input_items(
         self,
         message: AssistantMessage,
+        *,
+        include_response_item_ids: bool = True,
     ) -> list[dict[str, object]]:
         input_items: list[dict[str, object]] = []
 
         for reasoning_item in message.thinking or []:
-            if reasoning_item.id is None:
-                continue
+            if include_response_item_ids:
+                if reasoning_item.id is None:
+                    continue
+                serialized_reasoning_item: dict[str, object] = {
+                    "id": reasoning_item.id,
+                    "type": "reasoning",
+                    "summary": [
+                        {
+                            "type": "summary_text",
+                            "text": summary_text,
+                        }
+                        for summary_text in reasoning_item.summary
+                    ],
+                }
+            else:
+                if reasoning_item.encrypted_content is None:
+                    continue
+                serialized_reasoning_item = {
+                    "type": "reasoning",
+                    "summary": [
+                        {
+                            "type": "summary_text",
+                            "text": summary_text,
+                        }
+                        for summary_text in reasoning_item.summary
+                    ],
+                    "encrypted_content": reasoning_item.encrypted_content,
+                }
 
-            serialized_reasoning_item: dict[str, object] = {
-                "id": reasoning_item.id,
-                "type": "reasoning",
-                "summary": [
-                    {
-                        "type": "summary_text",
-                        "text": summary_text,
-                    }
-                    for summary_text in reasoning_item.summary
-                ],
-            }
             if reasoning_item.encrypted_content is not None:
                 serialized_reasoning_item["encrypted_content"] = (
                     reasoning_item.encrypted_content
@@ -235,7 +252,7 @@ class ChatGPTClient(BaseClient):
                     }
                 ],
             }
-            if message.id is not None:
+            if include_response_item_ids and message.id is not None:
                 message_item["id"] = message.id
             input_items.append(message_item)
 
@@ -254,6 +271,8 @@ class ChatGPTClient(BaseClient):
     def _messages_to_responses_input(
         self,
         messages: list[Message],
+        *,
+        include_response_item_ids: bool = True,
     ) -> list[dict[str, object]]:
         responses_input: list[dict[str, object]] = []
 
@@ -273,7 +292,10 @@ class ChatGPTClient(BaseClient):
                 continue
             if isinstance(message, AssistantMessage):
                 responses_input.extend(
-                    self._assistant_message_to_responses_input_items(message)
+                    self._assistant_message_to_responses_input_items(
+                        message,
+                        include_response_item_ids=include_response_item_ids,
+                    )
                 )
                 continue
             if isinstance(message, ToolResponseMessage):
@@ -536,9 +558,17 @@ class ChatGPTClient(BaseClient):
             reasoning_effort,
             extra_body,
         )
+        include_response_item_ids = not (
+            isinstance(request_extra_body, dict)
+            and request_extra_body.get("store") is False
+        )
+
         return {
             "model": model,
-            "input": self._messages_to_responses_input(messages),
+            "input": self._messages_to_responses_input(
+                messages,
+                include_response_item_ids=include_response_item_ids,
+            ),
             "temperature": Omit(),
             "text": self._get_responses_text_or_omit(response_format),
             "tools": responses_tools,
