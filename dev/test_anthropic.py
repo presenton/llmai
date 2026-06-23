@@ -245,9 +245,9 @@ def test_stream_reasoning():
 
 
 # test_generate()
-# test_generate_structured()
+test_generate_structured()
 # test_generate_structured_strict()
-# test_generate_tool_calls()
+test_generate_tool_calls()
 # test_generate_web_search()
 # test_stream()
 # test_stream_structured()

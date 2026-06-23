@@ -62,6 +62,7 @@ from llmai.shared import (
     SystemMessage,
     TextContentPart,
     Tool,
+    ToolResponseMessage,
     UserMessage,
     WebSearchTool,
 )
@@ -4077,6 +4078,23 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(messages[0]["content"][1]["source"]["type"], "base64")
         self.assertEqual(messages[0]["content"][1]["source"]["media_type"], "image/png")
 
+    def test_anthropic_serializes_tool_response_string_content_parts(self):
+        client = AnthropicClient(config=AnthropicClientConfig(api_key="test"))
+
+        messages = client._messages_to_anthropic_messages(
+            [
+                ToolResponseMessage(
+                    id="call_1",
+                    content=["sunny ", TextContentPart(text="now")],
+                )
+            ]
+        )
+
+        self.assertEqual(messages[0]["role"], "user")
+        self.assertEqual(messages[0]["content"][0]["type"], "tool_result")
+        self.assertEqual(messages[0]["content"][0]["tool_use_id"], "call_1")
+        self.assertEqual(messages[0]["content"][0]["content"], "sunny now")
+
     def test_anthropic_generate_captures_thinking(self):
         fake_response = SimpleNamespace(
             content=[
@@ -4975,6 +4993,25 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(messages[0].parts[2].inline_data.data, b"png-bytes")
         self.assertEqual(messages[0].parts[2].inline_data.mime_type, "image/png")
 
+    def test_google_serializes_tool_response_string_content_parts(self):
+        client = GoogleClient(config=GoogleClientConfig(api_key="test"))
+
+        messages = client._messages_to_google_messages(
+            [
+                ToolResponseMessage(
+                    id="call_1",
+                    content=["sunny ", TextContentPart(text="now")],
+                )
+            ]
+        )
+
+        self.assertEqual(messages[0].role, "user")
+        self.assertEqual(messages[0].parts[0].function_response.name, "call_1")
+        self.assertEqual(
+            messages[0].parts[0].function_response.response,
+            {"result": "sunny now"},
+        )
+
     def test_google_generate_returns_multimodal_content_and_thinking(self):
         fake_response = SimpleNamespace(
             candidates=[
@@ -5866,6 +5903,29 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(
             fake_runtime.calls[0]["toolConfig"]["toolChoice"],
             {"tool": {"name": "get_weather"}},
+        )
+
+    def test_bedrock_serializes_tool_response_string_content_parts(self):
+        fake_runtime = FakeBedrockRuntimeClient(response={})
+        client, _, _ = self.make_bedrock_client(
+            fake_runtime,
+            region="us-east-1",
+            aws_access_key_id="aws-id",
+            aws_secret_access_key="aws-secret",
+        )
+
+        messages = client._messages_to_bedrock_messages(
+            [
+                ToolResponseMessage(
+                    id="call_1",
+                    content=["sunny ", TextContentPart(text="now")],
+                )
+            ]
+        )
+
+        self.assertEqual(
+            messages[0]["content"][0]["toolResult"]["content"],
+            [{"text": "sunny "}, {"text": "now"}],
         )
 
     def test_bedrock_serializes_user_images_and_rejects_assistant_image_history(self):

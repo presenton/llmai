@@ -228,7 +228,7 @@ class BedrockClient(BaseClient):
         self,
         content: list[TextContentPart] | None,
     ) -> list[dict[str, object]]:
-        return [{"text": part.text} for part in content or []]
+        return [{"text": part.text} for part in normalize_content_parts(content)]
 
     def _assistant_message_to_bedrock_message(
         self,

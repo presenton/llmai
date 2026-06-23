@@ -316,7 +316,10 @@ class GoogleClient(BaseClient):
                                 name=message.id,
                                 response={
                                     "result": "".join(
-                                        part.text for part in (message.content or [])
+                                        part.text
+                                        for part in normalize_content_parts(
+                                            message.content
+                                        )
                                     )
                                 },
                             )

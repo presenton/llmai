@@ -228,7 +228,8 @@ class AnthropicClient(BaseClient):
                                 type="tool_result",
                                 tool_use_id=message.id,
                                 content="".join(
-                                    part.text for part in (message.content or [])
+                                    part.text
+                                    for part in normalize_content_parts(message.content)
                                 ),
                                 is_error=False,
                             )
