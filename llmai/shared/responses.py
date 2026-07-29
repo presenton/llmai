@@ -1,4 +1,4 @@
-from collections.abc import Generator
+from collections.abc import AsyncIterator, Awaitable, Generator
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -81,3 +81,6 @@ ResponseStreamEvent = (
     | ResponseStreamCompletionChunk
 )
 ResponseResult = ResponseContent | Generator[ResponseStreamEvent, None, None]
+AsyncResponseResult = (
+    Awaitable[ResponseContent] | AsyncIterator[ResponseStreamEvent]
+)

@@ -1,9 +1,25 @@
+from llmai.async_clients import (
+    AsyncAnthropicClient,
+    AsyncAzureOpenAIClient,
+    AsyncBedrockClient,
+    AsyncCerebrasClient,
+    AsyncChatGPTClient,
+    AsyncDeepSeekClient,
+    AsyncFireworksClient,
+    AsyncGoogleClient,
+    AsyncLiteLLMClient,
+    AsyncLMStudioClient,
+    AsyncOpenAIClient,
+    AsyncOpenRouterClient,
+    AsyncTogetherAIClient,
+    AsyncVertexAIClient,
+)
 from llmai.anthropic import AnthropicClient
 from llmai.azure import AzureOpenAIClient
 from llmai.bedrock import BedrockClient
 from llmai.cerebras import CerebrasClient
 from llmai.chatgpt import ChatGPTClient
-from llmai.client import LLMProvider, get_client
+from llmai.client import LLMProvider, get_async_client, get_client
 from llmai.deepseek import DeepSeekClient
 from llmai.fireworks import FireworksClient
 from llmai.google import GoogleClient
@@ -38,6 +54,20 @@ from llmai.shared import (
 )
 
 __all__ = [
+    "AsyncAnthropicClient",
+    "AsyncAzureOpenAIClient",
+    "AsyncBedrockClient",
+    "AsyncCerebrasClient",
+    "AsyncChatGPTClient",
+    "AsyncDeepSeekClient",
+    "AsyncFireworksClient",
+    "AsyncGoogleClient",
+    "AsyncLiteLLMClient",
+    "AsyncLMStudioClient",
+    "AsyncOpenAIClient",
+    "AsyncOpenRouterClient",
+    "AsyncTogetherAIClient",
+    "AsyncVertexAIClient",
     "AnthropicClient",
     "AnthropicClientConfig",
     "AzureOpenAIClient",
@@ -76,6 +106,7 @@ __all__ = [
     "VertexAIClientConfig",
     "WebSearchTool",
     "get_client",
+    "get_async_client",
     "main",
 ]
 

@@ -3,6 +3,22 @@ from __future__ import annotations
 from logging import Logger
 from typing import TypeVar
 
+from llmai.async_clients import (
+    AsyncAnthropicClient,
+    AsyncAzureOpenAIClient,
+    AsyncBedrockClient,
+    AsyncCerebrasClient,
+    AsyncChatGPTClient,
+    AsyncDeepSeekClient,
+    AsyncFireworksClient,
+    AsyncGoogleClient,
+    AsyncLiteLLMClient,
+    AsyncLMStudioClient,
+    AsyncOpenAIClient,
+    AsyncOpenRouterClient,
+    AsyncTogetherAIClient,
+    AsyncVertexAIClient,
+)
 from llmai.anthropic.client import AnthropicClient
 from llmai.azure.client import AzureOpenAIClient
 from llmai.bedrock.client import BedrockClient
@@ -15,7 +31,7 @@ from llmai.lmstudio.client import LMStudioClient
 from llmai.litellm.client import LiteLLMClient
 from llmai.openai.client import OpenAIClient
 from llmai.openrouter.client import OpenRouterClient
-from llmai.shared.base import BaseClient
+from llmai.shared.base import AsyncBaseClient, BaseClient
 from llmai.shared.configs import (
     AnthropicClientConfig,
     AzureOpenAIClientConfig,
@@ -38,7 +54,7 @@ from llmai.shared.providers import LLMProvider
 from llmai.togetherai.client import TogetherAIClient
 from llmai.vertex.client import VertexAIClient
 
-__all__ = ["LLMProvider", "get_client"]
+__all__ = ["LLMProvider", "get_async_client", "get_client"]
 
 TConfig = TypeVar("TConfig")
 
@@ -194,6 +210,46 @@ def get_client(
     raise configuration_error(
         f"Unsupported client config provider: {provider!r}. Expected one of: {supported}",
         provider=None,
+    )
+
+
+def get_async_client(
+    *,
+    config: ClientConfig,
+    logger: Logger | None = None,
+) -> AsyncBaseClient:
+    provider = getattr(config, "provider", None)
+    clients = {
+        "openai": (OpenAIClientConfig, AsyncOpenAIClient),
+        "azure": (AzureOpenAIClientConfig, AsyncAzureOpenAIClient),
+        "vertex": (VertexAIClientConfig, AsyncVertexAIClient),
+        "chatgpt": (ChatGPTClientConfig, AsyncChatGPTClient),
+        "deepseek": (DeepSeekClientConfig, AsyncDeepSeekClient),
+        "openrouter": (OpenRouterClientConfig, AsyncOpenRouterClient),
+        "cerebras": (CerebrasClientConfig, AsyncCerebrasClient),
+        "fireworks": (FireworksClientConfig, AsyncFireworksClient),
+        "togetherai": (TogetherAIClientConfig, AsyncTogetherAIClient),
+        "lmstudio": (LMStudioClientConfig, AsyncLMStudioClient),
+        "google": (GoogleClientConfig, AsyncGoogleClient),
+        "anthropic": (AnthropicClientConfig, AsyncAnthropicClient),
+        "bedrock": (BedrockClientConfig, AsyncBedrockClient),
+        "litellm": (LiteLLMClientConfig, AsyncLiteLLMClient),
+    }
+    client_entry = clients.get(provider)
+    if client_entry is None:
+        supported = ", ".join(each.value for each in LLMProvider)
+        raise configuration_error(
+            (
+                f"Unsupported client config provider: {provider!r}. "
+                f"Expected one of: {supported}"
+            ),
+            provider=None,
+        )
+
+    config_type, client_type = client_entry
+    return client_type(
+        config=_require_config(provider, config, config_type),
+        logger=logger,
     )
 
 

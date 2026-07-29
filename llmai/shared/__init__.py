@@ -1,4 +1,4 @@
-from llmai.shared.base import BaseClient
+from llmai.shared.base import AsyncBaseClient, BaseClient
 from llmai.shared.configs import (
     APIKeyClientConfig,
     AnthropicClientConfig,
@@ -63,6 +63,7 @@ from llmai.shared.response_formats import (
     get_response_schema,
 )
 from llmai.shared.responses import (
+    AsyncResponseResult,
     ResponseContent,
     ResponseResult,
     ResponseStreamChunk,
@@ -95,6 +96,8 @@ __all__ = [
     "AssistantMessage",
     "AssistantReasoningItem",
     "AssistantToolCall",
+    "AsyncBaseClient",
+    "AsyncResponseResult",
     "APIKeyClientConfig",
     "AnthropicClientConfig",
     "AzureOpenAIClientConfig",
