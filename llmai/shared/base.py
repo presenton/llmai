@@ -1,6 +1,12 @@
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
+import asyncio
+from concurrent.futures import Future
+from collections.abc import AsyncIterator, Awaitable
+from contextvars import ContextVar
 from logging import Logger
-from typing import Any
+from typing import Any, Callable, Literal, overload
 from uuid import uuid4
 
 from llmai.shared.logs import LogLevel
@@ -9,6 +15,8 @@ from llmai.shared.reasoning import ReasoningEffort
 from llmai.shared.response_formats import ResponseFormat
 from llmai.shared.responses import (
     ResponseResult,
+    ResponseContent,
+    ResponseStreamEvent,
     ResponseStreamChunk,
     ResponseStreamChunkType,
 )
@@ -127,3 +135,194 @@ class BaseClient(ABC):
         stream: bool = False,
     ) -> ResponseResult:
         raise NotImplementedError
+
+
+_STREAM_EXHAUSTED = object()
+_ASYNC_EVENT_LOOP: ContextVar[asyncio.AbstractEventLoop] = ContextVar(
+    "llmai_async_event_loop"
+)
+_ACTIVE_PROVIDER_FUTURES: ContextVar[list[Future[Any]] | None] = ContextVar(
+    "llmai_active_provider_futures",
+    default=None,
+)
+
+
+def _next_stream_event(stream: Any) -> Any:
+    try:
+        return next(stream)
+    except StopIteration:
+        return _STREAM_EXHAUSTED
+
+
+def run_awaitable_from_worker(awaitable: Awaitable[Any]) -> Any:
+    """Run provider async I/O on the caller's event loop from a parser thread."""
+
+    loop = _ASYNC_EVENT_LOOP.get()
+    future = asyncio.run_coroutine_threadsafe(awaitable, loop)
+    active_futures = _ACTIVE_PROVIDER_FUTURES.get()
+    if active_futures is not None:
+        active_futures.append(future)
+    try:
+        return future.result()
+    finally:
+        if active_futures is not None and future in active_futures:
+            active_futures.remove(future)
+
+
+class AsyncBaseClient:
+    """Async facade for an llmai provider client.
+
+    Response parsing runs outside the event-loop thread while provider-native
+    async transports perform network I/O on the event loop. This keeps sync and
+    async provider behavior identical while permitting concurrent requests.
+    """
+
+    def __init__(
+        self,
+        *,
+        sync_client: BaseClient,
+        async_close: Callable[[], Awaitable[None]] | None = None,
+    ):
+        self._sync_client = sync_client
+        self._async_close = async_close
+        self._closed = False
+
+    @overload
+    def agenerate(
+        self,
+        *,
+        model: str,
+        messages: list[Message],
+        temperature: float | None = None,
+        tools: list[LLMTool] | None = None,
+        tool_choice: ToolChoice | None = None,
+        response_format: ResponseFormat | None = None,
+        max_tokens: int | None = None,
+        reasoning_effort: ReasoningEffort | None = None,
+        extra_body: dict | None = None,
+        stream: Literal[False] = False,
+    ) -> Awaitable[ResponseContent]: ...
+
+    @overload
+    def agenerate(
+        self,
+        *,
+        model: str,
+        messages: list[Message],
+        temperature: float | None = None,
+        tools: list[LLMTool] | None = None,
+        tool_choice: ToolChoice | None = None,
+        response_format: ResponseFormat | None = None,
+        max_tokens: int | None = None,
+        reasoning_effort: ReasoningEffort | None = None,
+        extra_body: dict | None = None,
+        stream: Literal[True],
+    ) -> AsyncIterator[ResponseStreamEvent]: ...
+
+    def agenerate(
+        self,
+        *,
+        model: str,
+        messages: list[Message],
+        temperature: float | None = None,
+        tools: list[LLMTool] | None = None,
+        tool_choice: ToolChoice | None = None,
+        response_format: ResponseFormat | None = None,
+        max_tokens: int | None = None,
+        reasoning_effort: ReasoningEffort | None = None,
+        extra_body: dict | None = None,
+        stream: bool = False,
+    ) -> Awaitable[ResponseContent] | AsyncIterator[ResponseStreamEvent]:
+        self._ensure_open()
+        kwargs = {
+            "model": model,
+            "messages": messages,
+            "temperature": temperature,
+            "tools": tools,
+            "tool_choice": tool_choice,
+            "response_format": response_format,
+            "max_tokens": max_tokens,
+            "reasoning_effort": reasoning_effort,
+            "extra_body": extra_body,
+        }
+        if stream:
+            return self._agenerate_stream(**kwargs)
+        return self._agenerate_once(**kwargs)
+
+    async def _agenerate_once(self, **kwargs: Any) -> ResponseContent:
+        result = await self._run_in_parser_thread(
+            self._sync_client.generate,
+            **kwargs,
+            stream=False,
+        )
+        if not isinstance(result, ResponseContent):
+            raise TypeError("Non-streaming generation returned a stream")
+        return result
+
+    async def _agenerate_stream(
+        self,
+        **kwargs: Any,
+    ) -> AsyncIterator[ResponseStreamEvent]:
+        stream = None
+        try:
+            stream = await self._run_in_parser_thread(
+                self._sync_client.generate,
+                **kwargs,
+                stream=True,
+            )
+            while True:
+                event = await self._run_in_parser_thread(
+                    _next_stream_event,
+                    stream,
+                )
+                if event is _STREAM_EXHAUSTED:
+                    break
+                yield event
+        finally:
+            close = getattr(stream, "close", None)
+            if callable(close):
+                await self._run_in_parser_thread(close)
+
+    async def _run_in_parser_thread(
+        self,
+        callback: Callable[..., Any],
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        loop_token = _ASYNC_EVENT_LOOP.set(asyncio.get_running_loop())
+        active_futures: list[Future[Any]] = []
+        futures_token = _ACTIVE_PROVIDER_FUTURES.set(active_futures)
+        try:
+            return await asyncio.to_thread(callback, *args, **kwargs)
+        except asyncio.CancelledError:
+            for future in tuple(active_futures):
+                future.cancel()
+            raise
+        finally:
+            _ACTIVE_PROVIDER_FUTURES.reset(futures_token)
+            _ASYNC_EVENT_LOOP.reset(loop_token)
+
+    def _ensure_open(self) -> None:
+        if self._closed:
+            raise RuntimeError("Async client is closed")
+
+    async def aclose(self) -> None:
+        if self._closed:
+            return
+
+        self._closed = True
+        if self._async_close is not None:
+            await self._async_close()
+            return
+
+        provider_client = getattr(self._sync_client, "_client", None)
+        close = getattr(provider_client, "close", None)
+        if callable(close):
+            await asyncio.to_thread(close)
+
+    async def __aenter__(self) -> AsyncBaseClient:
+        self._ensure_open()
+        return self
+
+    async def __aexit__(self, exc_type, exc, traceback) -> None:
+        await self.aclose()

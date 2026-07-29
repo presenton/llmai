@@ -19,9 +19,14 @@ Today the repository includes adapters for:
 - Amazon Bedrock
 - LiteLLM
 
-Each provider client exposes the same core entrypoint:
+Each synchronous provider client exposes the same core entrypoint:
 
 - `generate(..., stream=False)`
+
+Every provider also has a separate async client with:
+
+- `await agenerate(..., stream=False)`
+- `async for ... in agenerate(..., stream=True)`
 
 ## Why This Exists
 
@@ -66,6 +71,58 @@ print(result.duration_seconds)
 For text-only prompts, `UserMessage(content="...")` is the simplest form. `SystemMessage(content="...")` also takes a plain string. Use explicit content parts like `TextContentPart` only when you need mixed multimodal input or tighter control over user message structure.
 
 If you want to swap providers, the overall call shape stays the same. In most cases you only need to change the client class, credentials, and model name.
+
+## Async Usage
+
+Async clients are separate from their synchronous counterparts, so adding async
+support does not change existing applications:
+
+```python
+import asyncio
+
+from llmai import AsyncOpenAIClient, OpenAIClientConfig
+from llmai.shared import UserMessage
+
+
+async def main():
+    async with AsyncOpenAIClient(
+        config=OpenAIClientConfig(api_key="<your-openai-api-key>"),
+    ) as client:
+        result = await client.agenerate(
+            model="your-openai-model",
+            messages=[UserMessage(content="Explain async I/O briefly.")],
+        )
+        print(result.content)
+
+
+asyncio.run(main())
+```
+
+Use `get_async_client()` when the provider is selected dynamically:
+
+```python
+from llmai import OpenAIClientConfig, get_async_client
+
+client = get_async_client(
+    config=OpenAIClientConfig(api_key="<your-openai-api-key>"),
+)
+```
+
+Independent calls can run concurrently:
+
+```python
+first, second = await asyncio.gather(
+    client.agenerate(model="your-model", messages=first_messages),
+    client.agenerate(model="your-model", messages=second_messages),
+)
+await client.aclose()
+```
+
+OpenAI-compatible providers, Azure, Anthropic, Google, and Vertex use their
+provider SDK's native async transport. Bedrock uses `asyncio.to_thread` because
+boto3 does not provide an async client. This prevents Bedrock calls from blocking
+the event loop, although an already-running boto3 operation cannot be forcibly
+cancelled.
 
 ## Azure OpenAI
 
@@ -532,6 +589,24 @@ for chunk in client.generate(
 
 `generate(..., stream=True)` yields marker chunks with `type="event"` and `event="start"` / `event="end"` around each `content`, `thinking`, and `tool` section. If a provider returns multiple reasoning blocks, each block gets its own `thinking` start/end pair. The final chunk has `type="completion"` and includes top-level `content`, `thinking`, usage, and accumulated messages.
 
+Async clients expose the same chunks through direct async iteration:
+
+```python
+from llmai import AsyncAnthropicClient, AnthropicClientConfig
+from llmai.shared import UserMessage
+
+async with AsyncAnthropicClient(
+    config=AnthropicClientConfig(api_key="<your-anthropic-api-key>"),
+) as client:
+    async for chunk in client.agenerate(
+        model="your-anthropic-model",
+        messages=[UserMessage(content="Explain recursion briefly.")],
+        stream=True,
+    ):
+        if chunk.type == "content":
+            print(chunk.chunk, end="")
+```
+
 ## Package Layout
 
 - `llmai/openai`: OpenAI adapter
@@ -556,6 +631,7 @@ The shared layer includes the main primitives you will use across providers:
 - `Tool`, `WebSearchTool`, `ToolResponseMessage`
 - `JSONSchemaResponse`, `JSONObjectResponse`, `TextResponse`
 - `ResponseContent`, `ResponseStreamChunk`, `ResponseStreamContentChunk`, `ResponseStreamThinkingChunk`, `ResponseStreamToolChunk`, `ResponseStreamToolCompleteChunk`, `ResponseStreamCompletionChunk`
+- `AsyncBaseClient`, `AsyncResponseResult`
 - `ResponseUsage`
 
 `UserMessage.content` accepts either a plain string or explicit content parts. `SystemMessage.content` is always a plain string.
