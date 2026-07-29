@@ -1,3 +1,4 @@
+import asyncio
 import os
 
 from dev.shared import (
@@ -7,7 +8,7 @@ from dev.shared import (
     WEB_SEARCH_TOOL,
     get_dev_logger,
 )
-from llmai import DeepSeekClient, DeepSeekClientConfig
+from llmai import AsyncDeepSeekClient, DeepSeekClient, DeepSeekClientConfig
 from llmai.shared.messages import UserMessage
 from llmai.shared.reasoning import ReasoningEffort, ReasoningSummary
 from llmai.shared.response_formats import JSONSchemaResponse
@@ -18,6 +19,15 @@ LOGGER = get_dev_logger("deepseek")
 
 def make_client() -> DeepSeekClient:
     return DeepSeekClient(
+        config=DeepSeekClientConfig(
+            api_key=os.getenv("DEEPSEEK_API_KEY"),
+        ),
+        logger=LOGGER,
+    )
+
+
+def make_async_client() -> AsyncDeepSeekClient:
+    return AsyncDeepSeekClient(
         config=DeepSeekClientConfig(
             api_key=os.getenv("DEEPSEEK_API_KEY"),
         ),
@@ -237,15 +247,171 @@ def test_stream_reasoning():
     print("-" * 50)
 
 
+async def _agenerate(label: str, *, model: str = MODEL, **kwargs):
+    async with make_async_client() as client:
+        response = await client.agenerate(model=model, **kwargs)
+    print(label)
+    print(response)
+    print("-" * 50)
+
+
+async def _astream(label: str, *, model: str = MODEL, **kwargs):
+    print(label)
+    async with make_async_client() as client:
+        async for chunk in client.agenerate(model=model, stream=True, **kwargs):
+            print(chunk)
+    print("-" * 50)
+
+
+async def test_agenerate():
+    await _agenerate(
+        "DeepSeek async plain generation",
+        messages=[
+            UserMessage(content="What is presentation?"),
+        ],
+    )
+
+
+async def test_agenerate_structured():
+    await _agenerate(
+        "DeepSeek async structured generation",
+        messages=[
+            UserMessage(content="What is presentation?"),
+        ],
+        response_format=make_response_format(),
+    )
+
+
+async def test_agenerate_structured_strict():
+    await _agenerate(
+        "DeepSeek async strict structured generation",
+        messages=[
+            UserMessage(content="What is presentation?"),
+        ],
+        response_format=make_response_format(strict=True),
+    )
+
+
+async def test_agenerate_tool_calls():
+    await _agenerate(
+        "DeepSeek async tool-call generation",
+        messages=[
+            UserMessage(content="What is presentation?"),
+        ],
+        tools=TOOL_DEFINITIONS,
+        tool_choice=TOOL_CHOICE,
+    )
+
+
+async def test_agenerate_web_search():
+    await _agenerate(
+        "DeepSeek async web-search generation (ignored by provider adapter)",
+        messages=[
+            UserMessage(
+                content="What was a positive news story from today? Cite sources."
+            ),
+        ],
+        tools=[WEB_SEARCH_TOOL],
+    )
+
+
+async def test_astream():
+    await _astream(
+        "DeepSeek async plain stream",
+        messages=[
+            UserMessage(content="What is presentation?"),
+        ],
+    )
+
+
+async def test_astream_structured():
+    await _astream(
+        "DeepSeek async structured stream",
+        messages=[
+            UserMessage(content="What is presentation?"),
+        ],
+        response_format=make_response_format(),
+    )
+
+
+async def test_astream_structured_strict():
+    await _astream(
+        "DeepSeek async strict structured stream",
+        messages=[
+            UserMessage(content="What is presentation?"),
+        ],
+        response_format=make_response_format(strict=True),
+    )
+
+
+async def test_astream_tool_calls():
+    await _astream(
+        "DeepSeek async tool-call stream",
+        messages=[
+            UserMessage(content="What is presentation?"),
+        ],
+        tools=TOOL_DEFINITIONS,
+        tool_choice=TOOL_CHOICE,
+    )
+
+
+async def test_astream_web_search():
+    await _astream(
+        "DeepSeek async web-search stream (ignored by provider adapter)",
+        messages=[
+            UserMessage(
+                content="What was a positive news story from today? Cite sources."
+            ),
+        ],
+        tools=[WEB_SEARCH_TOOL],
+    )
+
+
+async def test_agenerate_reasoning():
+    await _agenerate(
+        "DeepSeek async reasoning generation",
+        messages=[
+            UserMessage(
+                content="Think carefully about whether AI or humans are better at math."
+            ),
+        ],
+        reasoning_effort=make_reasoning_effort(),
+    )
+
+
+async def test_astream_reasoning():
+    await _astream(
+        "DeepSeek async reasoning stream",
+        messages=[
+            UserMessage(
+                content="Think carefully about whether AI or humans are better at math."
+            ),
+        ],
+        reasoning_effort=make_reasoning_effort(),
+    )
+
+
 # test_generate()
+# asyncio.run(test_agenerate())
 # test_generate_structured()
+# asyncio.run(test_agenerate_structured())
 # test_generate_structured_strict()
+# asyncio.run(test_agenerate_structured_strict())
 # test_generate_tool_calls()
+# asyncio.run(test_agenerate_tool_calls())
 # test_generate_web_search()
+# asyncio.run(test_agenerate_web_search())
 # test_stream()
+# asyncio.run(test_astream())
 # test_stream_structured()
+# asyncio.run(test_astream_structured())
 # test_stream_structured_strict()
+# asyncio.run(test_astream_structured_strict())
 # test_stream_tool_calls()
+# asyncio.run(test_astream_tool_calls())
 # test_stream_web_search()
+# asyncio.run(test_astream_web_search())
 # test_generate_reasoning()
+# asyncio.run(test_agenerate_reasoning())
 # test_stream_reasoning()
+# asyncio.run(test_astream_reasoning())
