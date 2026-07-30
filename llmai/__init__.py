@@ -1,3 +1,4 @@
+from llmai.anthropic import AnthropicClient
 from llmai.async_clients import (
     AsyncAnthropicClient,
     AsyncAzureOpenAIClient,
@@ -14,7 +15,6 @@ from llmai.async_clients import (
     AsyncTogetherAIClient,
     AsyncVertexAIClient,
 )
-from llmai.anthropic import AnthropicClient
 from llmai.azure import AzureOpenAIClient
 from llmai.bedrock import BedrockClient
 from llmai.cerebras import CerebrasClient
@@ -23,25 +23,35 @@ from llmai.client import LLMProvider, get_async_client, get_client
 from llmai.deepseek import DeepSeekClient
 from llmai.fireworks import FireworksClient
 from llmai.google import GoogleClient
-from llmai.lmstudio import LMStudioClient
 from llmai.litellm import LiteLLMClient
+from llmai.lmstudio import LMStudioClient
+from llmai.models import (
+    DEFAULT_CONTEXT_WINDOW,
+    AmbiguousModelError,
+    ModelLookupError,
+    ModelNotFoundError,
+    get_context_window,
+    get_model_metadata,
+    list_models,
+    load_model_data,
+    query_models,
+    refresh_model_data,
+)
 from llmai.openai import OpenAIApiType, OpenAIClient
 from llmai.openrouter import OpenRouterClient
-from llmai.togetherai import TogetherAIClient
-from llmai.vertex import VertexAIClient
 from llmai.shared import (
     AnthropicClientConfig,
     AzureOpenAIClientConfig,
     BedrockClientConfig,
     CerebrasClientConfig,
     ChatGPTClientConfig,
-    HostedToolType,
-    LLMTool,
     DeepSeekClientConfig,
     FireworksClientConfig,
     GoogleClientConfig,
-    LMStudioClientConfig,
+    HostedToolType,
     LiteLLMClientConfig,
+    LLMTool,
+    LMStudioClientConfig,
     OpenAIClientConfig,
     OpenRouterClientConfig,
     ReasoningEffort,
@@ -52,8 +62,14 @@ from llmai.shared import (
     VertexAIClientConfig,
     WebSearchTool,
 )
+from llmai.togetherai import TogetherAIClient
+from llmai.vertex import VertexAIClient
 
 __all__ = [
+    "DEFAULT_CONTEXT_WINDOW",
+    "AmbiguousModelError",
+    "AnthropicClient",
+    "AnthropicClientConfig",
     "AsyncAnthropicClient",
     "AsyncAzureOpenAIClient",
     "AsyncBedrockClient",
@@ -62,14 +78,12 @@ __all__ = [
     "AsyncDeepSeekClient",
     "AsyncFireworksClient",
     "AsyncGoogleClient",
-    "AsyncLiteLLMClient",
     "AsyncLMStudioClient",
+    "AsyncLiteLLMClient",
     "AsyncOpenAIClient",
     "AsyncOpenRouterClient",
     "AsyncTogetherAIClient",
     "AsyncVertexAIClient",
-    "AnthropicClient",
-    "AnthropicClientConfig",
     "AzureOpenAIClient",
     "AzureOpenAIClientConfig",
     "BedrockClient",
@@ -85,12 +99,14 @@ __all__ = [
     "GoogleClient",
     "GoogleClientConfig",
     "HostedToolType",
-    "LLMTool",
     "LLMProvider",
+    "LLMTool",
     "LMStudioClient",
     "LMStudioClientConfig",
     "LiteLLMClient",
     "LiteLLMClientConfig",
+    "ModelLookupError",
+    "ModelNotFoundError",
     "OpenAIApiType",
     "OpenAIClient",
     "OpenAIClientConfig",
@@ -105,9 +121,15 @@ __all__ = [
     "VertexAIClient",
     "VertexAIClientConfig",
     "WebSearchTool",
-    "get_client",
     "get_async_client",
+    "get_client",
+    "get_context_window",
+    "get_model_metadata",
+    "list_models",
+    "load_model_data",
     "main",
+    "query_models",
+    "refresh_model_data",
 ]
 
 

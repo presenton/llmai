@@ -28,6 +28,47 @@ Every provider also has a separate async client with:
 - `await agenerate(..., stream=False)`
 - `async for ... in agenerate(..., stream=True)`
 
+## Local Model Metadata
+
+The complete [`models.dev/api.json`](https://models.dev/api.json) response is
+bundled at `llmai/data/models.json`. It currently contains thousands of model
+records, including context limits, output limits, capabilities, modalities,
+pricing, and release metadata.
+
+```python
+from llmai import (
+    get_context_window,
+    get_model_metadata,
+    query_models,
+    refresh_model_data,
+)
+
+# Provider-qualified references are unambiguous.
+context = get_context_window("openai:gpt-4.1")
+metadata = get_model_metadata("openai:gpt-4.1")
+print(context)
+print(metadata["max_output_tokens"], metadata["modalities"])
+
+# Search names, IDs, references, families, and descriptions.
+reasoning_models = query_models("reasoning", provider="anthropic")
+
+# Re-download, validate, and atomically replace the bundled JSON.
+refresh_model_data()
+```
+
+Each flattened record retains every upstream model field and includes
+`provider_metadata` for the provider-level API, documentation, environment, and
+package information. Bare model IDs and names are accepted when they identify exactly one record.
+When multiple providers expose the same ID, use `provider:model-id`, the
+`provider=` argument, or `query_models()` to inspect every match. Use
+`load_model_data()` when you need the original provider-keyed JSON structure,
+and `list_models()` for flattened records with `context_window` extracted. If
+an upstream record has no valid context limit, `context_window` and
+`get_context_window()` reliably fall back to `4000`. An unknown or ambiguous
+model also returns this fallback from `get_context_window()`; pass
+`default=...` to customize it. `get_model_metadata()` remains strict and raises
+a lookup error when callers need to distinguish missing or ambiguous records.
+
 ## Why This Exists
 
 Provider SDKs differ in how they represent messages, tool calls, structured output, and streaming events. `llmai` smooths those differences out so application code can stay closer to one mental model.
