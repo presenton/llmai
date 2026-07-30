@@ -5,7 +5,9 @@ from dev.shared import (
     SLIDE_SCHEMA,
     TOOL_CHOICE,
     TOOL_DEFINITIONS,
+    arun_tool_loop,
     get_dev_logger,
+    run_tool_loop,
 )
 from llmai import AsyncLMStudioClient, LMStudioClient, LMStudioClientConfig
 from llmai.shared.messages import UserMessage
@@ -172,6 +174,10 @@ def test_generate_tool_calls_completions():
     print("-" * 50)
 
 
+def test_generate_tool_loop_completions():
+    run_tool_loop(make_client(), model=MODEL, label="LM Studio completions")
+
+
 async def test_agenerate_tool_calls_completions():
     async with make_async_client() as client:
         response = await client.agenerate(
@@ -185,6 +191,15 @@ async def test_agenerate_tool_calls_completions():
     print("LM Studio completions async tool-call generation")
     print(response)
     print("-" * 50)
+
+
+async def test_agenerate_tool_loop_completions():
+    async with make_async_client() as client:
+        await arun_tool_loop(
+            client,
+            model=MODEL,
+            label="LM Studio completions async",
+        )
 
 
 def test_generate_reasoning_completions():
@@ -257,6 +272,8 @@ async def test_astream_completions():
 # asyncio.run(test_agenerate_structured_strict_completions())
 # test_generate_tool_calls_completions()
 # asyncio.run(test_agenerate_tool_calls_completions())
+# test_generate_tool_loop_completions()
+# asyncio.run(test_agenerate_tool_loop_completions())
 test_generate_reasoning_completions()
 # asyncio.run(test_agenerate_reasoning_completions())
 # test_stream_completions()

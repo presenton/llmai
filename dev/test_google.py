@@ -6,7 +6,9 @@ from dev.shared import (
     TOOL_CHOICE,
     TOOL_DEFINITIONS,
     WEB_SEARCH_TOOL,
+    arun_tool_loop,
     get_dev_logger,
+    run_tool_loop,
 )
 from llmai import AsyncGoogleClient
 from llmai.google import GoogleClient, GoogleClientConfig
@@ -119,6 +121,10 @@ def test_generate_tool_calls():
     print("Google tool-call generation")
     print(response)
     print("-" * 50)
+
+
+def test_generate_tool_loop():
+    run_tool_loop(make_client(), model=MODEL, label="Google")
 
 
 def test_generate_web_search():
@@ -311,6 +317,11 @@ async def test_agenerate_tool_calls():
     )
 
 
+async def test_agenerate_tool_loop():
+    async with make_async_client() as client:
+        await arun_tool_loop(client, model=MODEL, label="Google async")
+
+
 async def test_agenerate_web_search():
     await _agenerate(
         "Google async web-search generation",
@@ -407,6 +418,8 @@ async def test_astream_reasoning():
 # asyncio.run(test_agenerate_structured_strict())
 # test_generate_tool_calls()
 # asyncio.run(test_agenerate_tool_calls())
+# test_generate_tool_loop()
+# asyncio.run(test_agenerate_tool_loop())
 # test_generate_web_search()
 # asyncio.run(test_agenerate_web_search())
 # test_stream()
@@ -419,7 +432,7 @@ async def test_astream_reasoning():
 # asyncio.run(test_astream_tool_calls())
 # test_stream_web_search()
 # asyncio.run(test_astream_web_search())
-test_generate_reasoning()
+# test_generate_reasoning()
 # asyncio.run(test_agenerate_reasoning())
 # test_stream_reasoning()
 # asyncio.run(test_astream_reasoning())

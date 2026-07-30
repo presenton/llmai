@@ -6,7 +6,9 @@ from dev.shared import (
     TOOL_CHOICE,
     TOOL_DEFINITIONS,
     WEB_SEARCH_TOOL,
+    arun_tool_loop,
     get_dev_logger,
+    run_tool_loop,
 )
 from llmai import AsyncVertexAIClient
 from llmai.shared.messages import UserMessage
@@ -142,6 +144,10 @@ def test_generate_tool_calls():
     print("Vertex tool-call generation")
     print(response)
     print("-" * 50)
+
+
+def test_generate_tool_loop():
+    run_tool_loop(make_client(), model=MODEL, label="Vertex")
 
 
 def test_generate_web_search():
@@ -330,6 +336,11 @@ async def test_agenerate_tool_calls():
     )
 
 
+async def test_agenerate_tool_loop():
+    async with make_async_client() as client:
+        await arun_tool_loop(client, model=MODEL, label="Vertex async")
+
+
 async def test_agenerate_web_search():
     await _agenerate(
         "Vertex async web-search generation",
@@ -426,6 +437,8 @@ test_generate_structured()
 # asyncio.run(test_agenerate_structured_strict())
 # test_generate_tool_calls()
 # asyncio.run(test_agenerate_tool_calls())
+# test_generate_tool_loop()
+# asyncio.run(test_agenerate_tool_loop())
 # test_generate_web_search()
 # asyncio.run(test_agenerate_web_search())
 # test_stream()

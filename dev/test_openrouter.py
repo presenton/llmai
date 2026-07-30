@@ -6,7 +6,9 @@ from dev.shared import (
     TOOL_CHOICE,
     TOOL_DEFINITIONS,
     WEB_SEARCH_TOOL,
+    arun_tool_loop,
     get_dev_logger,
+    run_tool_loop,
 )
 from llmai import AsyncOpenRouterClient, OpenRouterClient, OpenRouterClientConfig
 from llmai.shared.messages import UserMessage
@@ -108,6 +110,10 @@ def test_generate_tool_calls():
     print("OpenRouter tool-call generation")
     print(response)
     print("-" * 50)
+
+
+def test_generate_tool_loop():
+    run_tool_loop(make_client(), model=MODEL, label="OpenRouter")
 
 
 def test_generate_web_search():
@@ -215,6 +221,11 @@ async def test_agenerate_tool_calls():
     )
 
 
+async def test_agenerate_tool_loop():
+    async with make_async_client() as client:
+        await arun_tool_loop(client, model=MODEL, label="OpenRouter async")
+
+
 async def test_agenerate_web_search():
     await _agenerate(
         "OpenRouter async web-search generation (ignored by provider adapter)",
@@ -255,6 +266,8 @@ async def test_astream_tool_calls():
 # asyncio.run(test_agenerate_structured_strict())
 # test_generate_tool_calls()
 # asyncio.run(test_agenerate_tool_calls())
+# test_generate_tool_loop()
+# asyncio.run(test_agenerate_tool_loop())
 # test_generate_web_search()
 # asyncio.run(test_agenerate_web_search())
 # test_stream()
