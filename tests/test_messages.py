@@ -5,6 +5,7 @@ from pydantic import ValidationError
 from llmai.shared import (
     AssistantMessage,
     AssistantReasoningItem,
+    AssistantToolCall,
     ImageContentPart,
     ReasoningEffort,
     ReasoningEffortValue,
@@ -19,6 +20,24 @@ from llmai.shared import (
 
 
 class AssistantMessageTests(unittest.TestCase):
+    def test_tool_call_thought_signature_round_trips_through_json(self):
+        message = AssistantMessage(
+            tool_calls=[
+                AssistantToolCall(
+                    id="call_1",
+                    name="search_fonts",
+                    thought_signature=b"\x00\xffsignature",
+                )
+            ]
+        )
+
+        restored = AssistantMessage.model_validate_json(message.model_dump_json())
+
+        self.assertEqual(
+            restored.tool_calls[0].thought_signature,
+            b"\x00\xffsignature",
+        )
+
     def test_reasoning_effort_supports_effort_tokens_and_summary(self):
         reasoning = ReasoningEffort(
             effort=ReasoningEffortValue.HIGH,

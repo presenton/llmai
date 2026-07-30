@@ -5046,6 +5046,109 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(completion_chunk.tool_calls[0].id, tool_chunk.id)
         self.assertEqual(completion_chunk.messages[-1].tool_calls[0].id, tool_chunk.id)
 
+    def test_google_round_trips_function_call_thought_signature(self):
+        signature = b"\x00\xffgemini-signature"
+        client = GoogleClient(config=GoogleClientConfig(api_key="test"))
+        assistant_message = client._content_to_assistant_message(
+            SimpleNamespace(
+                parts=[
+                    SimpleNamespace(
+                        text=None,
+                        inline_data=None,
+                        file_data=None,
+                        thought_signature=signature,
+                        function_call=SimpleNamespace(
+                            id="call_1",
+                            name="search_fonts",
+                            args={"query": "Inter"},
+                        ),
+                    )
+                ]
+            )
+        )
+
+        messages = client._messages_to_google_messages([assistant_message])
+
+        self.assertEqual(
+            assistant_message.tool_calls[0].thought_signature,
+            signature,
+        )
+        self.assertEqual(messages[0].parts[0].thought_signature, signature)
+        self.assertEqual(
+            messages[0].parts[0].function_call.name,
+            "search_fonts",
+        )
+
+    def test_google_stream_preserves_function_call_thought_signature(self):
+        signature = b"streamed-gemini-signature"
+        function_call = SimpleNamespace(
+            id="call_1",
+            name="search_fonts",
+            args={"query": "Inter"},
+        )
+        fake_models = FakeGoogleModels(
+            stream_response=iter(
+                [
+                    SimpleNamespace(
+                        candidates=[
+                            SimpleNamespace(
+                                content=SimpleNamespace(
+                                    parts=[
+                                        SimpleNamespace(
+                                            text=None,
+                                            inline_data=None,
+                                            file_data=None,
+                                            thought_signature=signature,
+                                            function_call=function_call,
+                                        )
+                                    ]
+                                )
+                            )
+                        ]
+                    ),
+                    SimpleNamespace(
+                        candidates=[
+                            SimpleNamespace(
+                                content=SimpleNamespace(
+                                    parts=[
+                                        SimpleNamespace(
+                                            text=None,
+                                            inline_data=None,
+                                            file_data=None,
+                                            thought_signature=None,
+                                            function_call=function_call,
+                                        )
+                                    ]
+                                )
+                            )
+                        ]
+                    ),
+                ]
+            )
+        )
+        client = GoogleClient(config=GoogleClientConfig(api_key="test"))
+        client._client = SimpleNamespace(models=fake_models)
+
+        chunks = list(
+            client.generate(
+                model="gemini-test",
+                messages=[UserMessage(content=text_parts("Choose a font"))],
+                tools=[make_tool("search_fonts")],
+                stream=True,
+            )
+        )
+        completion = stream_payload_chunks(chunks)[-1]
+
+        self.assertEqual(
+            completion.tool_calls[0].thought_signature,
+            signature,
+        )
+        replayed = client._messages_to_google_messages(completion.messages)
+        self.assertEqual(
+            replayed[-1].parts[0].thought_signature,
+            signature,
+        )
+
     def test_google_serializes_user_images(self):
         client = GoogleClient(config=GoogleClientConfig(api_key="test"))
 

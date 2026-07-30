@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import List, Literal, Sequence, TypeAlias
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class TextContentPart(BaseModel):
@@ -89,9 +89,15 @@ class SystemMessage(Message):
 
 
 class AssistantToolCall(BaseModel):
+    model_config = ConfigDict(
+        ser_json_bytes="base64",
+        val_json_bytes="base64",
+    )
+
     id: str
     name: str
     arguments: str | None = None
+    thought_signature: bytes | None = None
 
 
 class AssistantReasoningItem(BaseModel):
