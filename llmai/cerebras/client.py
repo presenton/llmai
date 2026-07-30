@@ -2,11 +2,15 @@ from __future__ import annotations
 
 from logging import Logger
 
+import httpx
 from openai.types.chat import ChatCompletionFunctionToolParam
 from openai.types.shared_params.function_definition import FunctionDefinition
 
 from llmai.openai.client import OpenAIApiType, OpenAIClient
 from llmai.shared.configs import CerebrasClientConfig, OpenAIClientConfig
+from llmai.shared.logs import LogLevel
+from llmai.shared.model_metadata import metadata_items, metadata_value
+from llmai.shared.models import ModelInfo, ModelTokenLimits
 from llmai.shared.schema import get_schema_as_dict, process_schema
 from llmai.shared.tools import Tool
 
@@ -39,6 +43,7 @@ class CerebrasClient(OpenAIClient):
         config: CerebrasClientConfig,
         logger: Logger | None = None,
     ):
+        self._uses_default_base_url = config.base_url is None
         super().__init__(
             config=OpenAIClientConfig(
                 api_key=config.api_key,
@@ -47,6 +52,60 @@ class CerebrasClient(OpenAIClient):
             ),
             logger=logger,
         )
+
+    def _public_models(self) -> list[object]:
+        response = httpx.get(
+            "https://api.cerebras.ai/public/v1/models",
+            timeout=30.0,
+        )
+        response.raise_for_status()
+        return metadata_items(response.json())
+
+    def get_model_context_window(self, *, model: str) -> ModelTokenLimits:
+        if not self._uses_default_base_url:
+            return super().get_model_context_window(model=model)
+        try:
+            for model_data in self._public_models():
+                if metadata_value(model_data, "id") == model:
+                    return self._model_token_limits(model_data)
+        except Exception as exc:
+            self.log(
+                LogLevel.WARNING,
+                (
+                    f"Cerebras model metadata lookup failed for {model!r}; "
+                    f"using the 4000-token default: {exc}"
+                ),
+            )
+        return ModelTokenLimits()
+
+    def list_models(self) -> list[ModelInfo]:
+        models = super().list_models()
+        if not self._uses_default_base_url:
+            return models
+        try:
+            public = {
+                metadata_value(model, "id"): model
+                for model in self._public_models()
+            }
+            return [
+                model.model_copy(
+                    update={
+                        "token_limits": self._model_token_limits(public[model.id])
+                    }
+                )
+                if model.id in public
+                else model
+                for model in models
+            ]
+        except Exception as exc:
+            self.log(
+                LogLevel.WARNING,
+                (
+                    "Cerebras public model enrichment failed; using default "
+                    f"context windows: {exc}"
+                ),
+            )
+            return models
 
     def _openai_schema(
         self,

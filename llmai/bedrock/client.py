@@ -27,6 +27,8 @@ from llmai.shared.messages import (
     content_has_images,
     normalize_content_parts,
 )
+from llmai.shared.model_metadata import metadata_items, metadata_value
+from llmai.shared.models import ModelInfo, ModelTokenLimits
 from llmai.shared.reasoning import ReasoningEffort
 from llmai.shared.response_formats import (
     JSONSchemaResponse,
@@ -67,6 +69,8 @@ class _StaticBearerTokenProvider:
 
 
 class BedrockClient(BaseClient):
+    PROVIDER_NAME = "bedrock"
+    PROVIDER_LABEL = "Amazon Bedrock"
     STRUCTURED_OUTPUT_SUPPORTED_SCHEMA_FIELDS = [
         "$defs",
         "$ref",
@@ -128,8 +132,41 @@ class BedrockClient(BaseClient):
 
             session = boto3.Session(**session_kwargs)
             self._client = session.client("bedrock-runtime", region_name=config.region)
+            self._model_client = session.client("bedrock", region_name=config.region)
         except Exception as exc:
             raise_llm_error(exc, provider="bedrock")
+
+    def get_model_context_window(self, *, model: str) -> ModelTokenLimits:
+        del model
+        return ModelTokenLimits()
+
+    def list_models(self) -> list[ModelInfo]:
+        try:
+            response = self._model_client.list_foundation_models()
+            results = []
+            for model in metadata_items(
+                response,
+                fields=("modelSummaries", "model_summaries"),
+            ):
+                model_id = metadata_value(model, "modelId", "model_id")
+                if not isinstance(model_id, str) or not model_id:
+                    continue
+                display_name = metadata_value(model, "modelName", "model_name")
+                results.append(
+                    ModelInfo(
+                        id=model_id,
+                        provider=self.PROVIDER_NAME,
+                        display_name=(
+                            display_name
+                            if isinstance(display_name, str)
+                            else None
+                        ),
+                        token_limits=ModelTokenLimits(),
+                    )
+                )
+            return results
+        except Exception as exc:
+            raise_llm_error(exc, provider=self.PROVIDER_NAME)
 
     def _parse_tool_arguments(self, arguments: str | None) -> dict:
         if not arguments:

@@ -21,6 +21,7 @@ from llmai.shared.base import BaseClient
 from llmai.shared.configs import AnthropicClientConfig
 from llmai.shared.errors import raise_llm_error
 from llmai.shared.logs import LogLevel
+from llmai.shared.model_metadata import all_metadata_items, metadata_value
 from llmai.shared.messages import (
     AssistantMessage,
     AssistantToolCall,
@@ -32,6 +33,11 @@ from llmai.shared.messages import (
     collapse_thinking_blocks,
     content_from_text,
     normalize_content_parts,
+)
+from llmai.shared.models import (
+    ModelInfo,
+    ModelTokenLimits,
+    model_token_limits,
 )
 from llmai.shared.reasoning import ReasoningEffort
 from llmai.shared.response_formats import (
@@ -63,6 +69,8 @@ from llmai.shared.tools import (
 
 
 class AnthropicClient(BaseClient):
+    PROVIDER_NAME = "anthropic"
+    PROVIDER_LABEL = "Anthropic"
     STRICT_SUPPORTED_STRING_FORMATS = [
         "date-time",
         "time",
@@ -105,6 +113,52 @@ class AnthropicClient(BaseClient):
             )
         except Exception as exc:
             raise_llm_error(exc, provider="anthropic")
+
+    def _model_token_limits(self, model: object) -> ModelTokenLimits:
+        return model_token_limits(
+            max_input_tokens=metadata_value(model, "max_input_tokens"),
+            max_output_tokens=metadata_value(model, "max_tokens"),
+        )
+
+    def get_model_context_window(self, *, model: str) -> ModelTokenLimits:
+        try:
+            return self._model_token_limits(
+                self._client.models.retrieve(model_id=model)
+            )
+        except Exception as exc:
+            self.log(
+                LogLevel.WARNING,
+                (
+                    f"Anthropic model metadata lookup failed for {model!r}; "
+                    f"using the 4000-token default: {exc}"
+                ),
+            )
+            return ModelTokenLimits()
+
+    def list_models(self) -> list[ModelInfo]:
+        try:
+            response = self._client.models.list(limit=1000)
+            results = []
+            for model in all_metadata_items(response):
+                model_id = metadata_value(model, "id")
+                if not isinstance(model_id, str) or not model_id:
+                    continue
+                display_name = metadata_value(model, "display_name")
+                results.append(
+                    ModelInfo(
+                        id=model_id,
+                        provider=self.PROVIDER_NAME,
+                        display_name=(
+                            display_name
+                            if isinstance(display_name, str)
+                            else None
+                        ),
+                        token_limits=self._model_token_limits(model),
+                    )
+                )
+            return results
+        except Exception as exc:
+            raise_llm_error(exc, provider=self.PROVIDER_NAME)
 
     def _get_system_prompt(self, messages: list[Message]) -> str | Omit:
         for message in messages:

@@ -11,6 +11,7 @@ from uuid import uuid4
 
 from llmai.shared.logs import LogLevel
 from llmai.shared.messages import Message
+from llmai.shared.models import ModelInfo, ModelTokenLimits
 from llmai.shared.reasoning import ReasoningEffort
 from llmai.shared.response_formats import ResponseFormat
 from llmai.shared.responses import (
@@ -117,6 +118,15 @@ class BaseClient(ABC):
             chunk_type=current_chunk_type,
             event="end",
             tool=current_tool if current_chunk_type == "tool" else None,
+        )
+
+    def get_model_context_window(self, *, model: str) -> ModelTokenLimits:
+        del model
+        return ModelTokenLimits()
+
+    def list_models(self) -> list[ModelInfo]:
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement model listing"
         )
 
     @abstractmethod
@@ -248,6 +258,23 @@ class AsyncBaseClient:
         if stream:
             return self._agenerate_stream(**kwargs)
         return self._agenerate_once(**kwargs)
+
+    async def aget_model_context_window(
+        self,
+        *,
+        model: str,
+    ) -> ModelTokenLimits:
+        self._ensure_open()
+        return await self._run_in_parser_thread(
+            self._sync_client.get_model_context_window,
+            model=model,
+        )
+
+    async def alist_models(self) -> list[ModelInfo]:
+        self._ensure_open()
+        return await self._run_in_parser_thread(
+            self._sync_client.list_models,
+        )
 
     async def _agenerate_once(self, **kwargs: Any) -> ResponseContent:
         result = await self._run_in_parser_thread(

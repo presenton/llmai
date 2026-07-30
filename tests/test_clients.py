@@ -5507,7 +5507,10 @@ class ClientBehaviorTests(unittest.TestCase):
         )
         self.assertEqual(
             sessions[0].client_calls,
-            [("bedrock-runtime", {"region_name": "us-east-1"})],
+            [
+                ("bedrock-runtime", {"region_name": "us-east-1"}),
+                ("bedrock", {"region_name": "us-east-1"}),
+            ],
         )
 
     def test_bedrock_init_uses_unified_configuration_errors(self):

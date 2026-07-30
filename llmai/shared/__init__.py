@@ -49,6 +49,12 @@ from llmai.shared.messages import (
     flatten_thinking_content,
     normalize_content_parts,
 )
+from llmai.shared.models import (
+    DEFAULT_MODEL_CONTEXT_WINDOW,
+    ModelInfo,
+    ModelTokenLimits,
+    ModelTokenLimitsSource,
+)
 from llmai.shared.providers import LLMProvider
 from llmai.shared.reasoning import (
     ReasoningEffort,
@@ -110,6 +116,7 @@ __all__ = [
     "ClientConfig",
     "ContentPart",
     "DeepSeekClientConfig",
+    "DEFAULT_MODEL_CONTEXT_WINDOW",
     "FireworksClientConfig",
     "GoogleClientConfig",
     "ImageContentPart",
@@ -125,6 +132,9 @@ __all__ = [
     "LogLevel",
     "Message",
     "MessageContent",
+    "ModelInfo",
+    "ModelTokenLimits",
+    "ModelTokenLimitsSource",
     "JSONObjectResponse",
     "LLMTool",
     "OpenAIClientConfig",

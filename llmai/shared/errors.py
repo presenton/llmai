@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import NoReturn
 
 import anthropic
+import httpx
 import openai
 from botocore import exceptions as botocore_exceptions
 from google.genai import errors as google_errors
@@ -181,6 +182,46 @@ def normalize_llm_error(
             cause=error,
         )
 
+    if isinstance(error, httpx.TimeoutException):
+        return LLMConnectionError(
+            504,
+            _error_message(error, default="Request timed out."),
+            provider=provider,
+            cause=error,
+        )
+
+    if isinstance(error, httpx.HTTPStatusError):
+        status_code = error.response.status_code
+        message = _httpx_error_message(error)
+        if status_code in (401, 403):
+            return LLMAuthenticationError(
+                status_code,
+                message,
+                provider=provider,
+                cause=error,
+            )
+        if status_code == 429:
+            return LLMRateLimitError(
+                status_code,
+                message,
+                provider=provider,
+                cause=error,
+            )
+        return LLMError(
+            status_code,
+            message,
+            provider=provider,
+            cause=error,
+        )
+
+    if isinstance(error, httpx.RequestError):
+        return LLMConnectionError(
+            503,
+            _error_message(error, default="Connection error."),
+            provider=provider,
+            cause=error,
+        )
+
     if isinstance(error, google_errors.ClientError):
         status_code = _status_code(error, default=400)
         status = getattr(error, "status", None)
@@ -338,3 +379,23 @@ def _error_message(error: Exception, *, default: str = "Request failed.") -> str
 
     text = str(error)
     return text or default
+
+
+def _httpx_error_message(error: httpx.HTTPStatusError) -> str:
+    try:
+        payload = error.response.json()
+    except ValueError:
+        payload = None
+
+    if isinstance(payload, dict):
+        nested = payload.get("error")
+        if isinstance(nested, dict):
+            message = nested.get("message")
+            if isinstance(message, str) and message:
+                return message
+        message = payload.get("message")
+        if isinstance(message, str) and message:
+            return message
+
+    text = error.response.text.strip()
+    return text or _error_message(error)

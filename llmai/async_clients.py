@@ -124,6 +124,15 @@ class _AsyncContextManagerBridge:
         )
 
 
+def _missing_async_resource(*args: Any, **kwargs: Any) -> Any:
+    del args, kwargs
+    raise AttributeError("Provider client does not expose this resource")
+
+
+def _resource_callback(resource: Any, name: str) -> Callable[..., Any]:
+    return getattr(resource, name, _missing_async_resource)
+
+
 class _AsyncAnthropicMessagesBridge:
     def __init__(self, messages: Any):
         self.create = _AsyncCallableBridge(messages.create)
@@ -134,6 +143,7 @@ class _AsyncAnthropicMessagesBridge:
 
 
 def _openai_bridge(client: AsyncOpenAI | AsyncAzureOpenAI) -> Any:
+    models = getattr(client, "models", None)
     return SimpleNamespace(
         chat=SimpleNamespace(
             completions=SimpleNamespace(
@@ -143,24 +153,40 @@ def _openai_bridge(client: AsyncOpenAI | AsyncAzureOpenAI) -> Any:
         responses=SimpleNamespace(
             create=_AsyncCallableBridge(client.responses.create)
         ),
+        models=SimpleNamespace(
+            list=_AsyncCallableBridge(_resource_callback(models, "list")),
+            retrieve=_AsyncCallableBridge(
+                _resource_callback(models, "retrieve")
+            ),
+        ),
     )
 
 
 def _anthropic_bridge(client: AsyncAnthropic) -> Any:
+    models = getattr(client, "models", None)
     return SimpleNamespace(
         messages=_AsyncAnthropicMessagesBridge(client.messages),
+        models=SimpleNamespace(
+            list=_AsyncCallableBridge(_resource_callback(models, "list")),
+            retrieve=_AsyncCallableBridge(
+                _resource_callback(models, "retrieve")
+            ),
+        ),
     )
 
 
 def _google_bridge(client: Any) -> Any:
+    models = client.aio.models
     return SimpleNamespace(
         models=SimpleNamespace(
             generate_content=_AsyncCallableBridge(
-                client.aio.models.generate_content
+                models.generate_content
             ),
             generate_content_stream=_AsyncCallableBridge(
-                client.aio.models.generate_content_stream
+                models.generate_content_stream
             ),
+            get=_AsyncCallableBridge(_resource_callback(models, "get")),
+            list=_AsyncCallableBridge(_resource_callback(models, "list")),
         )
     )
 

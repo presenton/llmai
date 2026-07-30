@@ -38,6 +38,8 @@ from google.genai.types import (
 from llmai.shared.base import BaseClient
 from llmai.shared.configs import GoogleClientConfig
 from llmai.shared.errors import LLMError, configuration_error, raise_llm_error
+from llmai.shared.logs import LogLevel
+from llmai.shared.model_metadata import all_metadata_items, metadata_value
 from llmai.shared.messages import (
     AssistantMessage,
     AssistantToolCall,
@@ -50,6 +52,11 @@ from llmai.shared.messages import (
     collapse_content_parts,
     collapse_thinking_blocks,
     normalize_content_parts,
+)
+from llmai.shared.models import (
+    ModelInfo,
+    ModelTokenLimits,
+    model_token_limits,
 )
 from llmai.shared.reasoning import ReasoningEffort
 from llmai.shared.response_formats import (
@@ -136,6 +143,60 @@ class GoogleClient(BaseClient):
                 provider=self.PROVIDER_NAME,
                 cause=exc,
             )
+        except Exception as exc:
+            raise_llm_error(exc, provider=self.PROVIDER_NAME)
+
+    def _model_token_limits(self, model: object) -> ModelTokenLimits:
+        return model_token_limits(
+            max_input_tokens=metadata_value(model, "input_token_limit"),
+            max_output_tokens=metadata_value(model, "output_token_limit"),
+        )
+
+    def _model_id(self, model: object) -> str | None:
+        model_id = metadata_value(model, "base_model_id", "name")
+        if not isinstance(model_id, str) or not model_id:
+            return None
+        if model_id.startswith("models/"):
+            return model_id.removeprefix("models/")
+        return model_id
+
+    def get_model_context_window(self, *, model: str) -> ModelTokenLimits:
+        try:
+            return self._model_token_limits(
+                self._client.models.get(model=model)
+            )
+        except Exception as exc:
+            self.log(
+                LogLevel.WARNING,
+                (
+                    f"{self.PROVIDER_LABEL} model metadata lookup failed for "
+                    f"{model!r}; using the 4000-token default: {exc}"
+                ),
+            )
+            return ModelTokenLimits()
+
+    def list_models(self) -> list[ModelInfo]:
+        try:
+            response = self._client.models.list()
+            results = []
+            for model in all_metadata_items(response):
+                model_id = self._model_id(model)
+                if model_id is None:
+                    continue
+                display_name = metadata_value(model, "display_name")
+                results.append(
+                    ModelInfo(
+                        id=model_id,
+                        provider=self.PROVIDER_NAME,
+                        display_name=(
+                            display_name
+                            if isinstance(display_name, str)
+                            else None
+                        ),
+                        token_limits=self._model_token_limits(model),
+                    )
+                )
+            return results
         except Exception as exc:
             raise_llm_error(exc, provider=self.PROVIDER_NAME)
 

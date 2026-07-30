@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import base64
+from importlib.metadata import PackageNotFoundError, version
 import json
 from logging import Logger
 from time import perf_counter
 from uuid import uuid4
 
+import httpx
 from openai import Omit, OpenAI
 
 from llmai.shared.base import BaseClient
@@ -25,6 +27,13 @@ from llmai.shared.messages import (
     content_from_text,
     content_has_images,
     normalize_content_parts,
+)
+from llmai.shared.logs import LogLevel
+from llmai.shared.model_metadata import metadata_items, metadata_value
+from llmai.shared.models import (
+    ModelInfo,
+    ModelTokenLimits,
+    model_token_limits,
 )
 from llmai.shared.reasoning import ReasoningEffort
 from llmai.shared.response_formats import (
@@ -58,6 +67,10 @@ from llmai.shared.tools import (
 )
 
 CHATGPT_DEFAULT_INSTRUCTIONS = "Follow the prompt"
+try:
+    LLMAI_CLIENT_VERSION = version("llmai")
+except PackageNotFoundError:
+    LLMAI_CLIENT_VERSION = "0.0.0"
 
 
 class ChatGPTClient(BaseClient):
@@ -81,6 +94,10 @@ class ChatGPTClient(BaseClient):
         }
         if resolved_account_id is not None:
             default_headers["chatgpt-account-id"] = resolved_account_id
+        self._model_headers = {
+            **default_headers,
+            "Authorization": f"Bearer {resolved_access_token}",
+        }
 
         try:
             self._client = OpenAI(
@@ -95,6 +112,70 @@ class ChatGPTClient(BaseClient):
         if self._logger:
             self._logger.info("ChatGPT client created")
             self._logger.info("Base URL: %s", self._base_url)
+
+    def _fetch_models(self) -> list[object]:
+        response = httpx.get(
+            f"{self._base_url.rstrip('/')}/models",
+            headers=self._model_headers,
+            params={"client_version": LLMAI_CLIENT_VERSION},
+            timeout=30.0,
+        )
+        response.raise_for_status()
+        return metadata_items(response.json(), fields=("models", "data"))
+
+    def _model_token_limits(self, model: object) -> ModelTokenLimits:
+        return model_token_limits(
+            context_window=metadata_value(
+                model,
+                "context_window",
+                "max_context_window",
+            ),
+            max_input_tokens=metadata_value(model, "max_input_tokens"),
+            max_output_tokens=metadata_value(
+                model,
+                "max_output_tokens",
+                "max_completion_tokens",
+            ),
+        )
+
+    def get_model_context_window(self, *, model: str) -> ModelTokenLimits:
+        try:
+            for model_data in self._fetch_models():
+                if metadata_value(model_data, "slug", "id") == model:
+                    return self._model_token_limits(model_data)
+        except Exception as exc:
+            self.log(
+                LogLevel.WARNING,
+                (
+                    f"ChatGPT model metadata lookup failed for {model!r}; "
+                    f"using the 4000-token default: {exc}"
+                ),
+            )
+        return ModelTokenLimits()
+
+    def list_models(self) -> list[ModelInfo]:
+        try:
+            results = []
+            for model in self._fetch_models():
+                model_id = metadata_value(model, "slug", "id")
+                if not isinstance(model_id, str) or not model_id:
+                    continue
+                display_name = metadata_value(model, "display_name")
+                results.append(
+                    ModelInfo(
+                        id=model_id,
+                        provider=self.PROVIDER_NAME,
+                        display_name=(
+                            display_name
+                            if isinstance(display_name, str)
+                            else None
+                        ),
+                        token_limits=self._model_token_limits(model),
+                    )
+                )
+            return results
+        except Exception as exc:
+            raise_llm_error(exc, provider=self.PROVIDER_NAME)
 
     def _response_item_id(self, prefix: str = "item") -> str:
         return f"{prefix}_{uuid4().hex}"

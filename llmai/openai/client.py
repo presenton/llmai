@@ -50,6 +50,13 @@ from llmai.shared.messages import (
     content_has_images,
     normalize_content_parts,
 )
+from llmai.shared.logs import LogLevel
+from llmai.shared.model_metadata import all_metadata_items, metadata_value
+from llmai.shared.models import (
+    ModelInfo,
+    ModelTokenLimits,
+    model_token_limits,
+)
 from llmai.shared.reasoning import ReasoningEffort
 from llmai.shared.response_formats import (
     JSONObjectResponse,
@@ -147,6 +154,90 @@ class OpenAIClient(BaseClient):
         if self._logger:
             self._logger.info("%s client created", self.PROVIDER_LABEL)
             self._logger.info("Base URL: %s", config.base_url)
+
+    def _model_token_limits(self, model: object) -> ModelTokenLimits:
+        limits = metadata_value(model, "limits")
+        top_provider = metadata_value(model, "top_provider")
+        context_window = metadata_value(
+            model,
+            "context_length",
+            "context_window",
+            "max_context_length",
+            "max_model_len",
+        )
+        max_input_tokens = metadata_value(model, "max_input_tokens")
+        max_output_tokens = metadata_value(
+            model,
+            "max_output_tokens",
+            "max_completion_tokens",
+        )
+        if limits is not None:
+            context_window = context_window or metadata_value(
+                limits,
+                "max_context_length",
+            )
+            max_output_tokens = max_output_tokens or metadata_value(
+                limits,
+                "max_completion_tokens",
+            )
+        if top_provider is not None:
+            context_window = context_window or metadata_value(
+                top_provider,
+                "context_length",
+            )
+            max_output_tokens = max_output_tokens or metadata_value(
+                top_provider,
+                "max_completion_tokens",
+            )
+
+        return model_token_limits(
+            context_window=context_window,
+            max_input_tokens=max_input_tokens,
+            max_output_tokens=max_output_tokens,
+        )
+
+    def _model_info(self, model: object) -> ModelInfo | None:
+        model_id = metadata_value(model, "id", "name", "model_name")
+        if not isinstance(model_id, str) or not model_id.strip():
+            return None
+
+        display_name = metadata_value(model, "display_name", "displayName")
+        if not isinstance(display_name, str):
+            name = metadata_value(model, "name")
+            display_name = name if isinstance(name, str) and name != model_id else None
+
+        return ModelInfo(
+            id=model_id,
+            provider=self.PROVIDER_NAME,
+            display_name=display_name,
+            token_limits=self._model_token_limits(model),
+        )
+
+    def get_model_context_window(self, *, model: str) -> ModelTokenLimits:
+        try:
+            model_data = self._client.models.retrieve(model)
+            return self._model_token_limits(model_data)
+        except Exception as exc:
+            self.log(
+                LogLevel.WARNING,
+                (
+                    f"{self.PROVIDER_LABEL} model metadata lookup failed for "
+                    f"{model!r}; using the 4000-token default: {exc}"
+                ),
+            )
+            return ModelTokenLimits()
+
+    def list_models(self) -> list[ModelInfo]:
+        try:
+            response = self._client.models.list()
+            results: list[ModelInfo] = []
+            for model in all_metadata_items(response):
+                info = self._model_info(model)
+                if info is not None:
+                    results.append(info)
+            return results
+        except Exception as exc:
+            raise_llm_error(exc, provider=self.PROVIDER_NAME)
 
     def _chat_completion_message_to_assistant_message(
         self,

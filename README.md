@@ -124,6 +124,47 @@ boto3 does not provide an async client. This prevents Bedrock calls from blockin
 the event loop, although an already-running boto3 operation cannot be forcibly
 cancelled.
 
+## Model Discovery and Context Windows
+
+Every provider client exposes the same model discovery methods:
+
+```python
+models = client.list_models()
+limits = client.get_model_context_window(model="your-model")
+
+print(limits.context_window)
+print(limits.max_input_tokens)
+print(limits.max_output_tokens)
+print(limits.source)
+```
+
+`list_models()` returns normalized `ModelInfo` objects containing the model ID,
+provider, optional display name, and `ModelTokenLimits`. Paginated provider APIs
+are exhausted automatically.
+
+Provider metadata is not uniform. When a provider publishes context, input, or
+output limits, `source` is `"provider"`. If the provider omits model limits, the
+model is unknown, or a metadata-only lookup fails, `llmai` returns a conservative
+`context_window` of `4000` with `source="default"`. Separate input and output
+fields remain `None` unless the provider publishes them; `llmai` does not invent
+those values.
+
+The async clients expose equivalent methods:
+
+```python
+models = await client.alist_models()
+limits = await client.aget_model_context_window(model="your-model")
+```
+
+Results are Pydantic models and can be stored as JSON with
+`result.model_dump(mode="json")`. Caching and TTL policy are intentionally left
+to the calling application.
+
+Azure's model endpoint lists base models accessible to the resource, not the
+deployment names used for generation. Amazon Bedrock listing covers foundation
+models returned by `ListFoundationModels`; Bedrock's discovery API does not
+publish their context sizes.
+
 ## Azure OpenAI
 
 ```python

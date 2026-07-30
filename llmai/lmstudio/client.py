@@ -1,9 +1,19 @@
 from __future__ import annotations
 
 from logging import Logger
+from urllib.parse import quote
+
+import httpx
 
 from llmai.openai.client import OpenAIApiType, OpenAIClient
 from llmai.shared.configs import LMStudioClientConfig, OpenAIClientConfig
+from llmai.shared.logs import LogLevel
+from llmai.shared.model_metadata import metadata_items, metadata_value
+from llmai.shared.models import (
+    ModelInfo,
+    ModelTokenLimits,
+    model_token_limits,
+)
 from llmai.shared.messages import (
     AssistantMessage,
     AssistantReasoningItem,
@@ -38,14 +48,75 @@ class LMStudioClient(OpenAIClient):
         config: LMStudioClientConfig,
         logger: Logger | None = None,
     ):
+        api_base_url = self._base_url(config.base_url)
+        self._rest_base_url = api_base_url.removesuffix("/v1")
+        self._lmstudio_api_key = config.api_key or self.DEFAULT_API_KEY
         super().__init__(
             config=OpenAIClientConfig(
-                api_key=config.api_key or self.DEFAULT_API_KEY,
-                base_url=self._base_url(config.base_url),
+                api_key=self._lmstudio_api_key,
+                base_url=api_base_url,
                 api_type=OpenAIApiType.COMPLETIONS,
             ),
             logger=logger,
         )
+
+    def _rest_headers(self) -> dict[str, str]:
+        return {"Authorization": f"Bearer {self._lmstudio_api_key}"}
+
+    def _enhanced_model(self, model: str) -> object:
+        response = httpx.get(
+            (
+                f"{self._rest_base_url}/api/v0/models/"
+                f"{quote(model, safe='')}"
+            ),
+            headers=self._rest_headers(),
+            timeout=30.0,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def _model_token_limits(self, model: object) -> ModelTokenLimits:
+        enhanced_context = metadata_value(model, "max_context_length")
+        if enhanced_context is not None:
+            return model_token_limits(context_window=enhanced_context)
+        return super()._model_token_limits(model)
+
+    def get_model_context_window(self, *, model: str) -> ModelTokenLimits:
+        try:
+            return self._model_token_limits(self._enhanced_model(model))
+        except Exception as exc:
+            self.log(
+                LogLevel.WARNING,
+                (
+                    f"LM Studio model metadata lookup failed for {model!r}; "
+                    f"using the 4000-token default: {exc}"
+                ),
+            )
+            return ModelTokenLimits()
+
+    def list_models(self) -> list[ModelInfo]:
+        try:
+            response = httpx.get(
+                f"{self._rest_base_url}/api/v0/models",
+                headers=self._rest_headers(),
+                timeout=30.0,
+            )
+            response.raise_for_status()
+            results = []
+            for model in metadata_items(response.json()):
+                info = self._model_info(model)
+                if info is not None:
+                    results.append(info)
+            return results
+        except Exception as exc:
+            self.log(
+                LogLevel.WARNING,
+                (
+                    "LM Studio enhanced model listing failed; trying the "
+                    f"OpenAI-compatible endpoint: {exc}"
+                ),
+            )
+            return super().list_models()
 
     def _base_url(self, base_url: str | None) -> str:
         resolved = base_url or self.DEFAULT_BASE_URL
