@@ -283,6 +283,7 @@ class GoogleClient(BaseClient):
         messages: list[Message],
     ) -> list[GoogleContent]:
         contents: list[GoogleContent] = []
+        tool_call_names_by_id: dict[str, str] = {}
 
         for message in messages:
             if isinstance(message, SystemMessage):
@@ -301,10 +302,13 @@ class GoogleClient(BaseClient):
                 parts = self._content_to_google_parts(message.content)
 
                 for tool_call in message.tool_calls:
+                    tool_call_names_by_id[tool_call.id] = tool_call.name
                     function_call_part = GooglePart.from_function_call(
                         name=tool_call.name,
                         args=self._parse_tool_arguments(tool_call.arguments),
                     )
+                    if function_call_part.function_call is not None:
+                        function_call_part.function_call.id = tool_call.id
                     function_call_part.thought_signature = tool_call.thought_signature
                     parts.append(function_call_part)
 
@@ -313,22 +317,23 @@ class GoogleClient(BaseClient):
                 continue
 
             if isinstance(message, ToolResponseMessage):
+                tool_name = tool_call_names_by_id.get(message.id, message.id)
+                function_response_part = GooglePart.from_function_response(
+                    name=tool_name,
+                    response={
+                        "result": "".join(
+                            part.text
+                            for part in normalize_content_parts(message.content)
+                        )
+                    },
+                )
+                if function_response_part.function_response is not None:
+                    function_response_part.function_response.id = message.id
+
                 contents.append(
                     GoogleContent(
                         role="user",
-                        parts=[
-                            GooglePart.from_function_response(
-                                name=message.id,
-                                response={
-                                    "result": "".join(
-                                        part.text
-                                        for part in normalize_content_parts(
-                                            message.content
-                                        )
-                                    )
-                                },
-                            )
-                        ],
+                        parts=[function_response_part],
                     )
                 )
 

@@ -1,7 +1,14 @@
 import asyncio
 import os
 
-from dev.shared import SLIDE_SCHEMA, TOOL_CHOICE, TOOL_DEFINITIONS, get_dev_logger
+from dev.shared import (
+    SLIDE_SCHEMA,
+    TOOL_CHOICE,
+    TOOL_DEFINITIONS,
+    arun_tool_loop,
+    get_dev_logger,
+    run_tool_loop,
+)
 from llmai import AsyncLiteLLMClient
 from llmai.litellm import LiteLLMClient, LiteLLMClientConfig
 from llmai.openai import OpenAIApiType
@@ -273,6 +280,40 @@ async def test_agenerate_tool_calls_responses():
         make_async_responses_client(),
         "LiteLLM responses async tool-call generation",
     )
+
+
+def test_generate_tool_loop_completions():
+    run_tool_loop(
+        make_completions_client(),
+        model=MODEL,
+        label="LiteLLM completions",
+    )
+
+
+def test_generate_tool_loop_responses():
+    run_tool_loop(
+        make_responses_client(),
+        model=MODEL,
+        label="LiteLLM responses",
+    )
+
+
+async def test_agenerate_tool_loop_completions():
+    async with make_async_completions_client() as client:
+        await arun_tool_loop(
+            client,
+            model=MODEL,
+            label="LiteLLM completions async",
+        )
+
+
+async def test_agenerate_tool_loop_responses():
+    async with make_async_responses_client() as client:
+        await arun_tool_loop(
+            client,
+            model=MODEL,
+            label="LiteLLM responses async",
+        )
 
 
 def _stream(client: LiteLLMClient, label: str):
@@ -557,6 +598,10 @@ async def test_astream_reasoning_responses():
 # test_generate_tool_calls_responses()
 # asyncio.run(test_agenerate_tool_calls_completions())
 # asyncio.run(test_agenerate_tool_calls_responses())
+# test_generate_tool_loop_completions()
+# test_generate_tool_loop_responses()
+# asyncio.run(test_agenerate_tool_loop_completions())
+# asyncio.run(test_agenerate_tool_loop_responses())
 # test_stream_completions()
 # test_stream_responses()
 # asyncio.run(test_astream_completions())

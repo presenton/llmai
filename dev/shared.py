@@ -1,6 +1,7 @@
 import logging
 import os
 
+from llmai.shared.messages import AssistantToolCall, ToolResponseMessage, UserMessage
 from llmai.shared.tools import Tool, ToolChoiceMode, WebSearchTool
 
 
@@ -480,3 +481,85 @@ TOOL_CHOICE = {
 }
 
 WEB_SEARCH_TOOL = WebSearchTool()
+
+TOOL_LOOP_PROMPT = (
+    "Pick the single best available tool and call it to answer this: "
+    "What is the current weather in Kathmandu, Nepal? Do not answer from memory."
+)
+TOOL_LOOP_FOLLOW_UP_PROMPT = (
+    "Use the mock tool result above to answer the original question in one concise "
+    "sentence."
+)
+
+TOOL_LOOP_MOCK_RESPONSES = {
+    "get_weather": (
+        "Mock weather result: Kathmandu, Nepal is sunny, 21 C, with calm winds."
+    ),
+    "get_time": "Mock time result: it is 10:15 AM in Kathmandu, Nepal.",
+    "get_timezone": (
+        "Mock timezone result: Kathmandu, Nepal uses Asia/Kathmandu, UTC+05:45."
+    ),
+}
+
+
+def make_mock_tool_response(tool_call: AssistantToolCall) -> ToolResponseMessage:
+    return ToolResponseMessage(
+        id=tool_call.id,
+        content=[
+            TOOL_LOOP_MOCK_RESPONSES.get(
+                tool_call.name,
+                f"Mock response for {tool_call.name}: no live lookup was performed.",
+            )
+        ],
+    )
+
+
+def make_tool_loop_follow_up_messages(response) -> list:
+    if not response.tool_calls:
+        raise AssertionError("Expected the model to call one of the provided tools")
+
+    return [
+        *response.messages,
+        *(make_mock_tool_response(tool_call) for tool_call in response.tool_calls),
+        UserMessage(content=TOOL_LOOP_FOLLOW_UP_PROMPT),
+    ]
+
+
+def run_tool_loop(client, *, model: str, label: str) -> None:
+    initial_response = client.generate(
+        model=model,
+        messages=[UserMessage(content=TOOL_LOOP_PROMPT)],
+        tools=TOOL_DEFINITIONS,
+        tool_choice=TOOL_CHOICE,
+    )
+    print(f"{label} tool-loop selection")
+    print(initial_response)
+    print("-" * 50)
+
+    final_response = client.generate(
+        model=model,
+        messages=make_tool_loop_follow_up_messages(initial_response),
+    )
+    print(f"{label} tool-loop mock follow-up")
+    print(final_response)
+    print("-" * 50)
+
+
+async def arun_tool_loop(client, *, model: str, label: str) -> None:
+    initial_response = await client.agenerate(
+        model=model,
+        messages=[UserMessage(content=TOOL_LOOP_PROMPT)],
+        tools=TOOL_DEFINITIONS,
+        tool_choice=TOOL_CHOICE,
+    )
+    print(f"{label} tool-loop selection")
+    print(initial_response)
+    print("-" * 50)
+
+    final_response = await client.agenerate(
+        model=model,
+        messages=make_tool_loop_follow_up_messages(initial_response),
+    )
+    print(f"{label} tool-loop mock follow-up")
+    print(final_response)
+    print("-" * 50)

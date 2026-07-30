@@ -5189,6 +5189,37 @@ class ClientBehaviorTests(unittest.TestCase):
             {"result": "sunny now"},
         )
 
+    def test_google_serializes_tool_response_with_prior_tool_name_and_id(self):
+        client = GoogleClient(config=GoogleClientConfig(api_key="test"))
+
+        messages = client._messages_to_google_messages(
+            [
+                AssistantMessage(
+                    tool_calls=[
+                        AssistantToolCall(
+                            id="call_1",
+                            name="get_weather",
+                            arguments='{"city":"Kathmandu"}',
+                        )
+                    ],
+                ),
+                ToolResponseMessage(
+                    id="call_1",
+                    content=["sunny now"],
+                ),
+            ]
+        )
+
+        self.assertEqual(messages[0].role, "model")
+        self.assertEqual(messages[0].parts[0].function_call.name, "get_weather")
+        self.assertEqual(messages[0].parts[0].function_call.id, "call_1")
+        self.assertEqual(messages[1].parts[0].function_response.name, "get_weather")
+        self.assertEqual(messages[1].parts[0].function_response.id, "call_1")
+        self.assertEqual(
+            messages[1].parts[0].function_response.response,
+            {"result": "sunny now"},
+        )
+
     def test_google_generate_returns_multimodal_content_and_thinking(self):
         fake_response = SimpleNamespace(
             candidates=[
