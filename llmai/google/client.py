@@ -237,6 +237,11 @@ class GoogleClient(BaseClient):
                         id=self._tool_call_id(function_call.id),
                         name=function_call.name,
                         arguments=json.dumps(function_call.args or {}),
+                        thought_signature=getattr(
+                            each_part,
+                            "thought_signature",
+                            None,
+                        ),
                     )
                 )
 
@@ -296,12 +301,12 @@ class GoogleClient(BaseClient):
                 parts = self._content_to_google_parts(message.content)
 
                 for tool_call in message.tool_calls:
-                    parts.append(
-                        GooglePart.from_function_call(
-                            name=tool_call.name,
-                            args=self._parse_tool_arguments(tool_call.arguments),
-                        )
+                    function_call_part = GooglePart.from_function_call(
+                        name=tool_call.name,
+                        args=self._parse_tool_arguments(tool_call.arguments),
                     )
+                    function_call_part.thought_signature = tool_call.thought_signature
+                    parts.append(function_call_part)
 
                 if parts:
                     contents.append(GoogleContent(role="model", parts=parts))
@@ -754,11 +759,20 @@ class GoogleClient(BaseClient):
                         )
                     )
                     arguments = json.dumps(function_call.args or {})
+                    thought_signature = getattr(
+                        each_part,
+                        "thought_signature",
+                        None,
+                    )
+                    existing_tool_call = tool_calls_by_id.get(tool_id)
+                    if thought_signature is None and existing_tool_call is not None:
+                        thought_signature = existing_tool_call.thought_signature
 
                     tool_calls_by_id[tool_id] = AssistantToolCall(
                         id=tool_id,
                         name=tool_name,
                         arguments=arguments,
+                        thought_signature=thought_signature,
                     )
                     if tool_id not in tool_call_order:
                         tool_call_order.append(tool_id)
