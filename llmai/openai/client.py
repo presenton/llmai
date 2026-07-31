@@ -50,6 +50,7 @@ from llmai.shared.messages import (
     content_has_images,
     normalize_content_parts,
 )
+from llmai.shared.model_listing import model_ids
 from llmai.shared.reasoning import ReasoningEffort
 from llmai.shared.response_formats import (
     JSONObjectResponse,
@@ -147,6 +148,12 @@ class OpenAIClient(BaseClient):
         if self._logger:
             self._logger.info("%s client created", self.PROVIDER_LABEL)
             self._logger.info("Base URL: %s", config.base_url)
+
+    def list_available_models(self) -> list[str]:
+        try:
+            return model_ids(self._client.models.list())
+        except Exception as exc:
+            raise_llm_error(exc, provider=self.PROVIDER_NAME)
 
     def _chat_completion_message_to_assistant_message(
         self,

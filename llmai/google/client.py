@@ -51,6 +51,7 @@ from llmai.shared.messages import (
     collapse_thinking_blocks,
     normalize_content_parts,
 )
+from llmai.shared.model_listing import model_ids
 from llmai.shared.reasoning import ReasoningEffort
 from llmai.shared.response_formats import (
     JSONObjectResponse,
@@ -120,6 +121,14 @@ class GoogleClient(BaseClient):
             api_key=config.api_key,
             http_options=self._http_options(config.base_url),
         )
+
+    def list_available_models(self) -> list[str]:
+        try:
+            return model_ids(
+                self._client.models.list(config={"page_size": 100})
+            )
+        except Exception as exc:
+            raise_llm_error(exc, provider=self.PROVIDER_NAME)
 
     def _http_options(self, base_url: str | None) -> HttpOptions | None:
         if base_url is None:

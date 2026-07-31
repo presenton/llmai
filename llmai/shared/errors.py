@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import NoReturn
 
 import anthropic
+import httpx
 import openai
 from botocore import exceptions as botocore_exceptions
 from google.genai import errors as google_errors
@@ -103,6 +104,75 @@ def normalize_llm_error(
         if provider is not None and error.provider is None:
             error.provider = provider
         return error
+
+    if isinstance(error, httpx.HTTPStatusError):
+        status_code = error.response.status_code
+        message = _httpx_response_error_message(error.response)
+        if status_code in (401, 403):
+            return LLMAuthenticationError(
+                status_code,
+                message,
+                provider=provider,
+                cause=error,
+            )
+        if status_code == 429:
+            return LLMRateLimitError(
+                status_code,
+                message,
+                provider=provider,
+                cause=error,
+            )
+        if status_code in (408, 504):
+            return LLMConnectionError(
+                status_code,
+                message,
+                provider=provider,
+                cause=error,
+            )
+        return LLMError(
+            status_code,
+            message,
+            provider=provider,
+            cause=error,
+        )
+
+    if isinstance(error, httpx.TimeoutException):
+        return LLMConnectionError(
+            504,
+            "Request timed out.",
+            provider=provider,
+            cause=error,
+        )
+
+    if isinstance(
+        error,
+        (
+            httpx.InvalidURL,
+            httpx.LocalProtocolError,
+            httpx.UnsupportedProtocol,
+        ),
+    ):
+        return configuration_error(
+            "The provider URL or request configuration is invalid.",
+            provider=provider,
+            cause=error,
+        )
+
+    if isinstance(error, httpx.RequestError):
+        return LLMConnectionError(
+            503,
+            "Could not connect to the provider.",
+            provider=provider,
+            cause=error,
+        )
+
+    if isinstance(error, httpx.HTTPError):
+        return LLMError(
+            500,
+            _error_message(error),
+            provider=provider,
+            cause=error,
+        )
 
     openai_status_error_types = (
         openai.AuthenticationError,
@@ -332,9 +402,60 @@ def _status_code(error: Exception, *, default: int) -> int:
 
 
 def _error_message(error: Exception, *, default: str = "Request failed.") -> str:
+    body_message = _payload_error_message(getattr(error, "body", None))
+    if body_message:
+        return body_message
+
+    response = getattr(error, "response", None)
+    if isinstance(response, httpx.Response):
+        try:
+            response_message = _payload_error_message(response.json())
+        except ValueError:
+            response_message = None
+        if response_message:
+            return response_message
+
     message = getattr(error, "message", None)
     if isinstance(message, str) and message:
         return message
 
     text = str(error)
     return text or default
+
+
+def _payload_error_message(payload: object) -> str | None:
+    if isinstance(payload, str):
+        return payload.strip() or None
+    if not isinstance(payload, dict):
+        return None
+
+    for key in ("error", "detail"):
+        nested = _payload_error_message(payload.get(key))
+        if nested:
+            return nested
+
+    for key in ("message", "error_description", "msg", "code"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+
+    return None
+
+
+def _httpx_response_error_message(response: httpx.Response) -> str:
+    message: str | None = None
+    try:
+        message = _payload_error_message(response.json())
+    except ValueError:
+        content_type = response.headers.get("content-type", "")
+        if content_type.startswith("text/plain"):
+            text = response.text.strip()
+            if text and "<" not in text:
+                message = text
+
+    if not message:
+        reason = response.reason_phrase.strip()
+        suffix = f" {reason}" if reason else ""
+        message = f"Provider returned HTTP {response.status_code}{suffix}."
+
+    return " ".join(message.split())[:1000]

@@ -2,13 +2,17 @@ from __future__ import annotations
 
 from logging import Logger
 
+import httpx
+
 from llmai.openai.client import OpenAIApiType, OpenAIClient
 from llmai.shared.configs import OpenAIClientConfig, TogetherAIClientConfig
+from llmai.shared.errors import LLMError, raise_llm_error
 from llmai.shared.messages import (
     AssistantMessage,
     AssistantReasoningItem,
     flatten_thinking_content,
 )
+from llmai.shared.model_listing import openai_compatible_model_ids
 
 
 class TogetherAIClient(OpenAIClient):
@@ -22,14 +26,47 @@ class TogetherAIClient(OpenAIClient):
         config: TogetherAIClientConfig,
         logger: Logger | None = None,
     ):
+        self._models_base_url = config.base_url or self.DEFAULT_BASE_URL
+        self._models_api_key = config.api_key
         super().__init__(
             config=OpenAIClientConfig(
                 api_key=config.api_key,
-                base_url=config.base_url or self.DEFAULT_BASE_URL,
+                base_url=self._models_base_url,
                 api_type=OpenAIApiType.COMPLETIONS,
             ),
             logger=logger,
         )
+
+    def list_available_models(self) -> list[str]:
+        """Handle Together's nonstandard top-level-list response."""
+
+        try:
+            with httpx.Client(timeout=30.0) as client:
+                response = client.get(
+                    f"{self._models_base_url.rstrip('/')}/models",
+                    headers={"Authorization": f"Bearer {self._models_api_key}"},
+                )
+                response.raise_for_status()
+                try:
+                    payload = response.json()
+                except ValueError as exc:
+                    raise LLMError(
+                        502,
+                        "Together AI returned an invalid model-list response.",
+                        provider=self.PROVIDER_NAME,
+                        cause=exc,
+                    ) from exc
+
+            models = openai_compatible_model_ids(payload)
+            if models is None:
+                raise LLMError(
+                    502,
+                    "Together AI returned an invalid model-list response.",
+                    provider=self.PROVIDER_NAME,
+                )
+            return models
+        except Exception as exc:
+            raise_llm_error(exc, provider=self.PROVIDER_NAME)
 
     def _chat_completion_message_to_thinking_items(
         self,

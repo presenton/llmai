@@ -69,6 +69,44 @@ model also returns this fallback from `get_context_window()`; pass
 `default=...` to customize it. `get_model_metadata()` remains strict and raises
 a lookup error when callers need to distinguish missing or ambiguous records.
 
+## Live Model Availability
+
+The bundled metadata above describes known models; it does not prove that a
+specific API key, account, or self-hosted endpoint can access them. Use the live
+listing API for credential validation and model pickers:
+
+```python
+import asyncio
+
+from llmai import OpenAIClientConfig, alist_available_models
+
+
+async def main():
+    models = await alist_available_models(
+        config=OpenAIClientConfig(
+            api_key="<your-openai-api-key>",
+        )
+    )
+    print(models)
+
+
+asyncio.run(main())
+```
+
+Synchronous applications can call `list_available_models(config=...)`.
+Configured provider clients also expose `list_available_models()`, and async
+clients expose `await alist_available_models()`. OpenAI, Anthropic, Google,
+DeepSeek, OpenRouter, Cerebras, Fireworks, Together AI, LM Studio, and LiteLLM
+use live provider APIs. An `OpenAIClientConfig` with a custom `base_url` also
+supports OpenAI-compatible services such as Ollama and vLLM.
+
+Failures use the same normalized `LLMAuthenticationError`,
+`LLMRateLimitError`, `LLMConnectionError`, `LLMConfigurationError`, and
+`LLMError` classes as generation calls. Their `status_code`, `message`, and
+`provider` fields are suitable for API-layer translation. Providers without a
+live listing implementation raise `LLMConfigurationError` instead of silently
+falling back to the bundled metadata.
+
 ## Why This Exists
 
 Provider SDKs differ in how they represent messages, tool calls, structured output, and streaming events. `llmai` smooths those differences out so application code can stay closer to one mental model.
