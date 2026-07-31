@@ -1,4 +1,5 @@
 from llmai.anthropic import AnthropicClient
+from llmai.available_models import alist_available_models, list_available_models
 from llmai.async_clients import (
     AsyncAnthropicClient,
     AsyncAzureOpenAIClient,
@@ -121,11 +122,13 @@ __all__ = [
     "VertexAIClient",
     "VertexAIClientConfig",
     "WebSearchTool",
+    "alist_available_models",
     "get_async_client",
     "get_client",
     "get_context_window",
     "get_model_metadata",
     "list_models",
+    "list_available_models",
     "load_model_data",
     "main",
     "query_models",

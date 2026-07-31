@@ -134,7 +134,7 @@ class _AsyncAnthropicMessagesBridge:
 
 
 def _openai_bridge(client: AsyncOpenAI | AsyncAzureOpenAI) -> Any:
-    return SimpleNamespace(
+    bridge = SimpleNamespace(
         chat=SimpleNamespace(
             completions=SimpleNamespace(
                 create=_AsyncCallableBridge(client.chat.completions.create)
@@ -144,16 +144,28 @@ def _openai_bridge(client: AsyncOpenAI | AsyncAzureOpenAI) -> Any:
             create=_AsyncCallableBridge(client.responses.create)
         ),
     )
+    models = getattr(client, "models", None)
+    if models is not None and callable(getattr(models, "list", None)):
+        bridge.models = SimpleNamespace(
+            list=_AsyncCallableBridge(models.list)
+        )
+    return bridge
 
 
 def _anthropic_bridge(client: AsyncAnthropic) -> Any:
-    return SimpleNamespace(
+    bridge = SimpleNamespace(
         messages=_AsyncAnthropicMessagesBridge(client.messages),
     )
+    models = getattr(client, "models", None)
+    if models is not None and callable(getattr(models, "list", None)):
+        bridge.models = SimpleNamespace(
+            list=_AsyncCallableBridge(models.list)
+        )
+    return bridge
 
 
 def _google_bridge(client: Any) -> Any:
-    return SimpleNamespace(
+    bridge = SimpleNamespace(
         models=SimpleNamespace(
             generate_content=_AsyncCallableBridge(
                 client.aio.models.generate_content
@@ -163,6 +175,9 @@ def _google_bridge(client: Any) -> Any:
             ),
         )
     )
+    if callable(getattr(client.aio.models, "list", None)):
+        bridge.models.list = _AsyncCallableBridge(client.aio.models.list)
+    return bridge
 
 
 async def _close_google_client(client: Any) -> None:

@@ -491,12 +491,13 @@ wheels = [
 
 [[package]]
 name = "llmai"
-version = "0.3.3"
+version = "0.3.4"
 source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
     { name = "boto3" },
     { name = "google-genai" },
+    { name = "httpx" },
     { name = "openai" },
 ]
 
@@ -505,6 +506,7 @@ requires-dist = [
     { name = "anthropic", specifier = ">=0.79.0" },
     { name = "boto3", specifier = ">=1.42.89" },
     { name = "google-genai", specifier = ">=1.62.0" },
+    { name = "httpx", specifier = ">=0.28.1" },
     { name = "openai", specifier = ">=2.18.0" },
 ]
 

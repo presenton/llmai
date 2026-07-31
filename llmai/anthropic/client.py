@@ -33,6 +33,7 @@ from llmai.shared.messages import (
     content_from_text,
     normalize_content_parts,
 )
+from llmai.shared.model_listing import model_ids
 from llmai.shared.reasoning import ReasoningEffort
 from llmai.shared.response_formats import (
     ResponseFormat,
@@ -63,6 +64,8 @@ from llmai.shared.tools import (
 
 
 class AnthropicClient(BaseClient):
+    PROVIDER_NAME = "anthropic"
+    PROVIDER_LABEL = "Anthropic"
     STRICT_SUPPORTED_STRING_FORMATS = [
         "date-time",
         "time",
@@ -75,6 +78,7 @@ class AnthropicClient(BaseClient):
         "ipv6",
         "uuid",
     ]
+
     STRICT_SUPPORTED_SCHEMA_FIELDS = [
         "$defs",
         "$ref",
@@ -105,6 +109,12 @@ class AnthropicClient(BaseClient):
             )
         except Exception as exc:
             raise_llm_error(exc, provider="anthropic")
+
+    def list_available_models(self) -> list[str]:
+        try:
+            return model_ids(self._client.models.list(limit=100))
+        except Exception as exc:
+            raise_llm_error(exc, provider=self.PROVIDER_NAME)
 
     def _get_system_prompt(self, messages: list[Message]) -> str | Omit:
         for message in messages:

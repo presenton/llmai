@@ -49,6 +49,8 @@ from llmai.shared.tools import (
 
 
 class DeepSeekClient(OpenAIClient):
+    PROVIDER_NAME = "deepseek"
+    PROVIDER_LABEL = "DeepSeek"
     DEFAULT_BASE_URL = "https://api.deepseek.com"
 
     def __init__(

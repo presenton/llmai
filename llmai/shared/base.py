@@ -20,6 +20,7 @@ from llmai.shared.responses import (
     ResponseStreamChunk,
     ResponseStreamChunkType,
 )
+from llmai.shared.errors import configuration_error
 from llmai.shared.tools import LLMTool, ToolChoice
 
 
@@ -68,6 +69,15 @@ class BaseClient(ABC):
     def _dump_model(self, value: Any) -> dict[str, Any]:
         dumped = self._dump_value(value)
         return dumped if isinstance(dumped, dict) else {}
+
+    def list_available_models(self) -> list[str]:
+        """List models currently available to this configured provider account."""
+
+        provider = getattr(self, "PROVIDER_NAME", self.__class__.__name__)
+        raise configuration_error(
+            f"Live model listing is not supported for provider {provider!r}.",
+            provider=str(provider),
+        )
 
     def _tool_call_id(self, tool_id: str | None = None) -> str:
         if tool_id:
@@ -158,7 +168,11 @@ def run_awaitable_from_worker(awaitable: Awaitable[Any]) -> Any:
     """Run provider async I/O on the caller's event loop from a parser thread."""
 
     loop = _ASYNC_EVENT_LOOP.get()
-    future = asyncio.run_coroutine_threadsafe(awaitable, loop)
+
+    async def await_value() -> Any:
+        return await awaitable
+
+    future = asyncio.run_coroutine_threadsafe(await_value(), loop)
     active_futures = _ACTIVE_PROVIDER_FUTURES.get()
     if active_futures is not None:
         active_futures.append(future)
@@ -257,6 +271,19 @@ class AsyncBaseClient:
         )
         if not isinstance(result, ResponseContent):
             raise TypeError("Non-streaming generation returned a stream")
+        return result
+
+    async def alist_available_models(self) -> list[str]:
+        """Asynchronously list models available to this provider account."""
+
+        self._ensure_open()
+        result = await self._run_in_parser_thread(
+            self._sync_client.list_available_models
+        )
+        if not isinstance(result, list) or not all(
+            isinstance(model, str) for model in result
+        ):
+            raise TypeError("Provider model listing returned an invalid result")
         return result
 
     async def _agenerate_stream(
