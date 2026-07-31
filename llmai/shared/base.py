@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 import asyncio
-from concurrent.futures import Future
+from concurrent.futures import ThreadPoolExecutor
 from collections.abc import AsyncIterator, Awaitable
-from contextvars import ContextVar
+import contextvars
+from functools import partial
+import os
 from logging import Logger
 from typing import Any, Callable, Literal, overload
 from uuid import uuid4
@@ -148,12 +150,10 @@ class BaseClient(ABC):
 
 
 _STREAM_EXHAUSTED = object()
-_ASYNC_EVENT_LOOP: ContextVar[asyncio.AbstractEventLoop] = ContextVar(
-    "llmai_async_event_loop"
-)
-_ACTIVE_PROVIDER_FUTURES: ContextVar[list[Future[Any]] | None] = ContextVar(
-    "llmai_active_provider_futures",
-    default=None,
+_ASYNC_PARSER_EXECUTOR_MAX_WORKERS = max(16, min(64, (os.cpu_count() or 1) * 8))
+_ASYNC_PARSER_EXECUTOR = ThreadPoolExecutor(
+    max_workers=_ASYNC_PARSER_EXECUTOR_MAX_WORKERS,
+    thread_name_prefix="llmai-parser",
 )
 
 
@@ -164,32 +164,8 @@ def _next_stream_event(stream: Any) -> Any:
         return _STREAM_EXHAUSTED
 
 
-def run_awaitable_from_worker(awaitable: Awaitable[Any]) -> Any:
-    """Run provider async I/O on the caller's event loop from a parser thread."""
-
-    loop = _ASYNC_EVENT_LOOP.get()
-
-    async def await_value() -> Any:
-        return await awaitable
-
-    future = asyncio.run_coroutine_threadsafe(await_value(), loop)
-    active_futures = _ACTIVE_PROVIDER_FUTURES.get()
-    if active_futures is not None:
-        active_futures.append(future)
-    try:
-        return future.result()
-    finally:
-        if active_futures is not None and future in active_futures:
-            active_futures.remove(future)
-
-
 class AsyncBaseClient:
-    """Async facade for an llmai provider client.
-
-    Response parsing runs outside the event-loop thread while provider-native
-    async transports perform network I/O on the event loop. This keeps sync and
-    async provider behavior identical while permitting concurrent requests.
-    """
+    """Async fallback facade for an llmai sync provider client."""
 
     def __init__(
         self,
@@ -316,18 +292,14 @@ class AsyncBaseClient:
         *args: Any,
         **kwargs: Any,
     ) -> Any:
-        loop_token = _ASYNC_EVENT_LOOP.set(asyncio.get_running_loop())
-        active_futures: list[Future[Any]] = []
-        futures_token = _ACTIVE_PROVIDER_FUTURES.set(active_futures)
-        try:
-            return await asyncio.to_thread(callback, *args, **kwargs)
-        except asyncio.CancelledError:
-            for future in tuple(active_futures):
-                future.cancel()
-            raise
-        finally:
-            _ACTIVE_PROVIDER_FUTURES.reset(futures_token)
-            _ASYNC_EVENT_LOOP.reset(loop_token)
+        context = contextvars.copy_context()
+        loop = asyncio.get_running_loop()
+        call = partial(callback, *args, **kwargs)
+        return await loop.run_in_executor(
+            _ASYNC_PARSER_EXECUTOR,
+            context.run,
+            call,
+        )
 
     def _ensure_open(self) -> None:
         if self._closed:
@@ -345,7 +317,7 @@ class AsyncBaseClient:
         provider_client = getattr(self._sync_client, "_client", None)
         close = getattr(provider_client, "close", None)
         if callable(close):
-            await asyncio.to_thread(close)
+            await self._run_in_parser_thread(close)
 
     async def __aenter__(self) -> AsyncBaseClient:
         self._ensure_open()
