@@ -539,6 +539,7 @@ def run_tool_loop(client, *, model: str, label: str) -> None:
     final_response = client.generate(
         model=model,
         messages=make_tool_loop_follow_up_messages(initial_response),
+        tools=TOOL_DEFINITIONS,
     )
     print(f"{label} tool-loop mock follow-up")
     print(final_response)
@@ -559,6 +560,7 @@ async def arun_tool_loop(client, *, model: str, label: str) -> None:
     final_response = await client.agenerate(
         model=model,
         messages=make_tool_loop_follow_up_messages(initial_response),
+        tools=TOOL_DEFINITIONS,
     )
     print(f"{label} tool-loop mock follow-up")
     print(final_response)

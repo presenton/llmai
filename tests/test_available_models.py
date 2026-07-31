@@ -177,7 +177,7 @@ class NativeAsyncModelListingTests(unittest.IsolatedAsyncioTestCase):
                 return_value=sync_provider_client,
             ),
             patch(
-                "llmai.async_clients.AsyncOpenAI",
+                "llmai.openai.async_client.AsyncOpenAI",
                 return_value=provider_client,
             ),
         ):
@@ -213,7 +213,7 @@ class NativeAsyncModelListingTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch("llmai.openai.client.OpenAI"),
             patch(
-                "llmai.async_clients.AsyncOpenAI",
+                "llmai.openai.async_client.AsyncOpenAI",
                 return_value=provider_client,
             ),
         ):

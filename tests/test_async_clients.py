@@ -1,12 +1,14 @@
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import threading
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import llmai.client as client_module
-from llmai.async_clients import _anthropic_bridge
 from llmai import (
+    AsyncBedrockClient,
     AsyncOpenAIClient,
     OpenAIClientConfig,
     get_async_client,
@@ -117,6 +119,36 @@ class AsyncClientTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual({first.content, second.content}, {"first", "second"})
 
+    async def test_parser_thread_does_not_use_default_executor(self):
+        loop = asyncio.get_running_loop()
+        default_executor = ThreadPoolExecutor(max_workers=1)
+        loop.set_default_executor(default_executor)
+
+        started = threading.Event()
+        release = threading.Event()
+
+        def block_default_executor():
+            started.set()
+            release.wait(timeout=5)
+
+        blocker = loop.run_in_executor(None, block_default_executor)
+        self.assertTrue(started.wait(timeout=1))
+
+        sync_client = FakeSyncClient()
+        client = AsyncBaseClient(sync_client=sync_client)
+
+        try:
+            result = await asyncio.wait_for(
+                client.agenerate(model="model", messages=[]),
+                timeout=1,
+            )
+        finally:
+            release.set()
+            await blocker
+            default_executor.shutdown(wait=True)
+
+        self.assertEqual(result.content, "model")
+
     async def test_context_manager_closes_once_and_rejects_reuse(self):
         sync_client = FakeSyncClient()
         client = AsyncBaseClient(sync_client=sync_client)
@@ -147,13 +179,9 @@ class AsyncClientTests(unittest.IsolatedAsyncioTestCase):
                 completion_tokens_details=None,
             ),
         )
-        completions = SimpleNamespace(
-            create=lambda **kwargs: fake_response,
-        )
-
         provider_client = SimpleNamespace(
             chat=SimpleNamespace(
-                completions=SimpleNamespace(create=AsyncMock()),
+                completions=SimpleNamespace(create=AsyncMock(return_value=fake_response)),
             ),
             responses=SimpleNamespace(create=AsyncMock()),
             close=AsyncMock(),
@@ -161,16 +189,13 @@ class AsyncClientTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch("llmai.openai.client.OpenAI") as openai_cls,
             patch(
-                "llmai.async_clients.AsyncOpenAI",
+                "llmai.openai.async_client.AsyncOpenAI",
                 return_value=provider_client,
             ),
         ):
             client = AsyncOpenAIClient(
                 config=OpenAIClientConfig(api_key="key"),
             )
-        client._sync_client._client = SimpleNamespace(
-            chat=SimpleNamespace(completions=completions),
-        )
 
         result = await client.agenerate(
             model="gpt-test",
@@ -208,7 +233,7 @@ class AsyncClientTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch("llmai.openai.client.OpenAI"),
             patch(
-                "llmai.async_clients.AsyncOpenAI",
+                "llmai.openai.async_client.AsyncOpenAI",
                 return_value=provider_client,
             ),
         ):
@@ -270,7 +295,7 @@ class AsyncClientTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch("llmai.openai.client.OpenAI"),
             patch(
-                "llmai.async_clients.AsyncOpenAI",
+                "llmai.openai.async_client.AsyncOpenAI",
                 return_value=provider_client,
             ),
         ):
@@ -317,7 +342,7 @@ class AsyncClientTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch("llmai.openai.client.OpenAI"),
             patch(
-                "llmai.async_clients.AsyncOpenAI",
+                "llmai.openai.async_client.AsyncOpenAI",
                 return_value=provider_client,
             ),
         ):
@@ -336,50 +361,150 @@ class AsyncClientTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(cancelled.wait(), timeout=1)
         await client.aclose()
 
-    async def test_anthropic_stream_bridge_preserves_stream_methods(self):
-        exited = asyncio.Event()
+    async def test_async_bedrock_uses_async_http_for_converse(self):
+        captured = {}
+        client = AsyncBedrockClient(
+            config=BedrockClientConfig(region="us-east-1", api_key="bedrock-key"),
+        )
+        await client._http_client.aclose()
 
-        class NativeStream:
-            async def __aiter__(self):
-                yield "event"
+        async def request(method, url, *, headers, content):
+            captured.update(
+                {
+                    "method": method,
+                    "url": url,
+                    "headers": headers,
+                    "content": content,
+                }
+            )
+            return httpx.Response(
+                200,
+                json={
+                    "output": {
+                        "message": {
+                            "role": "assistant",
+                            "content": [{"text": "answer"}],
+                        }
+                    },
+                    "usage": {
+                        "inputTokens": 1,
+                        "outputTokens": 2,
+                        "totalTokens": 3,
+                    },
+                },
+                request=httpx.Request(method, url),
+            )
 
-            async def get_final_message(self):
-                return "final"
+        client._http_client = SimpleNamespace(
+            request=request,
+            aclose=AsyncMock(),
+        )
 
-        class NativeStreamContext:
+        result = await client.agenerate(
+            model="anthropic.claude-test-v1:0",
+            messages=[UserMessage(content="Hello")],
+        )
+        await client.aclose()
+
+        self.assertEqual(result.content[0].text, "answer")
+        self.assertEqual(result.usage.total_tokens, 3)
+        self.assertEqual(captured["method"], "POST")
+        self.assertIn("/converse", captured["url"])
+        self.assertEqual(captured["headers"]["Authorization"], "Bearer bedrock-key")
+
+    async def test_async_bedrock_uses_async_http_for_converse_stream(self):
+        captured = {}
+        stream_closed = asyncio.Event()
+
+        class FakeStreamResponse:
+            status_code = 200
+            headers = {}
+
+            def raise_for_status(self):
+                return None
+
+            async def aiter_bytes(self):
+                if False:
+                    yield b""
+
+            async def aclose(self):
+                stream_closed.set()
+
+        class FakeStreamContext:
             async def __aenter__(self):
-                return NativeStream()
+                return FakeStreamResponse()
 
             async def __aexit__(self, exc_type, exc, traceback):
-                exited.set()
+                return None
 
-        native_messages = SimpleNamespace(
-            create=AsyncMock(),
-            stream=lambda **kwargs: NativeStreamContext(),
+        def stream(method, url, *, headers, content):
+            captured.update(
+                {
+                    "method": method,
+                    "url": url,
+                    "headers": headers,
+                    "content": content,
+                }
+            )
+            return FakeStreamContext()
+
+        client = AsyncBedrockClient(
+            config=BedrockClientConfig(region="us-east-1", api_key="bedrock-key"),
+        )
+        await client._http_client.aclose()
+        client._http_client = SimpleNamespace(
+            stream=stream,
+            aclose=AsyncMock(),
         )
 
-        class SyncParser:
-            def __init__(self):
-                self._client = SimpleNamespace(
-                    messages=native_messages,
-                )
+        chunks = [
+            chunk
+            async for chunk in client.agenerate(
+                model="anthropic.claude-test-v1:0",
+                messages=[UserMessage(content="Hello")],
+                stream=True,
+            )
+        ]
+        await client.aclose()
 
-            def generate(self, **kwargs):
-                with self._client.messages.stream() as stream:
-                    events = list(stream)
-                    final = stream.get_final_message()
-                return ResponseContent(content=[events, final])
+        self.assertEqual(chunks[-1].type, "completion")
+        self.assertEqual(captured["method"], "POST")
+        self.assertIn("/converse-stream", captured["url"])
+        self.assertEqual(captured["headers"]["Authorization"], "Bearer bedrock-key")
+        self.assertTrue(stream_closed.is_set())
 
-        sync_parser = SyncParser()
-        sync_parser._client = _anthropic_bridge(
-            SimpleNamespace(messages=native_messages)
+    async def test_async_bedrock_parses_unwrapped_stream_event_payloads(self):
+        client = AsyncBedrockClient(
+            config=BedrockClientConfig(region="us-east-1", api_key="bedrock-key"),
         )
-        client = AsyncBaseClient(sync_client=sync_parser)
+        output_shape = (
+            client._service_model.operation_model("ConverseStream")
+            .output_shape.members["stream"]
+        )
 
-        result = await client.agenerate(model="claude-test", messages=[])
+        parsed = client._parse_stream_event_response(
+            {
+                "status_code": 200,
+                "headers": {
+                    ":message-type": "event",
+                    ":event-type": "contentBlockDelta",
+                    ":content-type": "application/json",
+                },
+                "body": b'{"contentBlockIndex":0,"delta":{"text":"Hello"}}',
+            },
+            output_shape,
+        )
+        await client.aclose()
 
-        self.assertEqual(result.content, [["event"], "final"])
-        self.assertTrue(exited.is_set())
+        self.assertEqual(
+            parsed,
+            {
+                "contentBlockDelta": {
+                    "delta": {"text": "Hello"},
+                    "contentBlockIndex": 0,
+                }
+            },
+        )
 
     async def test_get_async_client_uses_provider_config(self):
         config = OpenAIClientConfig(api_key="key")
