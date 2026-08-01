@@ -7,7 +7,8 @@ from logging import Logger
 from time import perf_counter
 from typing import Any
 
-from anthropic import AsyncAnthropic, Omit as AnthropicOmit
+from anthropic import AsyncAnthropic
+from anthropic import Omit as AnthropicOmit
 
 from llmai.anthropic.client import AnthropicClient
 from llmai.openai.async_client import create_async_provider_client
@@ -104,6 +105,9 @@ class AsyncAnthropicClient(AsyncBaseClient):
                     tools=anthropic_tools,
                     tool_choice=anthropic_tool_choice,
                     thinking=parser._get_anthropic_thinking_or_omit(reasoning_effort),
+                    output_config=parser._get_anthropic_output_config_or_omit(
+                        reasoning_effort
+                    ),
                     max_tokens=max_tokens or 8000,
                     temperature=temperature or AnthropicOmit(),
                     extra_body=extra_body,
@@ -131,6 +135,9 @@ class AsyncAnthropicClient(AsyncBaseClient):
                     tools=anthropic_tools,
                     tool_choice=anthropic_tool_choice,
                     thinking=parser._get_anthropic_thinking_or_omit(reasoning_effort),
+                    output_config=parser._get_anthropic_output_config_or_omit(
+                        reasoning_effort
+                    ),
                     max_tokens=max_tokens or 8000,
                     temperature=temperature or AnthropicOmit(),
                     extra_body=extra_body,
@@ -139,6 +146,7 @@ class AsyncAnthropicClient(AsyncBaseClient):
 
             text_chunks: list[str] = []
             thinking_blocks: list[str] = []
+            thinking_items = parser._anthropic_reasoning_items(response.content)
             response_schema_content: dict | None = None
             response_schema_tool_name = (
                 get_response_format_name(response_format, default="response")
@@ -172,7 +180,7 @@ class AsyncAnthropicClient(AsyncBaseClient):
 
             assistant_message = AssistantMessage(
                 content=content_from_text("".join(text_chunks) or None),
-                thinking=collapse_thinking_blocks(thinking_blocks),
+                thinking=thinking_items or collapse_thinking_blocks(thinking_blocks),
                 tool_calls=user_tool_calls,
             )
             new_messages = [*messages, assistant_message]
@@ -238,6 +246,7 @@ class AsyncAnthropicClient(AsyncBaseClient):
         active_thinking_block: list[str] | None = None
         start_time = perf_counter()
         usage: ResponseUsage | None = None
+        final_thinking_items = []
 
         try:
             async with AsyncExitStack() as stack:
@@ -250,6 +259,9 @@ class AsyncAnthropicClient(AsyncBaseClient):
                             tools=anthropic_tools,
                             tool_choice=anthropic_tool_choice,
                             thinking=parser._get_anthropic_thinking_or_omit(
+                                reasoning_effort
+                            ),
+                            output_config=parser._get_anthropic_output_config_or_omit(
                                 reasoning_effort
                             ),
                             max_tokens=max_tokens or 8000,
@@ -281,6 +293,9 @@ class AsyncAnthropicClient(AsyncBaseClient):
                             tools=anthropic_tools,
                             tool_choice=anthropic_tool_choice,
                             thinking=parser._get_anthropic_thinking_or_omit(
+                                reasoning_effort
+                            ),
+                            output_config=parser._get_anthropic_output_config_or_omit(
                                 reasoning_effort
                             ),
                             max_tokens=max_tokens or 8000,
@@ -330,7 +345,9 @@ class AsyncAnthropicClient(AsyncBaseClient):
                             yield ResponseStreamThinkingChunk(
                                 chunk=event.delta.thinking,
                             )
-                        elif event.delta.type == "input_json_delta" and active_tool_name:
+                        elif (
+                            event.delta.type == "input_json_delta" and active_tool_name
+                        ):
                             chunk = event.delta.partial_json
                             if active_tool_name == response_schema_tool_name:
                                 continue
@@ -398,13 +415,21 @@ class AsyncAnthropicClient(AsyncBaseClient):
                     usage = parser._response_usage(
                         getattr(final_message, "usage", None)
                     )
+                    final_thinking_items = parser._anthropic_reasoning_items(
+                        list(getattr(final_message, "content", []) or [])
+                    )
 
             assistant_message = AssistantMessage(
                 content=content_from_text("".join(text_chunks) or None),
-                thinking=collapse_thinking_blocks(
+                thinking=final_thinking_items
+                or collapse_thinking_blocks(
                     [
                         *thinking_blocks,
-                        *(["".join(active_thinking_block)] if active_thinking_block else []),
+                        *(
+                            ["".join(active_thinking_block)]
+                            if active_thinking_block
+                            else []
+                        ),
                     ]
                 ),
                 tool_calls=user_tool_calls,

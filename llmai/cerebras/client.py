@@ -44,6 +44,7 @@ class CerebrasClient(OpenAIClient):
                 api_key=config.api_key,
                 base_url=config.base_url or self.DEFAULT_BASE_URL,
                 api_type=OpenAIApiType.COMPLETIONS,
+                generation=config.generation,
             ),
             logger=logger,
         )
@@ -85,3 +86,24 @@ class CerebrasClient(OpenAIClient):
             )
             for tool in tools
         ]
+
+    def _discover_model_capabilities(self, model: str) -> dict[str, object] | None:
+        response = self._client.models.list()
+        for item in getattr(response, "data", response) or []:
+            raw = self._dump_model(item)
+            if str(raw.get("id", "")) != model:
+                continue
+            parameters = set(raw.get("supported_parameters") or [])
+            result: dict[str, object] = {}
+            maximum = raw.get("max_completion_tokens") or raw.get("max_output_tokens")
+            if isinstance(maximum, int):
+                result["max_output_tokens"] = maximum
+            if parameters:
+                result["tool_call"] = bool(
+                    parameters.intersection({"tools", "tool_choice"})
+                )
+                result["reasoning"] = bool(
+                    parameters.intersection({"reasoning", "reasoning_effort"})
+                )
+            return result or None
+        return None

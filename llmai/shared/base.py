@@ -1,34 +1,56 @@
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
-from collections.abc import AsyncIterator, Awaitable
 import contextvars
-from functools import partial
 import os
+from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator, Awaitable, Callable
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
+from functools import partial
 from logging import Logger
-from typing import Any, Callable, Literal, overload
+from time import monotonic
+from typing import Any, Literal, overload
 from uuid import uuid4
 
+from llmai.shared.errors import configuration_error
+from llmai.shared.generation import (
+    GenerationDefaults,
+    GenerationProfile,
+    PreparedGeneration,
+    prepare_generation,
+)
 from llmai.shared.logs import LogLevel
-from llmai.shared.messages import Message
-from llmai.shared.reasoning import ReasoningEffort
+from llmai.shared.messages import AssistantMessage, Message
+from llmai.shared.reasoning import (
+    ReasoningConfig,
+    ReasoningEffort,
+    ReasoningHistoryMode,
+)
 from llmai.shared.response_formats import ResponseFormat
 from llmai.shared.responses import (
-    ResponseResult,
     ResponseContent,
-    ResponseStreamEvent,
+    ResponseResult,
     ResponseStreamChunk,
     ResponseStreamChunkType,
+    ResponseStreamEvent,
 )
-from llmai.shared.errors import configuration_error
 from llmai.shared.tools import LLMTool, ToolChoice
 
 
 class BaseClient(ABC):
-    def __init__(self, *, logger: Logger | None = None):
+    def __init__(
+        self,
+        *,
+        logger: Logger | None = None,
+        generation_defaults: GenerationDefaults | None = None,
+    ):
         self._logger = logger
+        self._generation_defaults = generation_defaults or GenerationDefaults()
+        self._compatibility_cache: dict[tuple[str, str], str] = {}
+        self._capability_discovery_cache: dict[
+            str, tuple[float, dict[str, Any] | None]
+        ] = {}
 
     def log(self, level: LogLevel, message: Any) -> None:
         if not self._logger:
@@ -80,6 +102,172 @@ class BaseClient(ABC):
             f"Live model listing is not supported for provider {provider!r}.",
             provider=str(provider),
         )
+
+    def get_model_capabilities(self, model: str):
+        from llmai.capabilities import get_model_capabilities
+        from llmai.shared.generation import CapabilitySource
+
+        capabilities = get_model_capabilities(
+            model,
+            provider=getattr(self, "PROVIDER_NAME", None),
+            overrides=self._generation_defaults.capability_overrides,
+        )
+        if not self._generation_defaults.discover_capabilities or getattr(
+            self, "_skip_live_discovery", False
+        ):
+            return capabilities
+
+        unknown = any(
+            value.supported is None
+            for value in (
+                capabilities.reasoning,
+                capabilities.tool_call.support,
+                capabilities.max_output_tokens,
+            )
+        )
+        if not (unknown or self._bundled_capabilities_are_stale(capabilities.raw)):
+            return capabilities
+
+        live = self._cached_live_capabilities(model)
+        if not live:
+            return capabilities
+        application = self._generation_defaults.capability_overrides
+        qualified = f"{getattr(self, 'PROVIDER_NAME', '')}:{model}"
+        app_override = application.get(qualified, application.get(model, {}))
+        mapping = {
+            "max_output_tokens": capabilities.max_output_tokens,
+            "reasoning": capabilities.reasoning,
+            "reasoning_levels": capabilities.reasoning_levels,
+            "reasoning_budget": capabilities.reasoning_budget,
+            "reasoning_interleaved": capabilities.reasoning_interleaved,
+            "tool_call": capabilities.tool_call.support,
+            "parallel_tool_calls": capabilities.tool_call.parallel,
+            "streaming_tool_calls": capabilities.tool_call.streaming,
+        }
+        for key, value in live.items():
+            if key in app_override or key not in mapping:
+                continue
+            target = mapping[key]
+            target.value = value
+            target.source = CapabilitySource.LIVE
+            target.fresh = True
+            if isinstance(value, bool):
+                target.status = "supported" if value else "unsupported"
+            elif value is not None:
+                target.status = "supported"
+        return capabilities
+
+    def _bundled_capabilities_are_stale(self, metadata: dict[str, Any]) -> bool:
+        updated = metadata.get("last_updated")
+        if not isinstance(updated, str):
+            return True
+        try:
+            age = (
+                datetime.now(timezone.utc).date()
+                - datetime.fromisoformat(updated).date()
+            )
+        except ValueError:
+            return True
+        return age.days > self._generation_defaults.bundled_metadata_max_age_days
+
+    def _cached_live_capabilities(self, model: str) -> dict[str, Any] | None:
+        cached = self._capability_discovery_cache.get(model)
+        if cached and cached[0] > monotonic():
+            return cached[1]
+        try:
+            result = self._discover_model_capabilities(model)
+        except Exception as exc:
+            result = None
+            self.log(
+                LogLevel.WARNING,
+                {
+                    "code": "capability_discovery_failed",
+                    "provider": getattr(self, "PROVIDER_NAME", None),
+                    "model": model,
+                    "message": str(exc),
+                },
+            )
+        ttl = (
+            self._generation_defaults.discovery_success_ttl_seconds
+            if result is not None
+            else self._generation_defaults.discovery_failure_ttl_seconds
+        )
+        self._capability_discovery_cache[model] = (monotonic() + ttl, result)
+        return result
+
+    def _discover_model_capabilities(self, model: str) -> dict[str, Any] | None:
+        del model
+        return None
+
+    def supports_tool_call(self, model: str) -> bool | None:
+        return self.get_model_capabilities(model).tool_call.support.supported
+
+    def supports_thinking(self, model: str) -> bool | None:
+        return self.get_model_capabilities(model).reasoning.supported
+
+    def get_reasoning_levels(self, model: str) -> list[str]:
+        value = self.get_model_capabilities(model).reasoning_levels.value
+        return list(value) if isinstance(value, list) else []
+
+    def require_tool_call_support(self, model: str) -> None:
+        supported = self.supports_tool_call(model)
+        if supported is False:
+            raise configuration_error(
+                f"Model {model!r} does not support tool calls",
+                provider=getattr(self, "PROVIDER_NAME", None),
+            )
+        if supported is None:
+            raise configuration_error(
+                f"Tool-call support for model {model!r} is unknown",
+                provider=getattr(self, "PROVIDER_NAME", None),
+            )
+
+    def prepare_generation(
+        self,
+        *,
+        model: str,
+        profile: GenerationProfile | str | None = None,
+        max_tokens: int | None = None,
+        max_output_tokens: int | None = None,
+        reasoning: ReasoningConfig | None = None,
+        reasoning_effort: ReasoningEffort | None = None,
+        tools_requested: bool = False,
+    ) -> PreparedGeneration:
+        prepared = prepare_generation(
+            model=model,
+            provider=getattr(self, "PROVIDER_NAME", None),
+            defaults=self._generation_defaults,
+            profile=profile,
+            max_tokens=max_tokens,
+            max_output_tokens=max_output_tokens,
+            reasoning=reasoning,
+            reasoning_effort=reasoning_effort,
+            tools_requested=tools_requested,
+            capabilities=self.get_model_capabilities(model),
+        )
+        for warning in prepared.warnings:
+            self.log(LogLevel.WARNING, warning.model_dump())
+        return prepared
+
+    def _prepare_reasoning_history(
+        self,
+        messages: list[Message],
+        mode: ReasoningHistoryMode,
+    ) -> list[Message]:
+        if mode != ReasoningHistoryMode.DISABLED:
+            return messages
+
+        prepared: list[Message] = []
+        for message in messages:
+            if not isinstance(message, AssistantMessage):
+                prepared.append(message)
+                continue
+            assistant = message.model_copy(deep=True)
+            assistant.thinking = None
+            for tool_call in assistant.tool_calls:
+                tool_call.thought_signature = None
+            prepared.append(assistant)
+        return prepared
 
     def _tool_call_id(self, tool_id: str | None = None) -> str:
         if tool_id:
@@ -142,6 +330,9 @@ class BaseClient(ABC):
         tool_choice: ToolChoice | None = None,
         response_format: ResponseFormat | None = None,
         max_tokens: int | None = None,
+        max_output_tokens: int | None = None,
+        profile: GenerationProfile | str | None = None,
+        reasoning: ReasoningConfig | None = None,
         reasoning_effort: ReasoningEffort | None = None,
         extra_body: dict | None = None,
         stream: bool = False,
@@ -174,8 +365,24 @@ class AsyncBaseClient:
         async_close: Callable[[], Awaitable[None]] | None = None,
     ):
         self._sync_client = sync_client
+        self._sync_client._skip_live_discovery = True
         self._async_close = async_close
         self._closed = False
+
+    def get_model_capabilities(self, model: str):
+        return self._sync_client.get_model_capabilities(model)
+
+    def supports_tool_call(self, model: str) -> bool | None:
+        return self._sync_client.supports_tool_call(model)
+
+    def supports_thinking(self, model: str) -> bool | None:
+        return self._sync_client.supports_thinking(model)
+
+    def get_reasoning_levels(self, model: str) -> list[str]:
+        return self._sync_client.get_reasoning_levels(model)
+
+    def require_tool_call_support(self, model: str) -> None:
+        self._sync_client.require_tool_call_support(model)
 
     @overload
     def agenerate(
@@ -188,6 +395,9 @@ class AsyncBaseClient:
         tool_choice: ToolChoice | None = None,
         response_format: ResponseFormat | None = None,
         max_tokens: int | None = None,
+        max_output_tokens: int | None = None,
+        profile: GenerationProfile | str | None = None,
+        reasoning: ReasoningConfig | None = None,
         reasoning_effort: ReasoningEffort | None = None,
         extra_body: dict | None = None,
         stream: Literal[False] = False,
@@ -204,6 +414,9 @@ class AsyncBaseClient:
         tool_choice: ToolChoice | None = None,
         response_format: ResponseFormat | None = None,
         max_tokens: int | None = None,
+        max_output_tokens: int | None = None,
+        profile: GenerationProfile | str | None = None,
+        reasoning: ReasoningConfig | None = None,
         reasoning_effort: ReasoningEffort | None = None,
         extra_body: dict | None = None,
         stream: Literal[True],
@@ -219,11 +432,34 @@ class AsyncBaseClient:
         tool_choice: ToolChoice | None = None,
         response_format: ResponseFormat | None = None,
         max_tokens: int | None = None,
+        max_output_tokens: int | None = None,
+        profile: GenerationProfile | str | None = None,
+        reasoning: ReasoningConfig | None = None,
         reasoning_effort: ReasoningEffort | None = None,
         extra_body: dict | None = None,
         stream: bool = False,
     ) -> Awaitable[ResponseContent] | AsyncIterator[ResponseStreamEvent]:
         self._ensure_open()
+        prepare = getattr(self._sync_client, "prepare_generation", None)
+        if callable(prepare):
+            prepared = prepare(
+                model=model,
+                profile=profile,
+                max_tokens=max_tokens,
+                max_output_tokens=max_output_tokens,
+                reasoning=reasoning,
+                reasoning_effort=reasoning_effort,
+                tools_requested=bool(tools),
+            )
+            max_tokens = prepared.max_output_tokens
+            reasoning_effort = prepared.reasoning_effort
+            messages = self._sync_client._prepare_reasoning_history(
+                messages, prepared.reasoning.history
+            )
+        elif max_output_tokens is not None:
+            if max_tokens is not None:
+                raise ValueError("Pass only one of max_tokens or max_output_tokens")
+            max_tokens = max_output_tokens
         kwargs = {
             "model": model,
             "messages": messages,

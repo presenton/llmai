@@ -12,19 +12,24 @@ from llmai.openai.client import (
     OpenAIApiType,
     OpenAIClient,
 )
+from llmai.shared.base import BaseClient
 from llmai.shared.configs import DeepSeekClientConfig
 from llmai.shared.errors import LLMError, configuration_error, raise_llm_error
+from llmai.shared.generation import GenerationProfile, ValidationMode
+from llmai.shared.logs import LogLevel
 from llmai.shared.messages import (
     AssistantContent,
     AssistantMessage,
+    AssistantReasoningItem,
     AssistantToolCall,
     Message,
     content_from_text,
+    flatten_thinking_content,
 )
-from llmai.shared.reasoning import ReasoningEffort
+from llmai.shared.reasoning import ReasoningConfig, ReasoningEffort
 from llmai.shared.response_formats import (
-    JSONSchemaResponse,
     JSONObjectResponse,
+    JSONSchemaResponse,
     ResponseFormat,
     TextResponse,
     get_response_format_name,
@@ -36,13 +41,13 @@ from llmai.shared.responses import (
     ResponseResult,
     ResponseStreamCompletionChunk,
     ResponseStreamContentChunk,
-    ResponseStreamToolCompleteChunk,
     ResponseStreamToolChunk,
+    ResponseStreamToolCompleteChunk,
 )
 from llmai.shared.tools import (
     LLMTool,
-    Tool,
     ToolChoice,
+    ToolChoiceMode,
     filter_resolved_tools_for_provider,
     resolve_tools,
 )
@@ -53,13 +58,42 @@ class DeepSeekClient(OpenAIClient):
     PROVIDER_LABEL = "DeepSeek"
     DEFAULT_BASE_URL = "https://api.deepseek.com"
 
+    def _adapt_tool_choice_for_thinking(
+        self,
+        model: str,
+        tool_choice: ToolChoice | None,
+    ) -> ToolChoice | None:
+        if (
+            not tool_choice
+            or tool_choice.get("mode") != ToolChoiceMode.REQUIRED
+            or self.get_model_capabilities(model).reasoning.supported is not True
+        ):
+            return tool_choice
+
+        message = (
+            "DeepSeek thinking models do not support forced tool_choice; "
+            "using provider-auto while preserving the selected tools."
+        )
+        if self._generation_defaults.validation == ValidationMode.STRICT:
+            raise configuration_error(message, provider=self.PROVIDER_NAME)
+        self.log(
+            LogLevel.WARNING,
+            {
+                "code": "deepseek_thinking_tool_choice_adapted",
+                "provider": self.PROVIDER_NAME,
+                "model": model,
+                "message": message,
+            },
+        )
+        return {**tool_choice, "mode": ToolChoiceMode.AUTO}
+
     def __init__(
         self,
         *,
         config: DeepSeekClientConfig,
         logger: Logger | None = None,
     ):
-        self._logger = logger
+        BaseClient.__init__(self, logger=logger, generation_defaults=config.generation)
         self._api_type = OpenAIApiType.COMPLETIONS
         self._base_url = config.base_url or self.DEFAULT_BASE_URL
 
@@ -97,6 +131,18 @@ class DeepSeekClient(OpenAIClient):
     ) -> dict:
         del strict
         return schema
+
+    def _assistant_message_to_chat_completion_assistant_message_param(
+        self,
+        message: AssistantMessage,
+    ):
+        result = super()._assistant_message_to_chat_completion_assistant_message_param(
+            message
+        )
+        reasoning_content = "\n".join(flatten_thinking_content(message.thinking))
+        if reasoning_content:
+            result["reasoning_content"] = reasoning_content
+        return result
 
     def _parse_tool_arguments(self, arguments: str | None) -> dict:
         if not arguments:
@@ -227,10 +273,26 @@ class DeepSeekClient(OpenAIClient):
         tool_choice: ToolChoice | None = None,
         response_format: ResponseFormat | None = None,
         max_tokens: int | None = None,
+        max_output_tokens: int | None = None,
+        profile: GenerationProfile | str | None = None,
+        reasoning: ReasoningConfig | None = None,
         reasoning_effort: ReasoningEffort | None = None,
         extra_body: dict | None = None,
         stream: bool = False,
     ) -> ResponseResult:
+        prepared = self.prepare_generation(
+            model=model,
+            profile=profile,
+            max_tokens=max_tokens,
+            max_output_tokens=max_output_tokens,
+            reasoning=reasoning,
+            reasoning_effort=reasoning_effort,
+            tools_requested=bool(tools),
+        )
+        max_tokens = prepared.max_output_tokens
+        reasoning_effort = prepared.reasoning_effort
+        messages = self._prepare_reasoning_history(messages, prepared.reasoning.history)
+        tool_choice = self._adapt_tool_choice_for_thinking(model, tool_choice)
         if stream:
             return self._generate_stream(
                 model=model,
@@ -269,7 +331,13 @@ class DeepSeekClient(OpenAIClient):
         reasoning_effort: ReasoningEffort | None = None,
         extra_body: dict | None = None,
     ) -> ResponseContent:
-        del reasoning_effort
+        request_extra_body = dict(extra_body or {})
+        if reasoning_effort is not None and "thinking" not in request_extra_body:
+            disabled = reasoning_effort.effort == "none" or reasoning_effort.tokens == 0
+            request_extra_body["thinking"] = {
+                "type": "disabled" if disabled else "enabled"
+            }
+        extra_body = request_extra_body or None
 
         deepseek_tools, deepseek_tool_choice, response_schema_tool_name = (
             self._get_deepseek_tools_and_tool_choice_or_omit(
@@ -281,14 +349,16 @@ class DeepSeekClient(OpenAIClient):
 
         try:
             start_time = perf_counter()
-            response = self._client.chat.completions.create(
+            response = self._create_chat_completion(
                 model=model,
+                max_tokens=max_tokens,
                 messages=self._messages_to_openai_messages(messages),
                 temperature=temperature,
-                response_format=self._get_deepseek_response_format_or_omit(response_format),
+                response_format=self._get_deepseek_response_format_or_omit(
+                    response_format
+                ),
                 tools=deepseek_tools,
                 tool_choice=deepseek_tool_choice,
-                max_completion_tokens=max_tokens,
                 extra_body=extra_body,
             )
             duration_seconds = perf_counter() - start_time
@@ -311,6 +381,7 @@ class DeepSeekClient(OpenAIClient):
 
             assistant_message = AssistantMessage(
                 content=raw_assistant_message.content,
+                thinking=raw_assistant_message.thinking,
                 tool_calls=user_tool_calls,
             )
             new_messages = [*messages, assistant_message]
@@ -343,7 +414,13 @@ class DeepSeekClient(OpenAIClient):
         reasoning_effort: ReasoningEffort | None = None,
         extra_body: dict | None = None,
     ):
-        del reasoning_effort
+        request_extra_body = dict(extra_body or {})
+        if reasoning_effort is not None and "thinking" not in request_extra_body:
+            disabled = reasoning_effort.effort == "none" or reasoning_effort.tokens == 0
+            request_extra_body["thinking"] = {
+                "type": "disabled" if disabled else "enabled"
+            }
+        extra_body = request_extra_body or None
 
         deepseek_tools, deepseek_tool_choice, response_schema_tool_name = (
             self._get_deepseek_tools_and_tool_choice_or_omit(
@@ -355,14 +432,16 @@ class DeepSeekClient(OpenAIClient):
 
         try:
             start_time = perf_counter()
-            response = self._client.chat.completions.create(
+            response = self._create_chat_completion(
                 model=model,
+                max_tokens=max_tokens,
                 messages=self._messages_to_openai_messages(messages),
                 temperature=temperature,
-                response_format=self._get_deepseek_response_format_or_omit(response_format),
+                response_format=self._get_deepseek_response_format_or_omit(
+                    response_format
+                ),
                 tools=deepseek_tools,
                 tool_choice=deepseek_tool_choice,
-                max_completion_tokens=max_tokens,
                 extra_body=extra_body,
                 stream=True,
                 stream_options={"include_usage": True},
@@ -371,6 +450,7 @@ class DeepSeekClient(OpenAIClient):
             current_chunk_type = None
             current_tool = None
             content = ""
+            thinking = ""
             partial_tool_calls: dict[int, dict[str, str | int | None]] = {}
             tool_order: list[int] = []
             usage = None
@@ -384,6 +464,22 @@ class DeepSeekClient(OpenAIClient):
                     continue
 
                 delta = event.choices[0].delta
+
+                reasoning_delta = self._chat_completion_delta_to_thinking_text(delta)
+                if reasoning_delta:
+                    thinking += reasoning_delta
+                    current_chunk_type, current_tool, stream_chunks = (
+                        self._transition_stream_chunk(
+                            current_chunk_type=current_chunk_type,
+                            next_chunk_type="thinking",
+                            current_tool=current_tool,
+                        )
+                    )
+                    for stream_chunk in stream_chunks:
+                        yield stream_chunk
+                    from llmai.shared.responses import ResponseStreamThinkingChunk
+
+                    yield ResponseStreamThinkingChunk(chunk=reasoning_delta)
 
                 if delta.content:
                     content += delta.content
@@ -494,6 +590,11 @@ class DeepSeekClient(OpenAIClient):
 
             assistant_message = AssistantMessage(
                 content=content_from_text(content or None),
+                thinking=(
+                    [AssistantReasoningItem(summary=[thinking], provider="deepseek")]
+                    if thinking
+                    else None
+                ),
                 tool_calls=user_tool_calls,
             )
             new_messages = [*messages, assistant_message]

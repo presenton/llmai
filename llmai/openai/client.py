@@ -35,6 +35,8 @@ from openai.types.shared_params.response_format_text import ResponseFormatText
 from llmai.shared.base import BaseClient
 from llmai.shared.configs import OpenAIApiType, OpenAIClientConfig
 from llmai.shared.errors import LLMError, configuration_error, raise_llm_error
+from llmai.shared.generation import GenerationProfile
+from llmai.shared.logs import LogLevel
 from llmai.shared.messages import (
     AssistantContent,
     AssistantMessage,
@@ -51,7 +53,7 @@ from llmai.shared.messages import (
     normalize_content_parts,
 )
 from llmai.shared.model_listing import model_ids
-from llmai.shared.reasoning import ReasoningEffort
+from llmai.shared.reasoning import ReasoningConfig, ReasoningEffort
 from llmai.shared.response_formats import (
     JSONObjectResponse,
     JSONSchemaResponse,
@@ -127,7 +129,7 @@ class OpenAIClient(BaseClient):
         config: OpenAIClientConfig,
         logger: Logger | None = None,
     ):
-        super().__init__(logger=logger)
+        super().__init__(logger=logger, generation_defaults=config.generation)
         self._api_type = self._coerce_api_type(config.api_type)
         if self._api_type is None:
             raise configuration_error(
@@ -176,12 +178,45 @@ class OpenAIClient(BaseClient):
         self,
         message: ChatCompletionMessage,
     ) -> list[AssistantReasoningItem]:
-        del message
-        return []
+        items: list[AssistantReasoningItem] = []
+        details = getattr(message, "reasoning_details", None) or []
+        for detail in details:
+            raw = self._dump_model(detail)
+            text = raw.get("text") or raw.get("reasoning")
+            summary = raw.get("summary")
+            if isinstance(summary, str):
+                summaries = [summary]
+            elif isinstance(summary, list):
+                summaries = [str(value) for value in summary]
+            else:
+                summaries = [str(text)] if text else []
+            items.append(
+                AssistantReasoningItem(
+                    id=raw.get("id"),
+                    summary=summaries,
+                    encrypted_content=raw.get("encrypted_content"),
+                    provider=self.PROVIDER_NAME,
+                    raw=raw,
+                )
+            )
+        if items:
+            return items
+        text = getattr(message, "reasoning_content", None)
+        if not text:
+            raw_reasoning = getattr(message, "reasoning", None)
+            text = raw_reasoning if isinstance(raw_reasoning, str) else None
+        return (
+            [AssistantReasoningItem(summary=[text], provider=self.PROVIDER_NAME)]
+            if text
+            else []
+        )
 
     def _chat_completion_delta_to_thinking_text(self, delta: object) -> str | None:
-        del delta
-        return None
+        text = getattr(delta, "reasoning_content", None)
+        if not text:
+            reasoning = getattr(delta, "reasoning", None)
+            text = reasoning if isinstance(reasoning, str) else None
+        return text or None
 
     def _response_item_id(self, prefix: str = "item") -> str:
         return f"{prefix}_{uuid4().hex}"
@@ -698,11 +733,12 @@ class OpenAIClient(BaseClient):
 
         if reasoning_effort is not None:
             if reasoning_effort.effort is not None:
-                reasoning["effort"] = reasoning_effort.effort
+                reasoning["effort"] = reasoning_effort.effort.value
             if reasoning_effort.summary is not None:
-                reasoning["summary"] = reasoning_effort.summary
+                reasoning["summary"] = reasoning_effort.summary.value
 
-        reasoning.setdefault("summary", "auto")
+        if reasoning_effort is None or reasoning_effort.include_trace is not False:
+            reasoning.setdefault("summary", "auto")
         return reasoning or Omit(), request_extra_body or None
 
     def _get_openai_chat_reasoning_effort_or_omit(
@@ -712,13 +748,76 @@ class OpenAIClient(BaseClient):
         if reasoning_effort is None or reasoning_effort.effort is None:
             return Omit()
 
-        return reasoning_effort.effort
+        return reasoning_effort.effort.value
 
     def _get_openai_chat_max_tokens_kwargs(
         self,
         max_tokens: int | None,
+        *,
+        model: str | None = None,
     ) -> dict[str, int | None]:
-        return {"max_completion_tokens": max_tokens}
+        field = self._compatibility_cache.get(
+            (model or "*", "output_token_field"), "max_completion_tokens"
+        )
+        return {field: max_tokens}
+
+    def _is_unsupported_token_parameter(self, error: Exception, field: str) -> bool:
+        status = getattr(error, "status_code", None)
+        if status not in {400, 422}:
+            return False
+        message = str(error).casefold()
+        return field.casefold() in message and any(
+            marker in message
+            for marker in (
+                "unsupported",
+                "unrecognized",
+                "unknown parameter",
+                "unexpected keyword",
+                "extra inputs",
+                "not permitted",
+            )
+        )
+
+    def _create_chat_completion(
+        self,
+        *,
+        model: str,
+        max_tokens: int | None,
+        **kwargs: object,
+    ):
+        token_kwargs = self._get_openai_chat_max_tokens_kwargs(max_tokens, model=model)
+        field = next(iter(token_kwargs))
+        try:
+            return self._client.chat.completions.create(
+                model=model,
+                **kwargs,
+                **token_kwargs,
+            )
+        except Exception as exc:
+            if not self._is_unsupported_token_parameter(exc, field):
+                raise
+            alternate = (
+                "max_tokens"
+                if field == "max_completion_tokens"
+                else "max_completion_tokens"
+            )
+            self._compatibility_cache[(model, "output_token_field")] = alternate
+            self.log(
+                LogLevel.WARNING,
+                {
+                    "code": "output_token_parameter_negotiated",
+                    "provider": self.PROVIDER_NAME,
+                    "model": model,
+                    "unsupported_parameter": field,
+                    "replacement_parameter": alternate,
+                    "retry_performed": True,
+                },
+            )
+            return self._client.chat.completions.create(
+                model=model,
+                **kwargs,
+                **{alternate: max_tokens},
+            )
 
     def _responses_output_to_assistant_message(
         self,
@@ -747,12 +846,19 @@ class OpenAIClient(BaseClient):
                 for summary in getattr(item, "summary", []) or []:
                     if getattr(summary, "text", None):
                         summary_texts.append(summary.text)
-                if summary_texts or getattr(item, "id", None) is not None:
+                encrypted_content = getattr(item, "encrypted_content", None)
+                if (
+                    summary_texts
+                    or getattr(item, "id", None) is not None
+                    or encrypted_content is not None
+                ):
                     thinking_items.append(
                         AssistantReasoningItem(
                             id=getattr(item, "id", None),
                             summary=summary_texts,
-                            encrypted_content=getattr(item, "encrypted_content", None),
+                            encrypted_content=encrypted_content,
+                            provider=self.PROVIDER_NAME,
+                            raw=self._dump_model(item),
                         )
                     )
             elif item_type == "function_call":
@@ -783,10 +889,25 @@ class OpenAIClient(BaseClient):
         tool_choice: ToolChoice | None = None,
         response_format: ResponseFormat | None = None,
         max_tokens: int | None = None,
+        max_output_tokens: int | None = None,
+        profile: GenerationProfile | str | None = None,
+        reasoning: ReasoningConfig | None = None,
         reasoning_effort: ReasoningEffort | None = None,
         extra_body: dict | None = None,
         stream: bool = False,
     ) -> ResponseResult:
+        prepared = self.prepare_generation(
+            model=model,
+            profile=profile,
+            max_tokens=max_tokens,
+            max_output_tokens=max_output_tokens,
+            reasoning=reasoning,
+            reasoning_effort=reasoning_effort,
+            tools_requested=bool(tools),
+        )
+        max_tokens = prepared.max_output_tokens
+        reasoning_effort = prepared.reasoning_effort
+        messages = self._prepare_reasoning_history(messages, prepared.reasoning.history)
         if stream:
             if self._api_type == OpenAIApiType.RESPONSES:
                 return self._generate_responses_stream(
@@ -869,8 +990,9 @@ class OpenAIClient(BaseClient):
 
         try:
             start_time = perf_counter()
-            response = self._client.chat.completions.create(
+            response = self._create_chat_completion(
                 model=model,
+                max_tokens=max_tokens,
                 messages=self._messages_to_openai_messages(messages),
                 temperature=temperature,
                 response_format=self._get_openai_response_format_or_omit(
@@ -878,7 +1000,6 @@ class OpenAIClient(BaseClient):
                 ),
                 tools=openai_tools,
                 tool_choice=openai_tool_choice,
-                **self._get_openai_chat_max_tokens_kwargs(max_tokens),
                 reasoning_effort=self._get_openai_chat_reasoning_effort_or_omit(
                     reasoning_effort
                 ),
@@ -927,8 +1048,9 @@ class OpenAIClient(BaseClient):
 
         try:
             start_time = perf_counter()
-            response = self._client.chat.completions.create(
+            response = self._create_chat_completion(
                 model=model,
+                max_tokens=max_tokens,
                 messages=self._messages_to_openai_messages(messages),
                 temperature=temperature,
                 response_format=self._get_openai_response_format_or_omit(
@@ -936,7 +1058,6 @@ class OpenAIClient(BaseClient):
                 ),
                 tools=openai_tools,
                 tool_choice=openai_tool_choice,
-                **self._get_openai_chat_max_tokens_kwargs(max_tokens),
                 reasoning_effort=self._get_openai_chat_reasoning_effort_or_omit(
                     reasoning_effort
                 ),
@@ -1386,11 +1507,6 @@ class OpenAIClient(BaseClient):
                 if event_type == "response.completed":
                     final_response = event.response
 
-            thinking_blocks = [
-                thinking_blocks_by_key[key]
-                for key in thinking_order
-                if thinking_blocks_by_key[key]
-            ]
             streamed_thinking_by_id: dict[str, AssistantReasoningItem] = {}
             streamed_thinking_order: list[str] = []
             for item_id, summary_index in thinking_order:

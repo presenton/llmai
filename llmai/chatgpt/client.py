@@ -11,6 +11,7 @@ from openai import Omit, OpenAI
 from llmai.shared.base import BaseClient
 from llmai.shared.configs import ChatGPTClientConfig
 from llmai.shared.errors import LLMError, configuration_error, raise_llm_error
+from llmai.shared.generation import GenerationProfile
 from llmai.shared.messages import (
     AssistantContent,
     AssistantMessage,
@@ -26,10 +27,10 @@ from llmai.shared.messages import (
     content_has_images,
     normalize_content_parts,
 )
-from llmai.shared.reasoning import ReasoningEffort
+from llmai.shared.reasoning import ReasoningConfig, ReasoningEffort
 from llmai.shared.response_formats import (
-    JSONSchemaResponse,
     JSONObjectResponse,
+    JSONSchemaResponse,
     ResponseFormat,
     TextResponse,
     get_response_format_name,
@@ -42,16 +43,16 @@ from llmai.shared.responses import (
     ResponseStreamCompletionChunk,
     ResponseStreamContentChunk,
     ResponseStreamThinkingChunk,
-    ResponseStreamToolCompleteChunk,
     ResponseStreamToolChunk,
+    ResponseStreamToolCompleteChunk,
     ResponseUsage,
 )
 from llmai.shared.schema import get_schema_as_dict
 from llmai.shared.tools import (
+    WEB_SEARCH_TOOL_NAME,
     LLMTool,
     Tool,
     ToolChoice,
-    WEB_SEARCH_TOOL_NAME,
     WebSearchTool,
     filter_resolved_tools_for_provider,
     resolve_tools,
@@ -70,7 +71,7 @@ class ChatGPTClient(BaseClient):
         config: ChatGPTClientConfig,
         logger: Logger | None = None,
     ):
-        super().__init__(logger=logger)
+        super().__init__(logger=logger, generation_defaults=config.generation)
         self._base_url = config.base_url or self.DEFAULT_BASE_URL
         resolved_access_token = self._resolve_access_token(config.access_token)
         resolved_account_id = _strip_or_none(config.account_id)
@@ -281,7 +282,9 @@ class ChatGPTClient(BaseClient):
         messages: list[Message],
     ) -> str:
         system_messages = [
-            message.content for message in messages if isinstance(message, SystemMessage)
+            message.content
+            for message in messages
+            if isinstance(message, SystemMessage)
         ]
         if not system_messages:
             return CHATGPT_DEFAULT_INSTRUCTIONS
@@ -358,9 +361,7 @@ class ChatGPTClient(BaseClient):
             resolve_tools(tools, tool_choice),
             supports_web_search=True,
         )
-        responses_tools = self._llm_tools_to_responses_tools(
-            resolved.function_tools
-        )
+        responses_tools = self._llm_tools_to_responses_tools(resolved.function_tools)
         if resolved.web_search_tool is not None:
             responses_tools.append(
                 self._web_search_tool_to_responses_tool(resolved.web_search_tool)
@@ -475,18 +476,27 @@ class ChatGPTClient(BaseClient):
                 for summary in getattr(item, "summary", []) or []:
                     if getattr(summary, "text", None):
                         summary_texts.append(summary.text)
-                if summary_texts or getattr(item, "id", None) is not None:
+                encrypted_content = getattr(item, "encrypted_content", None)
+                if (
+                    summary_texts
+                    or getattr(item, "id", None) is not None
+                    or encrypted_content is not None
+                ):
                     thinking_items.append(
                         AssistantReasoningItem(
                             id=getattr(item, "id", None),
                             summary=summary_texts,
-                            encrypted_content=getattr(item, "encrypted_content", None),
+                            encrypted_content=encrypted_content,
+                            provider=self.PROVIDER_NAME,
+                            raw=self._dump_model(item),
                         )
                     )
             elif item_type == "function_call":
                 tool_calls.append(
                     AssistantToolCall(
-                        id=getattr(item, "call_id", None) or getattr(item, "id", None) or "",
+                        id=getattr(item, "call_id", None)
+                        or getattr(item, "id", None)
+                        or "",
                         name=getattr(item, "name", None) or "",
                         arguments=getattr(item, "arguments", None),
                     )
@@ -636,8 +646,7 @@ class ChatGPTClient(BaseClient):
 
                 if event_type == "response.output_text.delta":
                     streamed_assistant_message_id = (
-                        streamed_assistant_message_id
-                        or getattr(event, "item_id", None)
+                        streamed_assistant_message_id or getattr(event, "item_id", None)
                     )
                     if current_chunk_type == "thinking":
                         active_thinking_key = None
@@ -720,9 +729,11 @@ class ChatGPTClient(BaseClient):
                     if getattr(item, "type", None) != "function_call":
                         continue
 
-                    tool_key = getattr(item, "id", None) or getattr(
-                        item, "call_id", None
-                    ) or self._response_item_id("tool")
+                    tool_key = (
+                        getattr(item, "id", None)
+                        or getattr(item, "call_id", None)
+                        or self._response_item_id("tool")
+                    )
                     current = partial_tool_calls.get(tool_key)
                     if current is None:
                         current = {"id": None, "name": None, "arguments": None}
@@ -804,11 +815,6 @@ class ChatGPTClient(BaseClient):
                 if event_type == "response.completed":
                     final_response = event.response
 
-            thinking_blocks = [
-                thinking_blocks_by_key[key]
-                for key in thinking_order
-                if thinking_blocks_by_key[key]
-            ]
             streamed_thinking_by_id: dict[str, AssistantReasoningItem] = {}
             streamed_thinking_order: list[str] = []
             for item_id, summary_index in thinking_order:
@@ -827,8 +833,7 @@ class ChatGPTClient(BaseClient):
                 thinking_item.summary.append(thinking_text)
 
             streamed_thinking = [
-                streamed_thinking_by_id[item_id]
-                for item_id in streamed_thinking_order
+                streamed_thinking_by_id[item_id] for item_id in streamed_thinking_order
             ]
             streamed_tool_calls = [
                 AssistantToolCall(
@@ -849,20 +854,18 @@ class ChatGPTClient(BaseClient):
             )
 
             if final_response is not None:
-                response_assistant_message = self._responses_output_to_assistant_message(
-                    getattr(final_response, "output", []) or []
+                response_assistant_message = (
+                    self._responses_output_to_assistant_message(
+                        getattr(final_response, "output", []) or []
+                    )
                 )
                 thinking = response_assistant_message.thinking
                 if streamed_assistant_message.thinking and not all(
-                    thinking_item.id is not None
-                    for thinking_item in (thinking or [])
+                    thinking_item.id is not None for thinking_item in (thinking or [])
                 ):
                     thinking = streamed_assistant_message.thinking
                 assistant_message = AssistantMessage(
-                    id=(
-                        response_assistant_message.id
-                        or streamed_assistant_message.id
-                    ),
+                    id=(response_assistant_message.id or streamed_assistant_message.id),
                     content=(
                         response_assistant_message.content
                         or streamed_assistant_message.content
@@ -946,10 +949,25 @@ class ChatGPTClient(BaseClient):
         tool_choice: ToolChoice | None = None,
         response_format: ResponseFormat | None = None,
         max_tokens: int | None = None,
+        max_output_tokens: int | None = None,
+        profile: GenerationProfile | str | None = None,
+        reasoning: ReasoningConfig | None = None,
         reasoning_effort: ReasoningEffort | None = None,
         extra_body: dict | None = None,
         stream: bool = False,
     ) -> ResponseResult:
+        prepared = self.prepare_generation(
+            model=model,
+            profile=profile,
+            max_tokens=max_tokens,
+            max_output_tokens=max_output_tokens,
+            reasoning=reasoning,
+            reasoning_effort=reasoning_effort,
+            tools_requested=bool(tools),
+        )
+        max_tokens = prepared.max_output_tokens
+        reasoning_effort = prepared.reasoning_effort
+        messages = self._prepare_reasoning_history(messages, prepared.reasoning.history)
         request_extra_body = {
             "store": False,
             "include": ["reasoning.encrypted_content"],
