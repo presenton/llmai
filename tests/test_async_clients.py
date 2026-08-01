@@ -1,6 +1,4 @@
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
-import threading
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -36,26 +34,29 @@ from llmai.shared import (
 
 
 class FakeSyncClient:
-    def __init__(self, *, barrier: threading.Barrier | None = None):
-        self.barrier = barrier
-        self.calls = []
+    def __init__(self):
         self.closed = 0
-        self.stream_closed = threading.Event()
         self._client = SimpleNamespace(close=self.close)
 
     def close(self):
         self.closed += 1
 
-    def generate(self, **kwargs):
-        self.calls.append(kwargs)
-        if kwargs["stream"]:
-            return self._stream()
+    def generate(self, **kwargs):  # pragma: no cover - AsyncBaseClient must not call it.
+        raise AssertionError("sync generate should not be used by AsyncBaseClient")
 
-        if self.barrier is not None:
-            self.barrier.wait(timeout=2)
+
+class FakeAsyncClient(AsyncBaseClient):
+    def __init__(self, *, sync_client: FakeSyncClient | None = None):
+        super().__init__(sync_client=sync_client or FakeSyncClient())
+        self.calls = []
+        self.stream_closed = asyncio.Event()
+
+    async def _agenerate_once(self, **kwargs):
+        self.calls.append(kwargs)
         return ResponseContent(content=kwargs["model"])
 
-    def _stream(self):
+    async def _agenerate_stream(self, **kwargs):
+        self.calls.append(kwargs)
         try:
             yield ResponseStreamContentChunk(chunk="hello")
             yield ResponseStreamCompletionChunk(content="hello")
@@ -65,8 +66,7 @@ class FakeSyncClient:
 
 class AsyncClientTests(unittest.IsolatedAsyncioTestCase):
     async def test_agenerate_returns_response_content(self):
-        sync_client = FakeSyncClient()
-        client = AsyncBaseClient(sync_client=sync_client)
+        client = FakeAsyncClient()
 
         result = await client.agenerate(
             model="model",
@@ -74,11 +74,10 @@ class AsyncClientTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(result.content, "model")
-        self.assertEqual(sync_client.calls[0]["stream"], False)
+        self.assertEqual(client.calls[0]["model"], "model")
 
     async def test_agenerate_stream_is_directly_async_iterable(self):
-        sync_client = FakeSyncClient()
-        client = AsyncBaseClient(sync_client=sync_client)
+        client = FakeAsyncClient()
 
         stream = client.agenerate(
             model="model",
@@ -88,11 +87,10 @@ class AsyncClientTests(unittest.IsolatedAsyncioTestCase):
         chunks = [chunk async for chunk in stream]
 
         self.assertEqual([chunk.type for chunk in chunks], ["content", "completion"])
-        self.assertTrue(sync_client.stream_closed.is_set())
+        self.assertTrue(client.stream_closed.is_set())
 
     async def test_agenerate_stream_closes_when_consumer_exits_early(self):
-        sync_client = FakeSyncClient()
-        client = AsyncBaseClient(sync_client=sync_client)
+        client = FakeAsyncClient()
         stream = client.agenerate(
             model="model",
             messages=[UserMessage(content="Hello")],
@@ -103,55 +101,11 @@ class AsyncClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(first.type, "content")
         await stream.aclose()
 
-        self.assertTrue(sync_client.stream_closed.is_set())
-
-    async def test_multiple_requests_run_concurrently(self):
-        sync_client = FakeSyncClient(barrier=threading.Barrier(2))
-        client = AsyncBaseClient(sync_client=sync_client)
-
-        first, second = await asyncio.wait_for(
-            asyncio.gather(
-                client.agenerate(model="first", messages=[]),
-                client.agenerate(model="second", messages=[]),
-            ),
-            timeout=3,
-        )
-
-        self.assertEqual({first.content, second.content}, {"first", "second"})
-
-    async def test_parser_thread_does_not_use_default_executor(self):
-        loop = asyncio.get_running_loop()
-        default_executor = ThreadPoolExecutor(max_workers=1)
-        loop.set_default_executor(default_executor)
-
-        started = threading.Event()
-        release = threading.Event()
-
-        def block_default_executor():
-            started.set()
-            release.wait(timeout=5)
-
-        blocker = loop.run_in_executor(None, block_default_executor)
-        self.assertTrue(started.wait(timeout=1))
-
-        sync_client = FakeSyncClient()
-        client = AsyncBaseClient(sync_client=sync_client)
-
-        try:
-            result = await asyncio.wait_for(
-                client.agenerate(model="model", messages=[]),
-                timeout=1,
-            )
-        finally:
-            release.set()
-            await blocker
-            default_executor.shutdown(wait=True)
-
-        self.assertEqual(result.content, "model")
+        self.assertTrue(client.stream_closed.is_set())
 
     async def test_context_manager_closes_once_and_rejects_reuse(self):
         sync_client = FakeSyncClient()
-        client = AsyncBaseClient(sync_client=sync_client)
+        client = FakeAsyncClient(sync_client=sync_client)
 
         async with client as entered:
             self.assertIs(entered, client)

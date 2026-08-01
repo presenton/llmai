@@ -75,6 +75,15 @@ class FakeListingClient(BaseClient):
         raise NotImplementedError
 
 
+class FakeAsyncListingClient(AsyncBaseClient):
+    async def _agenerate_once(self, **kwargs):
+        raise NotImplementedError
+
+    async def _agenerate_stream(self, **kwargs):
+        raise NotImplementedError
+        yield
+
+
 class UnsupportedListingClient(BaseClient):
     PROVIDER_NAME = "unsupported"
 
@@ -160,13 +169,13 @@ class ProviderClientModelListingTests(unittest.TestCase):
             ["models/gemini-a"],
         )
 
-    def test_async_client_uses_the_same_listing_contract(self):
-        client = AsyncBaseClient(sync_client=FakeListingClient())
+    def test_base_async_listing_does_not_fall_back_to_sync_listing(self):
+        client = FakeAsyncListingClient(sync_client=FakeListingClient())
 
-        self.assertEqual(
-            asyncio.run(client.alist_available_models()),
-            ["model-a", "model-b"],
-        )
+        with self.assertRaises(LLMConfigurationError) as raised:
+            asyncio.run(client.alist_available_models())
+
+        self.assertEqual(raised.exception.status_code, 400)
 
     def test_unsupported_provider_is_a_configuration_error(self):
         client = UnsupportedListingClient()

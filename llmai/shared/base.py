@@ -340,23 +340,8 @@ class BaseClient(ABC):
         raise NotImplementedError
 
 
-_STREAM_EXHAUSTED = object()
-_ASYNC_PARSER_EXECUTOR_MAX_WORKERS = max(16, min(64, (os.cpu_count() or 1) * 8))
-_ASYNC_PARSER_EXECUTOR = ThreadPoolExecutor(
-    max_workers=_ASYNC_PARSER_EXECUTOR_MAX_WORKERS,
-    thread_name_prefix="llmai-parser",
-)
-
-
-def _next_stream_event(stream: Any) -> Any:
-    try:
-        return next(stream)
-    except StopIteration:
-        return _STREAM_EXHAUSTED
-
-
-class AsyncBaseClient:
-    """Async fallback facade for an llmai sync provider client."""
+class AsyncBaseClient(ABC):
+    """Base class for provider clients with native async request paths."""
 
     def __init__(
         self,
@@ -475,67 +460,31 @@ class AsyncBaseClient:
             return self._agenerate_stream(**kwargs)
         return self._agenerate_once(**kwargs)
 
+    @abstractmethod
     async def _agenerate_once(self, **kwargs: Any) -> ResponseContent:
-        result = await self._run_in_parser_thread(
-            self._sync_client.generate,
-            **kwargs,
-            stream=False,
-        )
-        if not isinstance(result, ResponseContent):
-            raise TypeError("Non-streaming generation returned a stream")
-        return result
+        raise NotImplementedError
 
     async def alist_available_models(self) -> list[str]:
         """Asynchronously list models available to this provider account."""
 
         self._ensure_open()
-        result = await self._run_in_parser_thread(
-            self._sync_client.list_available_models
+        provider = getattr(
+            self._sync_client,
+            "PROVIDER_NAME",
+            self.__class__.__name__,
         )
-        if not isinstance(result, list) or not all(
-            isinstance(model, str) for model in result
-        ):
-            raise TypeError("Provider model listing returned an invalid result")
-        return result
+        raise configuration_error(
+            f"Live model listing is not supported for provider {provider!r}.",
+            provider=str(provider),
+        )
 
+    @abstractmethod
     async def _agenerate_stream(
         self,
         **kwargs: Any,
     ) -> AsyncIterator[ResponseStreamEvent]:
-        stream = None
-        try:
-            stream = await self._run_in_parser_thread(
-                self._sync_client.generate,
-                **kwargs,
-                stream=True,
-            )
-            while True:
-                event = await self._run_in_parser_thread(
-                    _next_stream_event,
-                    stream,
-                )
-                if event is _STREAM_EXHAUSTED:
-                    break
-                yield event
-        finally:
-            close = getattr(stream, "close", None)
-            if callable(close):
-                await self._run_in_parser_thread(close)
-
-    async def _run_in_parser_thread(
-        self,
-        callback: Callable[..., Any],
-        *args: Any,
-        **kwargs: Any,
-    ) -> Any:
-        context = contextvars.copy_context()
-        loop = asyncio.get_running_loop()
-        call = partial(callback, *args, **kwargs)
-        return await loop.run_in_executor(
-            _ASYNC_PARSER_EXECUTOR,
-            context.run,
-            call,
-        )
+        raise NotImplementedError
+        yield
 
     def _ensure_open(self) -> None:
         if self._closed:
@@ -553,7 +502,9 @@ class AsyncBaseClient:
         provider_client = getattr(self._sync_client, "_client", None)
         close = getattr(provider_client, "close", None)
         if callable(close):
-            await self._run_in_parser_thread(close)
+            result = close()
+            if inspect.isawaitable(result):
+                await result
 
     async def __aenter__(self) -> AsyncBaseClient:
         self._ensure_open()
