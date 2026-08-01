@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import AsyncIterable, Iterable
 from typing import Any
 
 
@@ -27,6 +27,14 @@ def model_ids(models: Iterable[Any]) -> list[str]:
         result.append(model_id)
 
     return result
+
+
+async def amodel_ids(models: Iterable[Any] | AsyncIterable[Any]) -> list[str]:
+    """Normalize model IDs, preferring native async page iteration."""
+
+    if isinstance(models, AsyncIterable):
+        return model_ids([model async for model in models])
+    return model_ids(models)
 
 
 def openai_compatible_model_ids(payload: Any) -> list[str] | None:

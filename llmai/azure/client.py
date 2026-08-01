@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from logging import Logger
 
-from openai import AzureOpenAI
+from openai import AzureOpenAI, OpenAI
 
 from llmai.openai.client import OpenAIClient
 from llmai.shared.base import BaseClient
@@ -22,7 +22,13 @@ class AzureOpenAIClient(OpenAIClient):
         logger: Logger | None = None,
     ):
         BaseClient.__init__(self, logger=logger, generation_defaults=config.generation)
-        self._api_type = OpenAIApiType.COMPLETIONS
+        self._api_type = self._coerce_api_type(config.api_type)
+        if self._api_type is None:
+            raise configuration_error(
+                f"Unsupported Azure OpenAI api_type: {config.api_type}",
+                provider=self.PROVIDER_NAME,
+            )
+        self._provide_system_message_as_instructions = False
 
         resolved_base_url, resolved_endpoint = self._resolve_base_url_and_endpoint(
             base_url=config.base_url,
@@ -36,20 +42,34 @@ class AzureOpenAIClient(OpenAIClient):
         resolved_api_version = self._resolve_api_version(config.api_version)
         resolved_deployment = self._resolve_deployment(config.deployment)
 
-        client_kwargs: dict[str, object] = {
-            "api_version": resolved_api_version,
-            "api_key": resolved_api_key,
-            "azure_ad_token": resolved_ad_token,
-            "azure_ad_token_provider": config.azure_ad_token_provider,
-            "base_url": resolved_base_url,
-        }
-        if resolved_endpoint is not None:
-            client_kwargs["azure_endpoint"] = resolved_endpoint
-        if resolved_deployment is not None and resolved_base_url is None:
-            client_kwargs["azure_deployment"] = resolved_deployment
-
         try:
-            self._client = AzureOpenAI(**client_kwargs)
+            if self._api_type == OpenAIApiType.RESPONSES:
+                responses_base_url = self._resolve_responses_base_url(
+                    base_url=resolved_base_url,
+                    endpoint=resolved_endpoint,
+                )
+                responses_api_key = (
+                    resolved_api_key
+                    or resolved_ad_token
+                    or config.azure_ad_token_provider
+                )
+                self._client = OpenAI(
+                    base_url=responses_base_url,
+                    api_key=responses_api_key,
+                )
+            else:
+                client_kwargs: dict[str, object] = {
+                    "api_version": resolved_api_version,
+                    "api_key": resolved_api_key,
+                    "azure_ad_token": resolved_ad_token,
+                    "azure_ad_token_provider": config.azure_ad_token_provider,
+                    "base_url": resolved_base_url,
+                }
+                if resolved_endpoint is not None:
+                    client_kwargs["azure_endpoint"] = resolved_endpoint
+                if resolved_deployment is not None and resolved_base_url is None:
+                    client_kwargs["azure_deployment"] = resolved_deployment
+                self._client = AzureOpenAI(**client_kwargs)
         except Exception as exc:
             raise_llm_error(exc, provider=self.PROVIDER_NAME)
 
@@ -60,6 +80,21 @@ class AzureOpenAIClient(OpenAIClient):
                 resolved_base_url or resolved_endpoint,
             )
             self._logger.info("API Version: %s", resolved_api_version)
+
+    def _resolve_responses_base_url(
+        self,
+        *,
+        base_url: str | None,
+        endpoint: str | None,
+    ) -> str:
+        if base_url is not None:
+            return base_url.rstrip("/") + "/"
+        if endpoint is not None:
+            return endpoint.rstrip("/") + "/openai/v1/"
+        raise configuration_error(
+            "Missing Azure OpenAI endpoint for the Responses API",
+            provider=self.PROVIDER_NAME,
+        )
 
     def _resolve_base_url_and_endpoint(
         self,

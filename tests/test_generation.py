@@ -17,6 +17,7 @@ from llmai.shared import (
     GenerationDefaults,
     OpenAIClientConfig,
     ReasoningConfig,
+    ReasoningEffort,
     ReasoningEffortValue,
     ReasoningHistoryMode,
     ResponseContent,
@@ -106,6 +107,40 @@ class GenerationPolicyTests(unittest.TestCase):
                 enabled=False,
                 effort=ReasoningEffortValue.HIGH,
             )
+
+    def test_optional_google_reasoning_can_be_disabled_with_legacy_effort(self):
+        prepared = prepare_generation(
+            model="gemini-2.5-flash",
+            provider="google",
+            reasoning_effort=ReasoningEffort(
+                effort=ReasoningEffortValue.NONE,
+            ),
+        )
+
+        self.assertFalse(prepared.reasoning.enabled)
+        self.assertEqual(
+            prepared.reasoning.effort,
+            ReasoningEffortValue.NONE,
+        )
+
+    def test_mandatory_google_reasoning_adapts_disable_request(self):
+        prepared = prepare_generation(
+            model="gemini-2.5-pro",
+            provider="google",
+            reasoning_effort=ReasoningEffort(
+                effort=ReasoningEffortValue.NONE,
+            ),
+        )
+
+        self.assertTrue(prepared.reasoning.enabled)
+        self.assertEqual(
+            prepared.reasoning.effort,
+            ReasoningEffortValue.MINIMAL,
+        )
+        self.assertIn(
+            "reasoning_cannot_be_disabled",
+            [warning.code for warning in prepared.warnings],
+        )
 
     def test_disabled_history_removes_trace_and_signatures_without_mutation(self):
         client = OpenAIClient(config=OpenAIClientConfig(api_key="test"))

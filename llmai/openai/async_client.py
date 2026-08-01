@@ -21,7 +21,7 @@ from llmai.shared.messages import (
     Message,
     content_from_text,
 )
-from llmai.shared.model_listing import model_ids
+from llmai.shared.model_listing import amodel_ids
 from llmai.shared.responses import (
     ResponseContent,
     ResponseStreamCompletionChunk,
@@ -107,7 +107,7 @@ class AsyncOpenAICompatibleClient(AsyncBaseClient):
             result = list_models()
             if inspect.isawaitable(result):
                 result = await result
-            return model_ids(result)
+            return await amodel_ids(result)
         except Exception as exc:
             raise_llm_error(exc, provider=self._parser.PROVIDER_NAME)
 

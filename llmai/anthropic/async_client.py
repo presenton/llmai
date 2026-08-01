@@ -23,7 +23,7 @@ from llmai.shared.messages import (
     collapse_thinking_blocks,
     content_from_text,
 )
-from llmai.shared.model_listing import model_ids
+from llmai.shared.model_listing import amodel_ids
 from llmai.shared.response_formats import (
     get_response_format_name,
     get_response_format_strict,
@@ -69,7 +69,8 @@ class AsyncAnthropicClient(AsyncBaseClient):
     async def alist_available_models(self) -> list[str]:
         self._ensure_open()
         try:
-            return model_ids(await self._provider_client.models.list(limit=100))
+            page = await self._provider_client.models.list(limit=100)
+            return await amodel_ids(page)
         except Exception as exc:
             raise_llm_error(exc, provider=self._parser.PROVIDER_NAME)
 

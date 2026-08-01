@@ -22,7 +22,7 @@ from llmai.shared.messages import (
     collapse_content_parts,
     collapse_thinking_blocks,
 )
-from llmai.shared.model_listing import model_ids
+from llmai.shared.model_listing import amodel_ids
 from llmai.shared.responses import (
     ResponseContent,
     ResponseStreamCompletionChunk,
@@ -61,7 +61,7 @@ class AsyncGoogleCompatibleClient(AsyncBaseClient):
         self._ensure_open()
         try:
             result = self._provider_client.aio.models.list(config={"page_size": 100})
-            return model_ids(await resolve_async_result(result))
+            return await amodel_ids(await resolve_async_result(result))
         except Exception as exc:
             raise_llm_error(exc, provider=self._parser.PROVIDER_NAME)
 

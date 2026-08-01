@@ -257,7 +257,14 @@ def prepare_generation(
     requested_effort = resolved_reasoning.effort
     if requested_effort == ReasoningEffortValue.DEFAULT:
         resolved_reasoning.effort = None
-    elif requested_effort is not None and supported_levels:
+    elif (
+        requested_effort is not None
+        and supported_levels
+        and not (
+            resolved_reasoning.enabled is False
+            and requested_effort == ReasoningEffortValue.NONE
+        )
+    ):
         effort_value = requested_effort.value
         if effort_value not in supported_levels:
             message = (

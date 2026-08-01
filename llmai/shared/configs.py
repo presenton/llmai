@@ -123,6 +123,7 @@ class VertexAIClientConfig(BaseClientConfig):
 
 class AzureOpenAIClientConfig(BaseClientConfig):
     provider: Literal["azure"] = "azure"
+    api_type: OpenAIApiType = OpenAIApiType.RESPONSES
     api_key: OptionalStr = None
     azure_ad_token: OptionalStr = None
     azure_ad_token_provider: Callable[[], str] | None = None

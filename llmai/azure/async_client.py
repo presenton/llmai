@@ -4,7 +4,7 @@ import inspect
 from logging import Logger
 from typing import Any
 
-from openai import AsyncAzureOpenAI
+from openai import AsyncAzureOpenAI, AsyncOpenAI
 
 from llmai.azure.client import AzureOpenAIClient
 from llmai.openai.async_client import (
@@ -12,6 +12,7 @@ from llmai.openai.async_client import (
     create_async_provider_client,
 )
 from llmai.shared.configs import AzureOpenAIClientConfig
+from llmai.shared.configs import OpenAIApiType
 
 
 class AsyncAzureOpenAIClient(AsyncOpenAICompatibleClient):
@@ -33,23 +34,40 @@ class AsyncAzureOpenAIClient(AsyncOpenAICompatibleClient):
                     value = await value
                 return value
 
-        client_kwargs: dict[str, Any] = {
-            "api_version": config.api_version,
-            "api_key": config.api_key,
-            "azure_ad_token": config.azure_ad_token,
-            "azure_ad_token_provider": async_token_provider,
-            "base_url": config.base_url,
-        }
-        if config.endpoint is not None:
-            client_kwargs["azure_endpoint"] = config.endpoint
-        if config.deployment is not None and config.base_url is None:
-            client_kwargs["azure_deployment"] = config.deployment
+        if sync_client._api_type == OpenAIApiType.RESPONSES:
+            responses_base_url = sync_client._resolve_responses_base_url(
+                base_url=config.base_url,
+                endpoint=config.endpoint,
+            )
+            responses_api_key = (
+                config.api_key
+                or config.azure_ad_token
+                or async_token_provider
+            )
+            provider_client = create_async_provider_client(
+                AsyncOpenAI,
+                provider="azure",
+                base_url=responses_base_url,
+                api_key=responses_api_key,
+            )
+        else:
+            client_kwargs: dict[str, Any] = {
+                "api_version": config.api_version,
+                "api_key": config.api_key,
+                "azure_ad_token": config.azure_ad_token,
+                "azure_ad_token_provider": async_token_provider,
+                "base_url": config.base_url,
+            }
+            if config.endpoint is not None:
+                client_kwargs["azure_endpoint"] = config.endpoint
+            if config.deployment is not None and config.base_url is None:
+                client_kwargs["azure_deployment"] = config.deployment
 
-        provider_client = create_async_provider_client(
-            AsyncAzureOpenAI,
-            provider="azure",
-            **client_kwargs,
-        )
+            provider_client = create_async_provider_client(
+                AsyncAzureOpenAI,
+                provider="azure",
+                **client_kwargs,
+            )
         super().__init__(
             sync_client=sync_client,
             provider_client=provider_client,
