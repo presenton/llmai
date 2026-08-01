@@ -17,7 +17,7 @@ class VertexAIClient(GoogleClient):
         config: VertexAIClientConfig,
         logger: Logger | None = None,
     ):
-        BaseClient.__init__(self, logger=logger)
+        BaseClient.__init__(self, logger=logger, generation_defaults=config.generation)
         self._client = self._create_genai_client(
             vertexai=True,
             api_key=config.api_key,

@@ -15,6 +15,7 @@ from pydantic import (
 )
 
 from llmai.shared.errors import configuration_error
+from llmai.shared.generation import GenerationDefaults
 
 
 def _strip_or_none(value: Any) -> Any:
@@ -37,6 +38,7 @@ class BaseClientConfig(BaseModel):
         extra="forbid",
         arbitrary_types_allowed=True,
     )
+    generation: GenerationDefaults = Field(default_factory=GenerationDefaults)
 
 
 class APIKeyClientConfig(BaseClientConfig):
@@ -121,6 +123,7 @@ class VertexAIClientConfig(BaseClientConfig):
 
 class AzureOpenAIClientConfig(BaseClientConfig):
     provider: Literal["azure"] = "azure"
+    api_type: OpenAIApiType = OpenAIApiType.RESPONSES
     api_key: OptionalStr = None
     azure_ad_token: OptionalStr = None
     azure_ad_token_provider: Callable[[], str] | None = None
@@ -183,8 +186,7 @@ class BedrockClientConfig(BaseClientConfig):
     def _validate_auth(self) -> BedrockClientConfig:
         has_api_key = self.api_key is not None
         has_access_key_pair = (
-            self.aws_access_key_id is not None
-            or self.aws_secret_access_key is not None
+            self.aws_access_key_id is not None or self.aws_secret_access_key is not None
         )
         has_session_token = self.aws_session_token is not None
         has_profile = self.profile_name is not None

@@ -575,7 +575,9 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(tool_choice["mode"], "required")
         self.assertEqual(tool_choice["tools"], openai_tools)
 
-    def test_openai_responses_web_search_defaults_to_auto_without_tool_choice_wrapper(self):
+    def test_openai_responses_web_search_defaults_to_auto_without_tool_choice_wrapper(
+        self,
+    ):
         client = OpenAIClient(config=OpenAIClientConfig(api_key="test"))
 
         openai_tools, tool_choice = (
@@ -708,9 +710,7 @@ class ClientBehaviorTests(unittest.TestCase):
 
         parameters = openai_tools[0]["function"]["parameters"]
         self.assertFalse(parameters["additionalProperties"])
-        self.assertFalse(
-            parameters["properties"]["location"]["additionalProperties"]
-        )
+        self.assertFalse(parameters["properties"]["location"]["additionalProperties"])
         self.assertFalse(parameters["$defs"]["Address"]["additionalProperties"])
 
     def test_openai_generate_filters_tools_without_custom_allowed_tools_wrapper(self):
@@ -726,9 +726,7 @@ class ClientBehaviorTests(unittest.TestCase):
                 )
             ],
         )
-        fake_response = SimpleNamespace(
-            choices=[SimpleNamespace(message=fake_message)]
-        )
+        fake_response = SimpleNamespace(choices=[SimpleNamespace(message=fake_message)])
         fake_completions = FakeOpenAICompletions(fake_response)
 
         client = OpenAIClient(config=OpenAIClientConfig(api_key="test"))
@@ -784,7 +782,9 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(result.usage.input_tokens, 11)
         self.assertEqual(result.usage.output_tokens, 7)
         self.assertEqual(result.usage.total_tokens, 18)
-        self.assertEqual(result.usage.details["prompt_tokens_details"]["cached_tokens"], 2)
+        self.assertEqual(
+            result.usage.details["prompt_tokens_details"]["cached_tokens"], 2
+        )
         self.assertEqual(
             result.usage.details["completion_tokens_details"]["reasoning_tokens"],
             3,
@@ -797,9 +797,7 @@ class ClientBehaviorTests(unittest.TestCase):
             content="final answer",
             tool_calls=None,
         )
-        fake_response = SimpleNamespace(
-            choices=[SimpleNamespace(message=fake_message)]
-        )
+        fake_response = SimpleNamespace(choices=[SimpleNamespace(message=fake_message)])
         fake_completions = FakeOpenAICompletions(fake_response)
 
         client = OpenAIClient(config=OpenAIClientConfig(api_key="test"))
@@ -874,9 +872,7 @@ class ClientBehaviorTests(unittest.TestCase):
             Exception("chat completions should not be used")
         )
 
-        client = ChatGPTClient(
-            config=ChatGPTClientConfig(access_token="test")
-        )
+        client = ChatGPTClient(config=ChatGPTClientConfig(access_token="test"))
         client._client = SimpleNamespace(
             responses=fake_responses,
             chat=SimpleNamespace(completions=fake_completions),
@@ -944,9 +940,7 @@ class ClientBehaviorTests(unittest.TestCase):
             )
         )
 
-        client = ChatGPTClient(
-            config=ChatGPTClientConfig(access_token="test")
-        )
+        client = ChatGPTClient(config=ChatGPTClientConfig(access_token="test"))
         client._client = SimpleNamespace(
             responses=fake_responses,
             chat=SimpleNamespace(completions=FakeOpenAICompletions(None)),
@@ -1018,9 +1012,7 @@ class ClientBehaviorTests(unittest.TestCase):
             )
         )
 
-        client = ChatGPTClient(
-            config=ChatGPTClientConfig(access_token="test")
-        )
+        client = ChatGPTClient(config=ChatGPTClientConfig(access_token="test"))
         client._client = SimpleNamespace(
             responses=fake_responses,
             chat=SimpleNamespace(completions=FakeOpenAICompletions(None)),
@@ -1038,7 +1030,9 @@ class ClientBehaviorTests(unittest.TestCase):
         )
         self.assertIsInstance(fake_responses.calls[0]["tool_choice"], openai.Omit)
 
-    def test_chatgpt_generate_falls_back_to_streamed_content_when_completed_output_is_empty(self):
+    def test_chatgpt_generate_falls_back_to_streamed_content_when_completed_output_is_empty(
+        self,
+    ):
         completed_response = SimpleNamespace(
             output=[],
             usage=SimpleNamespace(
@@ -1070,9 +1064,7 @@ class ClientBehaviorTests(unittest.TestCase):
             )
         )
 
-        client = ChatGPTClient(
-            config=ChatGPTClientConfig(access_token="test")
-        )
+        client = ChatGPTClient(config=ChatGPTClientConfig(access_token="test"))
         client._client = SimpleNamespace(
             responses=fake_responses,
             chat=SimpleNamespace(completions=FakeOpenAICompletions(None)),
@@ -1114,9 +1106,7 @@ class ClientBehaviorTests(unittest.TestCase):
             )
         )
 
-        client = ChatGPTClient(
-            config=ChatGPTClientConfig(access_token="test")
-        )
+        client = ChatGPTClient(config=ChatGPTClientConfig(access_token="test"))
         client._client = SimpleNamespace(
             responses=fake_responses,
             chat=SimpleNamespace(completions=FakeOpenAICompletions(None)),
@@ -1210,7 +1200,6 @@ class ClientBehaviorTests(unittest.TestCase):
                     )
                 ]
             )
-
 
     def test_openai_stream_emits_tool_chunks_and_completion_tool_calls(self):
         events = iter(
@@ -1331,7 +1320,9 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(payload_chunks[-1].usage.output_tokens, 4)
         self.assertEqual(payload_chunks[-1].usage.total_tokens, 14)
         self.assertEqual(
-            payload_chunks[-1].usage.details["completion_tokens_details"]["reasoning_tokens"],
+            payload_chunks[-1].usage.details["completion_tokens_details"][
+                "reasoning_tokens"
+            ],
             1,
         )
         self.assertIsNotNone(payload_chunks[-1].duration_seconds)
@@ -1346,9 +1337,7 @@ class ClientBehaviorTests(unittest.TestCase):
             content='{"answer":"pong"}',
             tool_calls=None,
         )
-        fake_response = SimpleNamespace(
-            choices=[SimpleNamespace(message=fake_message)]
-        )
+        fake_response = SimpleNamespace(choices=[SimpleNamespace(message=fake_message)])
         fake_completions = FakeOpenAICompletions(fake_response)
 
         client = OpenAIClient(config=OpenAIClientConfig(api_key="test"))
@@ -1369,9 +1358,7 @@ class ClientBehaviorTests(unittest.TestCase):
             content='{"answer":"pong"}',
             tool_calls=None,
         )
-        fake_response = SimpleNamespace(
-            choices=[SimpleNamespace(message=fake_message)]
-        )
+        fake_response = SimpleNamespace(choices=[SimpleNamespace(message=fake_message)])
         fake_completions = FakeOpenAICompletions(fake_response)
 
         client = OpenAIClient(config=OpenAIClientConfig(api_key="test"))
@@ -1393,7 +1380,9 @@ class ClientBehaviorTests(unittest.TestCase):
 
         self.assertEqual(result.content, {"answer": "pong"})
         self.assertEqual(
-            fake_completions.calls[0]["response_format"]["json_schema"]["schema"]["type"],
+            fake_completions.calls[0]["response_format"]["json_schema"]["schema"][
+                "type"
+            ],
             "object",
         )
 
@@ -1779,9 +1768,7 @@ class ClientBehaviorTests(unittest.TestCase):
             content='{"answer":"pong"}',
             tool_calls=None,
         )
-        fake_response = SimpleNamespace(
-            choices=[SimpleNamespace(message=fake_message)]
-        )
+        fake_response = SimpleNamespace(choices=[SimpleNamespace(message=fake_message)])
         fake_completions = FakeOpenAICompletions(fake_response)
         schema = {
             "type": "object",
@@ -1923,9 +1910,7 @@ class ClientBehaviorTests(unittest.TestCase):
             content='{"answer":"pong"}',
             tool_calls=None,
         )
-        fake_response = SimpleNamespace(
-            choices=[SimpleNamespace(message=fake_message)]
-        )
+        fake_response = SimpleNamespace(choices=[SimpleNamespace(message=fake_message)])
         fake_completions = FakeOpenAICompletions(fake_response)
 
         client = OpenAIClient(config=OpenAIClientConfig(api_key="test"))
@@ -1966,7 +1951,9 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertFalse(
             fake_completions.calls[0]["response_format"]["json_schema"]["strict"]
         )
-        sent_schema = fake_completions.calls[0]["response_format"]["json_schema"]["schema"]
+        sent_schema = fake_completions.calls[0]["response_format"]["json_schema"][
+            "schema"
+        ]
         self.assertEqual(sent_schema["properties"]["title"]["minLength"], 20)
         self.assertEqual(sent_schema["properties"]["url"]["format"], "uri")
         self.assertEqual(
@@ -2032,7 +2019,9 @@ class ClientBehaviorTests(unittest.TestCase):
                 SimpleNamespace(
                     choices=[
                         SimpleNamespace(
-                            delta=SimpleNamespace(content='{"answer":"', tool_calls=None)
+                            delta=SimpleNamespace(
+                                content='{"answer":"', tool_calls=None
+                            )
                         )
                     ]
                 ),
@@ -2138,7 +2127,9 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(result.usage.input_tokens, 11)
         self.assertEqual(result.usage.output_tokens, 7)
         self.assertEqual(result.usage.total_tokens, 18)
-        self.assertEqual(result.usage.details["input_tokens_details"]["cached_tokens"], 2)
+        self.assertEqual(
+            result.usage.details["input_tokens_details"]["cached_tokens"], 2
+        )
         self.assertEqual(
             result.usage.details["output_tokens_details"]["reasoning_tokens"],
             3,
@@ -2186,7 +2177,9 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(openai_input[0]["id"], "msg_1")
         self.assertNotIn("status", openai_input[0])
 
-    def test_openai_responses_does_not_synthesize_reasoning_ids_from_plain_thinking(self):
+    def test_openai_responses_does_not_synthesize_reasoning_ids_from_plain_thinking(
+        self,
+    ):
         client = OpenAIClient(
             config=OpenAIClientConfig(
                 api_key="test",
@@ -2529,13 +2522,17 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(payload_chunks[-1].usage.output_tokens, 4)
         self.assertEqual(payload_chunks[-1].usage.total_tokens, 14)
         self.assertEqual(
-            payload_chunks[-1].usage.details["output_tokens_details"]["reasoning_tokens"],
+            payload_chunks[-1].usage.details["output_tokens_details"][
+                "reasoning_tokens"
+            ],
             2,
         )
         self.assertTrue(fake_responses.calls[0]["stream"])
         self.assertNotIn("instructions", fake_responses.calls[0])
 
-    def test_openai_responses_stream_falls_back_to_streamed_message_id_when_completed_output_is_empty(self):
+    def test_openai_responses_stream_falls_back_to_streamed_message_id_when_completed_output_is_empty(
+        self,
+    ):
         completed_response = SimpleNamespace(
             output=[],
             usage=SimpleNamespace(
@@ -2697,7 +2694,9 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(payload_chunks[0].chunk, "Plan")
         self.assertEqual(payload_chunks[1].chunk, "Reflect")
         self.assertEqual(payload_chunks[2].chunk, "Hello")
-        self.assertEqual(thinking_texts(payload_chunks[-1].thinking), ["Plan", "Reflect"])
+        self.assertEqual(
+            thinking_texts(payload_chunks[-1].thinking), ["Plan", "Reflect"]
+        )
         self.assertEqual(
             thinking_texts(payload_chunks[-1].messages[-1].thinking),
             ["Plan", "Reflect"],
@@ -2729,6 +2728,7 @@ class ClientBehaviorTests(unittest.TestCase):
                     endpoint="https://azure.example.openai.azure.com",
                     api_version="2024-10-21",
                     deployment="gpt-4.1",
+                    api_type=OpenAIApiType.COMPLETIONS,
                 )
             )
 
@@ -2742,6 +2742,21 @@ class ClientBehaviorTests(unittest.TestCase):
             azure_deployment="gpt-4.1",
         )
 
+    def test_azure_responses_init_uses_stable_v1_base_url(self):
+        with patch("llmai.azure.client.OpenAI") as openai_cls:
+            AzureOpenAIClient(
+                config=AzureOpenAIClientConfig(
+                    api_key="test",
+                    endpoint="https://azure.example.openai.azure.com",
+                    api_version="2024-10-21",
+                )
+            )
+
+        openai_cls.assert_called_once_with(
+            base_url="https://azure.example.openai.azure.com/openai/v1/",
+            api_key="test",
+        )
+
     def test_azure_init_uses_base_url_ad_token_and_api_version(self):
         with patch("llmai.azure.client.AzureOpenAI") as azure_openai_cls:
             AzureOpenAIClient(
@@ -2749,6 +2764,7 @@ class ClientBehaviorTests(unittest.TestCase):
                     azure_ad_token="azure-ad-token",
                     base_url="https://azure.example.openai.azure.com/openai/v1",
                     api_version="2024-10-21",
+                    api_type=OpenAIApiType.COMPLETIONS,
                 )
             )
 
@@ -2782,14 +2798,14 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(context.exception.provider, "azure")
         self.assertIn("base_url or endpoint", context.exception.message)
 
-    def test_azure_config_does_not_accept_api_type(self):
-        with self.assertRaises(ValidationError):
-            AzureOpenAIClientConfig(
-                api_key="test",
-                endpoint="https://azure.example.openai.azure.com",
-                api_version="2024-10-21",
-                api_type=OpenAIApiType.RESPONSES,
-            )
+    def test_azure_config_defaults_to_responses_api_type(self):
+        config = AzureOpenAIClientConfig(
+            api_key="test",
+            endpoint="https://azure.example.openai.azure.com",
+            api_version="2024-10-21",
+        )
+
+        self.assertEqual(config.api_type, OpenAIApiType.RESPONSES)
 
     def test_azure_generate_wraps_provider_auth_errors(self):
         request = httpx.Request(
@@ -2810,6 +2826,7 @@ class ClientBehaviorTests(unittest.TestCase):
                 api_key="test",
                 endpoint="https://azure.example.openai.azure.com",
                 api_version="2024-10-21",
+                api_type=OpenAIApiType.COMPLETIONS,
             )
         )
         client._client = SimpleNamespace(
@@ -2824,7 +2841,7 @@ class ClientBehaviorTests(unittest.TestCase):
 
         self.assertEqual(context.exception.provider, "azure")
 
-    def test_azure_always_uses_chat_completions(self):
+    def test_azure_can_use_chat_completions(self):
         fake_response = SimpleNamespace(
             choices=[
                 SimpleNamespace(
@@ -2845,6 +2862,7 @@ class ClientBehaviorTests(unittest.TestCase):
                 api_key="test",
                 endpoint="https://azure.example.openai.azure.com",
                 api_version="2024-10-21",
+                api_type=OpenAIApiType.COMPLETIONS,
             )
         )
         client._client = SimpleNamespace(
@@ -2860,6 +2878,60 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(result.content[0].text, "hello")
         self.assertTrue(fake_completions.calls)
         self.assertFalse(fake_responses.calls)
+
+    def test_azure_responses_uses_reasoning_and_reports_reasoning_tokens(self):
+        fake_response = SimpleNamespace(
+            output=[
+                SimpleNamespace(
+                    id="rs_azure",
+                    type="reasoning",
+                    summary=[SimpleNamespace(text="Checked the tradeoffs.")],
+                ),
+                SimpleNamespace(
+                    id="msg_azure",
+                    type="message",
+                    content=[
+                        SimpleNamespace(type="output_text", text="Final answer")
+                    ],
+                ),
+            ],
+            usage=SimpleNamespace(
+                input_tokens=20,
+                output_tokens=15,
+                total_tokens=35,
+                input_tokens_details=SimpleNamespace(cached_tokens=0),
+                output_tokens_details=SimpleNamespace(reasoning_tokens=8),
+            ),
+        )
+        fake_responses = FakeOpenAIResponses(fake_response)
+        client = AzureOpenAIClient(
+            config=AzureOpenAIClientConfig(
+                api_key="test",
+                endpoint="https://azure.example.openai.azure.com",
+                api_version="2024-10-21",
+            )
+        )
+        client._client = SimpleNamespace(responses=fake_responses)
+
+        result = client.generate(
+            model="gpt-5.4-mini",
+            messages=[UserMessage(content=text_parts("Think carefully"))],
+            reasoning_effort=ReasoningEffort(
+                effort=ReasoningEffortValue.LOW,
+                summary=ReasoningSummary.AUTO,
+            ),
+        )
+
+        self.assertEqual(result.content[0].text, "Final answer")
+        self.assertEqual(thinking_texts(result.thinking), ["Checked the tradeoffs."])
+        self.assertEqual(
+            result.usage.details["output_tokens_details"]["reasoning_tokens"],
+            8,
+        )
+        self.assertEqual(
+            fake_responses.calls[0]["reasoning"],
+            {"effort": "low", "summary": "auto"},
+        )
 
     def test_vertex_init_uses_vertex_genai_client_configuration(self):
         with patch("llmai.google.client.genai.Client") as genai_client_cls:
@@ -2894,7 +2966,9 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertIsNone(genai_client_cls.call_args.kwargs["api_key"])
         self.assertEqual(genai_client_cls.call_args.kwargs["project"], "vertex-project")
         self.assertEqual(genai_client_cls.call_args.kwargs["location"], "us-central1")
-        self.assertIsInstance(genai_client_cls.call_args.kwargs["http_options"], HttpOptions)
+        self.assertIsInstance(
+            genai_client_cls.call_args.kwargs["http_options"], HttpOptions
+        )
         self.assertEqual(
             genai_client_cls.call_args.kwargs["http_options"].base_url,
             "https://vertex.example",
@@ -2909,12 +2983,16 @@ class ClientBehaviorTests(unittest.TestCase):
             )
 
         self.assertEqual(context.exception.provider, "vertex")
-        self.assertIn("either api_key or project/location/credentials", context.exception.message)
+        self.assertIn(
+            "either api_key or project/location/credentials", context.exception.message
+        )
 
     def test_vertex_init_wraps_configuration_errors(self):
         with patch(
             "llmai.google.client.genai.Client",
-            side_effect=ValueError("Project or API key must be set when using the Vertex AI API."),
+            side_effect=ValueError(
+                "Project or API key must be set when using the Vertex AI API."
+            ),
         ):
             with self.assertRaises(LLMConfigurationError) as context:
                 VertexAIClient(config=VertexAIClientConfig(api_key="test"))
@@ -3721,7 +3799,9 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(payload_chunks[-1].content, {"answer": "done"})
         self.assertEqual(payload_chunks[-1].tool_calls, [])
         self.assertEqual(payload_chunks[-1].messages[-1].tool_calls, [])
-        self.assertEqual(payload_chunks[-1].messages[-1].content[0].text, '{"answer":"done"}')
+        self.assertEqual(
+            payload_chunks[-1].messages[-1].content[0].text, '{"answer":"done"}'
+        )
         self.assertEqual(payload_chunks[-1].usage.input_tokens, 8)
         self.assertEqual(payload_chunks[-1].usage.output_tokens, 3)
         self.assertEqual(payload_chunks[-1].usage.total_tokens, 11)
@@ -3755,9 +3835,7 @@ class ClientBehaviorTests(unittest.TestCase):
                 )
             ],
         )
-        fake_response = SimpleNamespace(
-            choices=[SimpleNamespace(message=fake_message)]
-        )
+        fake_response = SimpleNamespace(choices=[SimpleNamespace(message=fake_message)])
         fake_completions = FakeOpenAICompletions(fake_response)
 
         client = DeepSeekClient(config=DeepSeekClientConfig(api_key="test"))
@@ -3874,7 +3952,9 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(payload_chunks[2].type, "tool_complete")
         self.assertEqual(payload_chunks[2].tool, "get_weather")
         self.assertEqual(payload_chunks[2].arguments, '{"city":"Kathmandu"}')
-        self.assertEqual(payload_chunks[-1].tool_calls[0].arguments, '{"city":"Kathmandu"}')
+        self.assertEqual(
+            payload_chunks[-1].tool_calls[0].arguments, '{"city":"Kathmandu"}'
+        )
 
     def test_deepseek_generate_does_not_expose_structured_output_toggle(self):
         self.assertNotIn(
@@ -3927,7 +4007,9 @@ class ClientBehaviorTests(unittest.TestCase):
             )
         )
 
-        self.assertEqual([tool["name"] for tool in anthropic_tools], ["weather", "time"])
+        self.assertEqual(
+            [tool["name"] for tool in anthropic_tools], ["weather", "time"]
+        )
         self.assertEqual(tool_choice, {"type": "any"})
 
     def test_anthropic_web_search_maps_to_server_tool(self):
@@ -4025,9 +4107,7 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertTrue(anthropic_tools[0]["strict"])
         input_schema = anthropic_tools[0]["input_schema"]
         self.assertFalse(input_schema["additionalProperties"])
-        self.assertFalse(
-            input_schema["properties"]["location"]["additionalProperties"]
-        )
+        self.assertFalse(input_schema["properties"]["location"]["additionalProperties"])
         self.assertFalse(input_schema["$defs"]["Address"]["additionalProperties"])
 
     def test_anthropic_tool_schemas_keep_non_strict_keywords(self):
@@ -4059,7 +4139,9 @@ class ClientBehaviorTests(unittest.TestCase):
         input_schema = anthropic_tools[0]["input_schema"]
         self.assertEqual(input_schema["properties"]["cities"]["maxItems"], 3)
 
-    def test_anthropic_non_strict_tool_schemas_do_not_ensure_additional_properties(self):
+    def test_anthropic_non_strict_tool_schemas_do_not_ensure_additional_properties(
+        self,
+    ):
         client = AnthropicClient(config=AnthropicClientConfig(api_key="test"))
 
         anthropic_tools, _ = client._get_anthropic_tools_and_tool_choice_or_omit(
@@ -4116,7 +4198,7 @@ class ClientBehaviorTests(unittest.TestCase):
                                     "type": "array",
                                     "items": {"type": "string"},
                                     "maxItems": 3,
-                                }
+                                },
                             },
                         }
                     },
@@ -4342,15 +4424,13 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertTrue(fake_messages.calls[0]["tools"][0]["strict"])
         self.assertNotIn(
             "maxItems",
-            fake_messages.calls[0]["tools"][0]["input_schema"]["properties"][
-                "cities"
-            ],
+            fake_messages.calls[0]["tools"][0]["input_schema"]["properties"]["cities"],
         )
         self.assertFalse(fake_messages.calls[1]["tools"][0]["strict"])
         self.assertEqual(
-            fake_messages.calls[1]["tools"][0]["input_schema"]["properties"][
-                "cities"
-            ]["maxItems"],
+            fake_messages.calls[1]["tools"][0]["input_schema"]["properties"]["cities"][
+                "maxItems"
+            ],
             3,
         )
         self.assertEqual(len(logger.warnings), 1)
@@ -4522,7 +4602,9 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(payload_chunks[-1].usage.input_tokens, 9)
         self.assertEqual(payload_chunks[-1].usage.output_tokens, 2)
         self.assertEqual(payload_chunks[-1].usage.total_tokens, 11)
-        self.assertEqual(payload_chunks[-1].usage.details["cache_creation_input_tokens"], 1)
+        self.assertEqual(
+            payload_chunks[-1].usage.details["cache_creation_input_tokens"], 1
+        )
         self.assertIsNotNone(payload_chunks[-1].duration_seconds)
         self.assertGreaterEqual(payload_chunks[-1].duration_seconds, 0)
 
@@ -4588,7 +4670,9 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(payload_chunks[0].chunk, "Plan")
         self.assertEqual(payload_chunks[1].chunk, "Reflect")
         self.assertEqual(payload_chunks[2].chunk, "Hello")
-        self.assertEqual(thinking_texts(payload_chunks[-1].thinking), ["Plan", "Reflect"])
+        self.assertEqual(
+            thinking_texts(payload_chunks[-1].thinking), ["Plan", "Reflect"]
+        )
         self.assertEqual(
             thinking_texts(payload_chunks[-1].messages[-1].thinking),
             ["Plan", "Reflect"],
@@ -4785,7 +4869,9 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(payload_chunks[2].type, "tool_complete")
         self.assertEqual(payload_chunks[2].tool, "get_weather")
         self.assertEqual(payload_chunks[2].arguments, '{"city": "Kathmandu"}')
-        self.assertEqual(payload_chunks[-1].tool_calls[0].arguments, '{"city": "Kathmandu"}')
+        self.assertEqual(
+            payload_chunks[-1].tool_calls[0].arguments, '{"city": "Kathmandu"}'
+        )
 
     def test_google_required_tool_choice_uses_any_mode_with_allowed_names(self):
         client = GoogleClient(config=GoogleClientConfig(api_key="test"))
@@ -5157,7 +5243,9 @@ class ClientBehaviorTests(unittest.TestCase):
                 UserMessage(
                     content=[
                         TextContentPart(text="Describe this"),
-                        ImageContentPart(url="https://example.com/cat.png", mime_type="image/png"),
+                        ImageContentPart(
+                            url="https://example.com/cat.png", mime_type="image/png"
+                        ),
                         ImageContentPart(data=b"png-bytes", mime_type="image/png"),
                     ]
                 )
@@ -5165,7 +5253,9 @@ class ClientBehaviorTests(unittest.TestCase):
         )
 
         self.assertEqual(messages[0].parts[0].text, "Describe this")
-        self.assertEqual(messages[0].parts[1].file_data.file_uri, "https://example.com/cat.png")
+        self.assertEqual(
+            messages[0].parts[1].file_data.file_uri, "https://example.com/cat.png"
+        )
         self.assertEqual(messages[0].parts[1].file_data.mime_type, "image/png")
         self.assertEqual(messages[0].parts[2].inline_data.data, b"png-bytes")
         self.assertEqual(messages[0].parts[2].inline_data.mime_type, "image/png")
@@ -5397,7 +5487,7 @@ class ClientBehaviorTests(unittest.TestCase):
                                             inline_data=None,
                                             file_data=None,
                                             function_call=None,
-                                        )
+                                        ),
                                     ]
                                 )
                             )
@@ -5555,7 +5645,9 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(payload_chunks[0].chunk, "Plan")
         self.assertEqual(payload_chunks[1].chunk, "Reflect")
         self.assertEqual(payload_chunks[2].chunk, "Hello")
-        self.assertEqual(thinking_texts(payload_chunks[-1].thinking), ["Plan", "Reflect"])
+        self.assertEqual(
+            thinking_texts(payload_chunks[-1].thinking), ["Plan", "Reflect"]
+        )
         self.assertEqual(
             thinking_texts(payload_chunks[-1].messages[-1].thinking),
             ["Plan", "Reflect"],
@@ -5597,7 +5689,9 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(result.content, {"answer": "done"})
         self.assertEqual(result.tool_calls, [])
         self.assertEqual(result.messages[-1].tool_calls, [])
-        self.assertEqual(fake_models.calls[0]["config"].response_mime_type, "application/json")
+        self.assertEqual(
+            fake_models.calls[0]["config"].response_mime_type, "application/json"
+        )
         self.assertIsNotNone(fake_models.calls[0]["config"].response_json_schema)
 
     def test_google_generate_wraps_provider_auth_errors(self):
@@ -5872,10 +5966,14 @@ class ClientBehaviorTests(unittest.TestCase):
         )
         self.assertIn(
             '"type": "object"',
-            fake_runtime.calls[0]["outputConfig"]["textFormat"]["structure"]["jsonSchema"]["schema"],
+            fake_runtime.calls[0]["outputConfig"]["textFormat"]["structure"][
+                "jsonSchema"
+            ]["schema"],
         )
 
-    def test_bedrock_native_structured_output_forbids_additional_properties_for_both_strict_values(self):
+    def test_bedrock_native_structured_output_forbids_additional_properties_for_both_strict_values(
+        self,
+    ):
         schema = {
             "type": "object",
             "properties": {
@@ -5897,7 +5995,7 @@ class ClientBehaviorTests(unittest.TestCase):
                         "style": {
                             "type": "string",
                             "enum": ["photo", "diagram"],
-                        }
+                        },
                     },
                     "required": ["prompt", "style"],
                 },
@@ -5925,11 +6023,15 @@ class ClientBehaviorTests(unittest.TestCase):
                 )
 
                 sent_schema = json.loads(
-                    fake_runtime.calls[0]["outputConfig"]["textFormat"]["structure"]["jsonSchema"]["schema"]
+                    fake_runtime.calls[0]["outputConfig"]["textFormat"]["structure"][
+                        "jsonSchema"
+                    ]["schema"]
                 )
                 self.assertNotIn("maxItems", sent_schema["properties"]["bulletPoints"])
                 self.assertNotIn("minItems", sent_schema["properties"]["bulletPoints"])
-                prompt_schema = sent_schema["properties"]["image"]["properties"]["prompt"]
+                prompt_schema = sent_schema["properties"]["image"]["properties"][
+                    "prompt"
+                ]
                 self.assertEqual(prompt_schema["description"], "Prompt to render")
                 self.assertNotIn("format", prompt_schema)
                 self.assertNotIn("minWords", prompt_schema)
@@ -5958,7 +6060,9 @@ class ClientBehaviorTests(unittest.TestCase):
 
         self.assertIsNone(tool_config)
 
-    def test_bedrock_tool_schemas_forbid_additional_properties_and_strip_unsupported_fields(self):
+    def test_bedrock_tool_schemas_forbid_additional_properties_and_strip_unsupported_fields(
+        self,
+    ):
         fake_runtime = FakeBedrockRuntimeClient(response={})
         client, _, _ = self.make_bedrock_client(
             fake_runtime,
@@ -6052,7 +6156,7 @@ class ClientBehaviorTests(unittest.TestCase):
                             "CityWithRegion": {
                                 "type": "string",
                                 "minLength": 5,
-                            }
+                            },
                         },
                     },
                 )
@@ -6175,7 +6279,9 @@ class ClientBehaviorTests(unittest.TestCase):
                 model="anthropic.claude-3-5-haiku",
                 messages=[
                     AssistantMessage(
-                        content=[ImageContentPart(data=b"png-bytes", mime_type="image/png")]
+                        content=[
+                            ImageContentPart(data=b"png-bytes", mime_type="image/png")
+                        ]
                     )
                 ],
             )
@@ -6206,25 +6312,19 @@ class ClientBehaviorTests(unittest.TestCase):
                         {
                             "contentBlockDelta": {
                                 "contentBlockIndex": 0,
-                                "delta": {
-                                    "reasoningContent": {"text": "Plan"}
-                                },
+                                "delta": {"reasoningContent": {"text": "Plan"}},
                             }
                         },
                         {
                             "contentBlockDelta": {
                                 "contentBlockIndex": 1,
-                                "delta": {
-                                    "toolUse": {"input": '{"city":"Kath'}
-                                },
+                                "delta": {"toolUse": {"input": '{"city":"Kath'}},
                             }
                         },
                         {
                             "contentBlockDelta": {
                                 "contentBlockIndex": 1,
-                                "delta": {
-                                    "toolUse": {"input": 'mandu"}'}
-                                },
+                                "delta": {"toolUse": {"input": 'mandu"}'}},
                             }
                         },
                         {
@@ -6322,9 +6422,7 @@ class ClientBehaviorTests(unittest.TestCase):
                         {
                             "contentBlockDelta": {
                                 "contentBlockIndex": 0,
-                                "delta": {
-                                    "reasoningContent": {"text": "Plan"}
-                                },
+                                "delta": {"reasoningContent": {"text": "Plan"}},
                             }
                         },
                         {
@@ -6335,9 +6433,7 @@ class ClientBehaviorTests(unittest.TestCase):
                         {
                             "contentBlockDelta": {
                                 "contentBlockIndex": 1,
-                                "delta": {
-                                    "reasoningContent": {"text": "Reflect"}
-                                },
+                                "delta": {"reasoningContent": {"text": "Reflect"}},
                             }
                         },
                         {
@@ -6386,7 +6482,9 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(payload_chunks[0].chunk, "Plan")
         self.assertEqual(payload_chunks[1].chunk, "Reflect")
         self.assertEqual(payload_chunks[2].chunk, "Hello")
-        self.assertEqual(thinking_texts(payload_chunks[-1].thinking), ["Plan", "Reflect"])
+        self.assertEqual(
+            thinking_texts(payload_chunks[-1].thinking), ["Plan", "Reflect"]
+        )
         self.assertEqual(
             thinking_texts(payload_chunks[-1].messages[-1].thinking),
             ["Plan", "Reflect"],
@@ -6411,17 +6509,13 @@ class ClientBehaviorTests(unittest.TestCase):
                         {
                             "contentBlockDelta": {
                                 "contentBlockIndex": 0,
-                                "delta": {
-                                    "toolUse": {"input": '{"city":"Kath'}
-                                },
+                                "delta": {"toolUse": {"input": '{"city":"Kath'}},
                             }
                         },
                         {
                             "contentBlockDelta": {
                                 "contentBlockIndex": 0,
-                                "delta": {
-                                    "toolUse": {"input": 'mandu"}'}
-                                },
+                                "delta": {"toolUse": {"input": 'mandu"}'}},
                             }
                         },
                     ]
@@ -6454,7 +6548,9 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertTrue(tool_chunk_1.id.startswith("call_"))
         self.assertEqual(tool_chunk_1.id, tool_chunk_2.id)
         self.assertEqual(completion_chunk.tool_calls[0].id, tool_chunk_1.id)
-        self.assertEqual(completion_chunk.messages[-1].tool_calls[0].id, tool_chunk_1.id)
+        self.assertEqual(
+            completion_chunk.messages[-1].tool_calls[0].id, tool_chunk_1.id
+        )
 
     def test_bedrock_generate_wraps_provider_rate_limit_errors(self):
         fake_runtime = FakeBedrockRuntimeClient(

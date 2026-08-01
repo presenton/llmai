@@ -12,8 +12,10 @@ from botocore.tokens import FrozenAuthToken, TokenProviderChain
 from llmai.shared.base import BaseClient
 from llmai.shared.configs import BedrockClientConfig
 from llmai.shared.errors import LLMError, configuration_error, raise_llm_error
+from llmai.shared.generation import GenerationProfile
 from llmai.shared.messages import (
     AssistantMessage,
+    AssistantReasoningItem,
     AssistantToolCall,
     ImageContentPart,
     Message,
@@ -27,10 +29,10 @@ from llmai.shared.messages import (
     content_has_images,
     normalize_content_parts,
 )
-from llmai.shared.reasoning import ReasoningEffort
+from llmai.shared.reasoning import ReasoningConfig, ReasoningEffort
 from llmai.shared.response_formats import (
-    JSONSchemaResponse,
     JSONObjectResponse,
+    JSONSchemaResponse,
     ResponseFormat,
     get_response_format_strict,
     get_response_schema,
@@ -41,8 +43,8 @@ from llmai.shared.responses import (
     ResponseStreamCompletionChunk,
     ResponseStreamContentChunk,
     ResponseStreamThinkingChunk,
-    ResponseStreamToolCompleteChunk,
     ResponseStreamToolChunk,
+    ResponseStreamToolCompleteChunk,
     ResponseUsage,
 )
 from llmai.shared.schema import get_schema_as_dict, process_schema
@@ -85,7 +87,7 @@ class BedrockClient(BaseClient):
         config: BedrockClientConfig,
         logger: Logger | None = None,
     ):
-        super().__init__(logger=logger)
+        super().__init__(logger=logger, generation_defaults=config.generation)
 
         explicit_aws_auth = any(
             value is not None
@@ -164,7 +166,9 @@ class BedrockClient(BaseClient):
 
         return mapping[normalized]
 
-    def _bedrock_image_format_to_mime_type(self, image_format: str | None) -> str | None:
+    def _bedrock_image_format_to_mime_type(
+        self, image_format: str | None
+    ) -> str | None:
         if not image_format:
             return None
         return f"image/{image_format}"
@@ -218,7 +222,9 @@ class BedrockClient(BaseClient):
 
         for part in normalize_content_parts(content):
             if isinstance(part, ImageContentPart):
-                blocks.append({"image": self._image_content_part_to_bedrock_image(part)})
+                blocks.append(
+                    {"image": self._image_content_part_to_bedrock_image(part)}
+                )
             else:
                 blocks.append({"text": part.text})
 
@@ -240,7 +246,22 @@ class BedrockClient(BaseClient):
                 "Bedrock Converse does not support assistant image content in conversation history",
             )
 
-        content_blocks = self._content_to_bedrock_blocks(message.content)
+        content_blocks: list[dict[str, object]] = []
+        for item in message.thinking or []:
+            if item.raw and "reasoningContent" in item.raw:
+                content_blocks.append(item.raw)
+                continue
+            reasoning_content: dict[str, object] = {}
+            if item.summary:
+                reasoning_text: dict[str, object] = {"text": "\n".join(item.summary)}
+                if item.signature:
+                    reasoning_text["signature"] = item.signature
+                reasoning_content["reasoningText"] = reasoning_text
+            if item.redacted_content is not None:
+                reasoning_content["redactedContent"] = item.redacted_content
+            if reasoning_content:
+                content_blocks.append({"reasoningContent": reasoning_content})
+        content_blocks.extend(self._content_to_bedrock_blocks(message.content))
         for tool_call in message.tool_calls:
             content_blocks.append(
                 {
@@ -302,7 +323,9 @@ class BedrockClient(BaseClient):
 
         return bedrock_messages
 
-    def _get_system_blocks(self, messages: list[Message]) -> list[dict[str, object]] | None:
+    def _get_system_blocks(
+        self, messages: list[Message]
+    ) -> list[dict[str, object]] | None:
         system_blocks: list[dict[str, object]] = []
 
         for message in messages:
@@ -410,9 +433,8 @@ class BedrockClient(BaseClient):
         text_content = "".join(
             part.text for part in (content or []) if isinstance(part, TextContentPart)
         )
-        if (
-            text_content
-            and isinstance(response_format, (JSONSchemaResponse, JSONObjectResponse))
+        if text_content and isinstance(
+            response_format, (JSONSchemaResponse, JSONObjectResponse)
         ):
             return json.loads(text_content)
 
@@ -443,6 +465,7 @@ class BedrockClient(BaseClient):
         *,
         content_parts: list[TextContentPart | ImageContentPart],
         thinking_blocks: list[str],
+        thinking_items: list[AssistantReasoningItem] | None = None,
         user_tool_calls: list[AssistantToolCall],
     ) -> None:
         text = block.get("text")
@@ -456,8 +479,26 @@ class BedrockClient(BaseClient):
         reasoning_content = block.get("reasoningContent") or {}
         if isinstance(reasoning_content, dict):
             reasoning_text = reasoning_content.get("reasoningText") or {}
-            if isinstance(reasoning_text, dict) and reasoning_text.get("text"):
-                thinking_blocks.append(reasoning_text["text"])
+            reasoning_value = (
+                reasoning_text.get("text") if isinstance(reasoning_text, dict) else None
+            )
+            if reasoning_value:
+                thinking_blocks.append(reasoning_value)
+            redacted = reasoning_content.get("redactedContent")
+            if thinking_items is not None and (reasoning_value or redacted is not None):
+                thinking_items.append(
+                    AssistantReasoningItem(
+                        summary=[reasoning_value] if reasoning_value else [],
+                        signature=(
+                            reasoning_text.get("signature")
+                            if isinstance(reasoning_text, dict)
+                            else None
+                        ),
+                        redacted_content=redacted,
+                        provider="bedrock",
+                        raw=block,
+                    )
+                )
 
         citations_content = block.get("citationsContent") or {}
         if isinstance(citations_content, dict):
@@ -485,6 +526,7 @@ class BedrockClient(BaseClient):
     ) -> tuple[AssistantMessage, list[AssistantToolCall]]:
         content_parts: list[TextContentPart | ImageContentPart] = []
         thinking_blocks: list[str] = []
+        thinking_items: list[AssistantReasoningItem] = []
         user_tool_calls: list[AssistantToolCall] = []
 
         for block in (message or {}).get("content") or []:
@@ -493,12 +535,13 @@ class BedrockClient(BaseClient):
                     block,
                     content_parts=content_parts,
                     thinking_blocks=thinking_blocks,
+                    thinking_items=thinking_items,
                     user_tool_calls=user_tool_calls,
                 )
 
         assistant_message = AssistantMessage(
             content=collapse_content_parts(content_parts),
-            thinking=collapse_thinking_blocks(thinking_blocks),
+            thinking=thinking_items or collapse_thinking_blocks(thinking_blocks),
             tool_calls=user_tool_calls,
         )
         return assistant_message, user_tool_calls
@@ -532,7 +575,9 @@ class BedrockClient(BaseClient):
     ) -> dict[str, object] | None:
         fields = dict(extra_body or {})
         fields.setdefault("thinking", self._get_bedrock_thinking(reasoning_effort))
-        return {key: value for key, value in fields.items() if value is not None} or None
+        return {
+            key: value for key, value in fields.items() if value is not None
+        } or None
 
     def _converse_kwargs(
         self,
@@ -608,10 +653,25 @@ class BedrockClient(BaseClient):
         tool_choice: ToolChoice | None = None,
         response_format: ResponseFormat | None = None,
         max_tokens: int | None = None,
+        max_output_tokens: int | None = None,
+        profile: GenerationProfile | str | None = None,
+        reasoning: ReasoningConfig | None = None,
         reasoning_effort: ReasoningEffort | None = None,
         extra_body: dict | None = None,
         stream: bool = False,
     ) -> ResponseResult:
+        prepared = self.prepare_generation(
+            model=model,
+            profile=profile,
+            max_tokens=max_tokens,
+            max_output_tokens=max_output_tokens,
+            reasoning=reasoning,
+            reasoning_effort=reasoning_effort,
+            tools_requested=bool(tools),
+        )
+        max_tokens = prepared.max_output_tokens
+        reasoning_effort = prepared.reasoning_effort
+        messages = self._prepare_reasoning_history(messages, prepared.reasoning.history)
         if stream:
             return self._generate_stream(
                 model=model,
@@ -668,8 +728,8 @@ class BedrockClient(BaseClient):
             duration_seconds = perf_counter() - start_time
 
             response_message = ((response.get("output") or {}).get("message")) or {}
-            assistant_message, user_tool_calls = self._response_message_to_assistant_message(
-                response_message
+            assistant_message, user_tool_calls = (
+                self._response_message_to_assistant_message(response_message)
             )
             new_messages = [*messages, assistant_message]
 
@@ -748,7 +808,9 @@ class BedrockClient(BaseClient):
                     if isinstance(tool_use, dict):
                         content_blocks[index] = {
                             "toolUse": {
-                                "toolUseId": self._tool_call_id(tool_use.get("toolUseId")),
+                                "toolUseId": self._tool_call_id(
+                                    tool_use.get("toolUseId")
+                                ),
                                 "name": tool_use.get("name"),
                                 "input": "",
                             }
@@ -810,7 +872,9 @@ class BedrockClient(BaseClient):
                     yield ResponseStreamContentChunk(chunk=delta["text"])
 
                 reasoning_content = delta.get("reasoningContent") or {}
-                if isinstance(reasoning_content, dict) and reasoning_content.get("text"):
+                if isinstance(reasoning_content, dict) and reasoning_content.get(
+                    "text"
+                ):
                     if index not in thinking_blocks_by_index:
                         thinking_blocks_by_index[index] = ""
                         thinking_order.append(index)
@@ -844,7 +908,10 @@ class BedrockClient(BaseClient):
                     )
 
                 tool_use_delta = delta.get("toolUse") or {}
-                if isinstance(tool_use_delta, dict) and tool_use_delta.get("input") is not None:
+                if (
+                    isinstance(tool_use_delta, dict)
+                    and tool_use_delta.get("input") is not None
+                ):
                     current = content_blocks.setdefault(
                         index,
                         {

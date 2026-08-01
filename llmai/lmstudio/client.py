@@ -43,6 +43,7 @@ class LMStudioClient(OpenAIClient):
                 api_key=config.api_key or self.DEFAULT_API_KEY,
                 base_url=self._base_url(config.base_url),
                 api_type=OpenAIApiType.COMPLETIONS,
+                generation=config.generation,
             ),
             logger=logger,
         )
@@ -86,7 +87,9 @@ class LMStudioClient(OpenAIClient):
         message: AssistantMessage,
     ):
         lmstudio_message = (
-            super()._assistant_message_to_chat_completion_assistant_message_param(message)
+            super()._assistant_message_to_chat_completion_assistant_message_param(
+                message
+            )
         )
         reasoning_content = "\n".join(flatten_thinking_content(message.thinking))
         if reasoning_content:

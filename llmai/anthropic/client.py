@@ -1,28 +1,32 @@
 from __future__ import annotations
 
 import base64
-from contextlib import ExitStack
 import json
+from contextlib import ExitStack
 from logging import Logger
 from time import perf_counter
 
 from anthropic import Anthropic, Omit
 from anthropic.types import (
     ImageBlockParam,
-    Message as AnthropicMessage,
     MessageParam,
     TextBlockParam,
     ToolParam,
     ToolResultBlockParam,
     ToolUseBlockParam,
 )
+from anthropic.types import (
+    Message as AnthropicMessage,
+)
 
 from llmai.shared.base import BaseClient
 from llmai.shared.configs import AnthropicClientConfig
 from llmai.shared.errors import raise_llm_error
+from llmai.shared.generation import GenerationProfile
 from llmai.shared.logs import LogLevel
 from llmai.shared.messages import (
     AssistantMessage,
+    AssistantReasoningItem,
     AssistantToolCall,
     ImageContentPart,
     Message,
@@ -34,7 +38,7 @@ from llmai.shared.messages import (
     normalize_content_parts,
 )
 from llmai.shared.model_listing import model_ids
-from llmai.shared.reasoning import ReasoningEffort
+from llmai.shared.reasoning import ReasoningConfig, ReasoningEffort
 from llmai.shared.response_formats import (
     ResponseFormat,
     get_response_format_name,
@@ -47,16 +51,16 @@ from llmai.shared.responses import (
     ResponseStreamCompletionChunk,
     ResponseStreamContentChunk,
     ResponseStreamThinkingChunk,
-    ResponseStreamToolCompleteChunk,
     ResponseStreamToolChunk,
+    ResponseStreamToolCompleteChunk,
     ResponseUsage,
 )
 from llmai.shared.schema import get_schema_as_dict, process_schema
 from llmai.shared.tools import (
+    WEB_SEARCH_TOOL_NAME,
     LLMTool,
     Tool,
     ToolChoice,
-    WEB_SEARCH_TOOL_NAME,
     WebSearchTool,
     filter_resolved_tools_for_provider,
     resolve_tools,
@@ -101,7 +105,7 @@ class AnthropicClient(BaseClient):
         config: AnthropicClientConfig,
         logger: Logger | None = None,
     ):
-        super().__init__(logger=logger)
+        super().__init__(logger=logger, generation_defaults=config.generation)
         try:
             self._client = Anthropic(
                 api_key=config.api_key,
@@ -115,6 +119,36 @@ class AnthropicClient(BaseClient):
             return model_ids(self._client.models.list(limit=100))
         except Exception as exc:
             raise_llm_error(exc, provider=self.PROVIDER_NAME)
+
+    def prepare_generation(self, **kwargs):
+        prepared = super().prepare_generation(**kwargs)
+        effort = prepared.reasoning_effort
+        budget_limits = prepared.capabilities.reasoning_budget.value
+        levels = prepared.capabilities.reasoning_levels.value
+        if (
+            effort is not None
+            and effort.effort not in (None, "none")
+            and effort.tokens is None
+            and isinstance(budget_limits, dict)
+            and (
+                not levels
+                or prepared.capabilities.reasoning_levels.source == "inferred"
+            )
+        ):
+            by_effort = {
+                "minimal": 1_024,
+                "low": 4_096,
+                "medium": 8_192,
+                "high": 16_384,
+                "xhigh": 32_768,
+                "max": 32_768,
+            }
+            desired = by_effort.get(effort.effort.value, 8_192)
+            minimum = int(budget_limits.get("min", 1_024))
+            maximum = int(budget_limits.get("max", desired))
+            prepared.reasoning.budget_tokens = max(minimum, min(desired, maximum))
+            prepared.reasoning.effort = None
+        return prepared
 
     def _get_system_prompt(self, messages: list[Message]) -> str | Omit:
         for message in messages:
@@ -151,13 +185,68 @@ class AnthropicClient(BaseClient):
 
         return {"type": "adaptive"}
 
+    def _get_anthropic_output_config_or_omit(
+        self,
+        reasoning_effort: ReasoningEffort | None,
+    ) -> dict[str, str] | Omit:
+        if reasoning_effort is None or reasoning_effort.effort in (None, "none"):
+            return Omit()
+        effort = str(reasoning_effort.effort.value)
+        if effort in {"minimal", "low"}:
+            effort = "low"
+        elif effort in {"xhigh", "max"}:
+            effort = "max"
+        elif effort == "default":
+            return Omit()
+        return {"effort": effort}
+
+    def _anthropic_reasoning_items(
+        self, content_blocks: list[object]
+    ) -> list[AssistantReasoningItem]:
+        items: list[AssistantReasoningItem] = []
+        for content in content_blocks:
+            content_type = getattr(content, "type", None)
+            if content_type == "thinking":
+                items.append(
+                    AssistantReasoningItem(
+                        summary=[getattr(content, "thinking", "")],
+                        signature=getattr(content, "signature", None),
+                        provider="anthropic",
+                        raw=self._dump_model(content),
+                    )
+                )
+            elif content_type == "redacted_thinking":
+                items.append(
+                    AssistantReasoningItem(
+                        redacted_content=getattr(content, "data", None),
+                        provider="anthropic",
+                        raw=self._dump_model(content),
+                    )
+                )
+        return items
+
     def _assistant_message_to_message_param(
         self,
         message: AssistantMessage,
     ) -> MessageParam:
-        content_blocks: list[TextBlockParam | ImageBlockParam | ToolUseBlockParam] = (
-            self._content_to_anthropic_blocks(message.content)
-        )
+        content_blocks: list = []
+        for item in message.thinking or []:
+            if item.redacted_content is not None:
+                content_blocks.append(
+                    {
+                        "type": "redacted_thinking",
+                        "data": item.redacted_content,
+                    }
+                )
+            elif item.signature and item.summary:
+                content_blocks.append(
+                    {
+                        "type": "thinking",
+                        "thinking": "\n".join(item.summary),
+                        "signature": item.signature,
+                    }
+                )
+        content_blocks.extend(self._content_to_anthropic_blocks(message.content))
 
         for each in message.tool_calls:
             content_blocks.append(
@@ -416,9 +505,9 @@ class AnthropicClient(BaseClient):
         exc: Exception,
         tools: list[dict[str, object]] | Omit,
     ) -> bool:
-        return self._uses_strict_tools(
-            tools
-        ) and self._is_strict_tool_retryable_error(exc)
+        return self._uses_strict_tools(tools) and self._is_strict_tool_retryable_error(
+            exc
+        )
 
     def _log_strict_tool_fallback(self) -> None:
         self.log(
@@ -473,10 +562,50 @@ class AnthropicClient(BaseClient):
         tool_choice: ToolChoice | None = None,
         response_format: ResponseFormat | None = None,
         max_tokens: int | None = None,
+        max_output_tokens: int | None = None,
+        profile: GenerationProfile | str | None = None,
+        reasoning: ReasoningConfig | None = None,
         reasoning_effort: ReasoningEffort | None = None,
         extra_body: dict | None = None,
         stream: bool = False,
     ) -> ResponseResult:
+        prepared = self.prepare_generation(
+            model=model,
+            profile=profile,
+            max_tokens=max_tokens,
+            max_output_tokens=max_output_tokens,
+            reasoning=reasoning,
+            reasoning_effort=reasoning_effort,
+            tools_requested=bool(tools),
+        )
+        max_tokens = prepared.max_output_tokens
+        reasoning_effort = prepared.reasoning_effort
+        messages = self._prepare_reasoning_history(messages, prepared.reasoning.history)
+        budget_limits = prepared.capabilities.reasoning_budget.value
+        levels = prepared.capabilities.reasoning_levels.value
+        if (
+            reasoning_effort is not None
+            and reasoning_effort.effort not in (None, "none")
+            and reasoning_effort.tokens is None
+            and isinstance(budget_limits, dict)
+            and (
+                not levels
+                or prepared.capabilities.reasoning_levels.source == "inferred"
+            )
+        ):
+            by_effort = {
+                "minimal": 1_024,
+                "low": 4_096,
+                "medium": 8_192,
+                "high": 16_384,
+                "xhigh": 32_768,
+                "max": 32_768,
+            }
+            desired = by_effort.get(reasoning_effort.effort.value, 8_192)
+            minimum = int(budget_limits.get("min", 1_024))
+            maximum = int(budget_limits.get("max", desired))
+            reasoning_effort.tokens = max(minimum, min(desired, maximum))
+            reasoning_effort.effort = None
         if stream:
             return self._generate_stream(
                 model=model,
@@ -533,6 +662,9 @@ class AnthropicClient(BaseClient):
                     tools=anthropic_tools,
                     tool_choice=anthropic_tool_choice,
                     thinking=self._get_anthropic_thinking_or_omit(reasoning_effort),
+                    output_config=self._get_anthropic_output_config_or_omit(
+                        reasoning_effort
+                    ),
                     max_tokens=max_tokens or 8000,
                     temperature=temperature or Omit(),
                     extra_body=extra_body,
@@ -557,6 +689,9 @@ class AnthropicClient(BaseClient):
                     tools=anthropic_tools,
                     tool_choice=anthropic_tool_choice,
                     thinking=self._get_anthropic_thinking_or_omit(reasoning_effort),
+                    output_config=self._get_anthropic_output_config_or_omit(
+                        reasoning_effort
+                    ),
                     max_tokens=max_tokens or 8000,
                     temperature=temperature or Omit(),
                     extra_body=extra_body,
@@ -564,7 +699,7 @@ class AnthropicClient(BaseClient):
             duration_seconds = perf_counter() - start_time
 
             text_chunks: list[str] = []
-            thinking_blocks: list[str] = []
+            thinking_items = self._anthropic_reasoning_items(response.content)
             response_schema_content: dict | None = None
             response_schema_tool_name = (
                 get_response_format_name(response_format, default="response")
@@ -578,8 +713,6 @@ class AnthropicClient(BaseClient):
             for content in response.content:
                 if content.type == "text":
                     text_chunks.append(content.text)
-                elif content.type == "thinking":
-                    thinking_blocks.append(content.thinking)
                 elif content.type == "tool_use":
                     tool_call = AssistantToolCall(
                         id=content.id,
@@ -595,7 +728,7 @@ class AnthropicClient(BaseClient):
 
             assistant_message = AssistantMessage(
                 content=content_from_text("".join(text_chunks) or None),
-                thinking=collapse_thinking_blocks(thinking_blocks),
+                thinking=thinking_items or None,
                 tool_calls=user_tool_calls,
             )
             new_messages = [*messages, assistant_message]
@@ -657,6 +790,7 @@ class AnthropicClient(BaseClient):
         active_thinking_block: list[str] | None = None
         start_time = perf_counter()
         usage: ResponseUsage | None = None
+        final_thinking_items: list[AssistantReasoningItem] = []
 
         try:
             with ExitStack() as stack:
@@ -669,6 +803,9 @@ class AnthropicClient(BaseClient):
                             tools=anthropic_tools,
                             tool_choice=anthropic_tool_choice,
                             thinking=self._get_anthropic_thinking_or_omit(
+                                reasoning_effort
+                            ),
+                            output_config=self._get_anthropic_output_config_or_omit(
                                 reasoning_effort
                             ),
                             max_tokens=max_tokens or 8000,
@@ -700,6 +837,9 @@ class AnthropicClient(BaseClient):
                             tools=anthropic_tools,
                             tool_choice=anthropic_tool_choice,
                             thinking=self._get_anthropic_thinking_or_omit(
+                                reasoning_effort
+                            ),
+                            output_config=self._get_anthropic_output_config_or_omit(
                                 reasoning_effort
                             ),
                             max_tokens=max_tokens or 8000,
@@ -749,7 +889,9 @@ class AnthropicClient(BaseClient):
                             yield ResponseStreamThinkingChunk(
                                 chunk=event.delta.thinking,
                             )
-                        elif event.delta.type == "input_json_delta" and active_tool_name:
+                        elif (
+                            event.delta.type == "input_json_delta" and active_tool_name
+                        ):
                             chunk = event.delta.partial_json
                             if active_tool_name == response_schema_tool_name:
                                 continue
@@ -814,13 +956,21 @@ class AnthropicClient(BaseClient):
                 if hasattr(stream_response, "get_final_message"):
                     final_message = stream_response.get_final_message()
                     usage = self._response_usage(getattr(final_message, "usage", None))
+                    final_thinking_items = self._anthropic_reasoning_items(
+                        list(getattr(final_message, "content", []) or [])
+                    )
 
             assistant_message = AssistantMessage(
                 content=content_from_text("".join(text_chunks) or None),
-                thinking=collapse_thinking_blocks(
+                thinking=final_thinking_items
+                or collapse_thinking_blocks(
                     [
                         *thinking_blocks,
-                        *(["".join(active_thinking_block)] if active_thinking_block else []),
+                        *(
+                            ["".join(active_thinking_block)]
+                            if active_thinking_block
+                            else []
+                        ),
                     ]
                 ),
                 tool_calls=user_tool_calls,

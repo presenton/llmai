@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List, Literal, Sequence, TypeAlias
+from typing import Any, List, Literal, Sequence, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -101,9 +101,45 @@ class AssistantToolCall(BaseModel):
 
 
 class AssistantReasoningItem(BaseModel):
+    model_config = ConfigDict(
+        ser_json_bytes="base64",
+        val_json_bytes="base64",
+    )
+
     id: str | None = None
     summary: list[str] = Field(default_factory=list)
     encrypted_content: str | None = None
+    signature: str | None = None
+    redacted_content: str | bytes | None = None
+    provider: str | None = None
+    raw: dict[str, Any] | None = Field(default=None, exclude=True)
+
+
+class ReasoningTrace(BaseModel):
+    """Human-readable reasoning returned by a provider.
+
+    This is intentionally distinct from ``ReasoningState``: applications may
+    display or log a trace, while state should only be replayed to the provider.
+    """
+
+    items: list[AssistantReasoningItem] = Field(default_factory=list)
+
+    @property
+    def text(self) -> str:
+        return "\n".join(part for item in self.items for part in item.summary if part)
+
+
+class ReasoningState(BaseModel):
+    """Opaque continuation state such as signatures or encrypted blocks."""
+
+    model_config = ConfigDict(
+        ser_json_bytes="base64",
+        val_json_bytes="base64",
+    )
+
+    provider: str
+    blocks: list[dict[str, Any]] = Field(default_factory=list)
+    signatures: list[bytes] = Field(default_factory=list)
 
 
 ThinkingContent: TypeAlias = list[AssistantReasoningItem] | None

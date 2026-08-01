@@ -47,6 +47,7 @@ class FireworksClient(OpenAIClient):
                 api_key=config.api_key,
                 base_url=config.base_url or self.DEFAULT_BASE_URL,
                 api_type=OpenAIApiType.COMPLETIONS,
+                generation=config.generation,
             ),
             logger=logger,
         )

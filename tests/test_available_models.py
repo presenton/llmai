@@ -7,10 +7,10 @@ import httpx
 import openai
 
 from llmai.anthropic.client import AnthropicClient
-from llmai.async_clients import AsyncOpenAIClient
+from llmai.async_clients import AsyncAnthropicClient, AsyncOpenAIClient
 from llmai.google.client import GoogleClient
 from llmai.openai.client import OpenAIClient
-from llmai.shared.configs import OpenAIClientConfig
+from llmai.shared.configs import AnthropicClientConfig, OpenAIClientConfig
 from llmai.shared.base import AsyncBaseClient, BaseClient
 from llmai.shared.errors import (
     LLMAuthenticationError,
@@ -21,6 +21,7 @@ from llmai.shared.errors import (
     normalize_llm_error,
 )
 from llmai.shared.model_listing import (
+    amodel_ids,
     model_ids,
     openai_compatible_model_ids,
 )
@@ -33,6 +34,19 @@ class FakeModels:
 
     def list(self, **kwargs):
         return self._models
+
+
+class FakeAsyncModelsPage:
+    def __init__(self, models):
+        self._models = models
+
+    def __iter__(self):
+        # Pydantic async page models expose a synchronous mapping iterator.
+        return iter([("data", self._models), ("has_more", False)])
+
+    async def __aiter__(self):
+        for model in self._models:
+            yield model
 
 
 class FakeHTTPClient:
@@ -108,6 +122,16 @@ class ModelListingHelpersTests(unittest.TestCase):
         )
         self.assertIsNone(openai_compatible_model_ids({"models": []}))
 
+    def test_async_model_ids_prefers_the_native_async_iterator(self):
+        page = FakeAsyncModelsPage(
+            [SimpleNamespace(id="model-a"), SimpleNamespace(id="model-b")]
+        )
+
+        self.assertEqual(
+            asyncio.run(amodel_ids(page)),
+            ["model-a", "model-b"],
+        )
+
 
 class ProviderClientModelListingTests(unittest.TestCase):
     def test_openai_client_lists_live_models(self):
@@ -163,6 +187,77 @@ class ProviderClientModelListingTests(unittest.TestCase):
 
 
 class NativeAsyncModelListingTests(unittest.IsolatedAsyncioTestCase):
+    async def test_anthropic_async_client_iterates_the_async_models_page(self):
+        list_models = AsyncMock(
+            return_value=FakeAsyncModelsPage(
+                [
+                    SimpleNamespace(id="claude-a"),
+                    SimpleNamespace(id="claude-b"),
+                ]
+            )
+        )
+        provider_client = SimpleNamespace(
+            models=SimpleNamespace(list=list_models),
+            close=AsyncMock(),
+        )
+        sync_provider_client = SimpleNamespace(close=Mock())
+
+        with (
+            patch(
+                "llmai.anthropic.client.Anthropic",
+                return_value=sync_provider_client,
+            ),
+            patch(
+                "llmai.anthropic.async_client.AsyncAnthropic",
+                return_value=provider_client,
+            ),
+        ):
+            client = AsyncAnthropicClient(
+                config=AnthropicClientConfig(api_key="key"),
+            )
+
+        models = await client.alist_available_models()
+        await client.aclose()
+
+        self.assertEqual(models, ["claude-a", "claude-b"])
+        list_models.assert_awaited_once_with(limit=100)
+        provider_client.close.assert_awaited_once()
+
+    async def test_openai_async_client_iterates_the_async_models_page(self):
+        list_models = Mock(
+            return_value=FakeAsyncModelsPage(
+                [
+                    SimpleNamespace(id="gpt-a"),
+                    SimpleNamespace(id="gpt-b"),
+                ]
+            )
+        )
+        provider_client = SimpleNamespace(
+            chat=SimpleNamespace(
+                completions=SimpleNamespace(create=AsyncMock()),
+            ),
+            responses=SimpleNamespace(create=AsyncMock()),
+            models=SimpleNamespace(list=list_models),
+            close=AsyncMock(),
+        )
+
+        with (
+            patch("llmai.openai.client.OpenAI"),
+            patch(
+                "llmai.openai.async_client.AsyncOpenAI",
+                return_value=provider_client,
+            ),
+        ):
+            client = AsyncOpenAIClient(
+                config=OpenAIClientConfig(api_key="key"),
+            )
+
+        models = await client.alist_available_models()
+        await client.aclose()
+
+        self.assertEqual(models, ["gpt-a", "gpt-b"])
+        list_models.assert_called_once_with()
+
     async def test_openai_async_client_uses_native_model_listing(self):
         list_models = AsyncMock(
             return_value=[

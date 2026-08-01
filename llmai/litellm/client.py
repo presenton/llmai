@@ -8,8 +8,9 @@ from llmai.openai.client import OpenAIClient
 from llmai.shared.base import BaseClient
 from llmai.shared.configs import LiteLLMClientConfig
 from llmai.shared.errors import configuration_error, raise_llm_error
+from llmai.shared.generation import GenerationProfile
 from llmai.shared.messages import Message
-from llmai.shared.reasoning import ReasoningEffort
+from llmai.shared.reasoning import ReasoningConfig, ReasoningEffort
 from llmai.shared.response_formats import ResponseFormat
 from llmai.shared.responses import ResponseResult
 from llmai.shared.tools import LLMTool, ToolChoice
@@ -25,7 +26,7 @@ class LiteLLMClient(OpenAIClient):
         config: LiteLLMClientConfig,
         logger: Logger | None = None,
     ):
-        BaseClient.__init__(self, logger=logger)
+        BaseClient.__init__(self, logger=logger, generation_defaults=config.generation)
         self._api_type = self._coerce_api_type(config.api_type)
         if self._api_type is None:
             raise configuration_error(
@@ -58,6 +59,9 @@ class LiteLLMClient(OpenAIClient):
         tool_choice: ToolChoice | None = None,
         response_format: ResponseFormat | None = None,
         max_tokens: int | None = None,
+        max_output_tokens: int | None = None,
+        profile: GenerationProfile | str | None = None,
+        reasoning: ReasoningConfig | None = None,
         reasoning_effort: ReasoningEffort | None = None,
         extra_body: dict | None = None,
         stream: bool = False,
@@ -75,6 +79,9 @@ class LiteLLMClient(OpenAIClient):
             tool_choice=tool_choice,
             response_format=response_format,
             max_tokens=max_tokens,
+            max_output_tokens=max_output_tokens,
+            profile=profile,
+            reasoning=reasoning,
             reasoning_effort=reasoning_effort,
             extra_body=request_extra_body or None,
             stream=stream,

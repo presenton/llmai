@@ -6,7 +6,8 @@ from logging import Logger
 from time import perf_counter
 from typing import Any
 
-from openai import AsyncAzureOpenAI, AsyncOpenAI, Omit as OpenAIOmit
+from openai import AsyncAzureOpenAI, AsyncOpenAI
+from openai import Omit as OpenAIOmit
 
 from llmai.openai.client import OpenAIClient
 from llmai.shared.async_utils import close_async_resource, close_sync_provider_client
@@ -20,7 +21,7 @@ from llmai.shared.messages import (
     Message,
     content_from_text,
 )
-from llmai.shared.model_listing import model_ids
+from llmai.shared.model_listing import amodel_ids
 from llmai.shared.responses import (
     ResponseContent,
     ResponseStreamCompletionChunk,
@@ -66,6 +67,35 @@ class AsyncOpenAICompatibleClient(AsyncBaseClient):
     def _prepare_extra_body(self, extra_body: dict | None) -> dict | None:
         return extra_body
 
+    async def _create_chat_completion(
+        self,
+        *,
+        model: str,
+        max_tokens: int | None,
+        **kwargs: Any,
+    ) -> Any:
+        parser = self._parser
+        token_kwargs = parser._get_openai_chat_max_tokens_kwargs(
+            max_tokens, model=model
+        )
+        field = next(iter(token_kwargs))
+        try:
+            return await self._provider_client.chat.completions.create(
+                model=model, **kwargs, **token_kwargs
+            )
+        except Exception as exc:
+            if not parser._is_unsupported_token_parameter(exc, field):
+                raise
+            alternate = (
+                "max_tokens"
+                if field == "max_completion_tokens"
+                else "max_completion_tokens"
+            )
+            parser._compatibility_cache[(model, "output_token_field")] = alternate
+            return await self._provider_client.chat.completions.create(
+                model=model, **kwargs, **{alternate: max_tokens}
+            )
+
     async def alist_available_models(self) -> list[str]:
         self._ensure_open()
         models = getattr(self._provider_client, "models", None)
@@ -77,7 +107,7 @@ class AsyncOpenAICompatibleClient(AsyncBaseClient):
             result = list_models()
             if inspect.isawaitable(result):
                 result = await result
-            return model_ids(result)
+            return await amodel_ids(result)
         except Exception as exc:
             raise_llm_error(exc, provider=self._parser.PROVIDER_NAME)
 
@@ -119,8 +149,9 @@ class AsyncOpenAICompatibleClient(AsyncBaseClient):
 
         try:
             start_time = perf_counter()
-            response = await self._provider_client.chat.completions.create(
+            response = await self._create_chat_completion(
                 model=model,
+                max_tokens=max_tokens,
                 messages=parser._messages_to_openai_messages(messages),
                 temperature=temperature,
                 response_format=parser._get_openai_response_format_or_omit(
@@ -128,7 +159,6 @@ class AsyncOpenAICompatibleClient(AsyncBaseClient):
                 ),
                 tools=openai_tools,
                 tool_choice=openai_tool_choice,
-                **parser._get_openai_chat_max_tokens_kwargs(max_tokens),
                 reasoning_effort=parser._get_openai_chat_reasoning_effort_or_omit(
                     reasoning_effort
                 ),
@@ -180,8 +210,9 @@ class AsyncOpenAICompatibleClient(AsyncBaseClient):
 
         try:
             start_time = perf_counter()
-            response = await self._provider_client.chat.completions.create(
+            response = await self._create_chat_completion(
                 model=model,
+                max_tokens=max_tokens,
                 messages=parser._messages_to_openai_messages(messages),
                 temperature=temperature,
                 response_format=parser._get_openai_response_format_or_omit(
@@ -189,7 +220,6 @@ class AsyncOpenAICompatibleClient(AsyncBaseClient):
                 ),
                 tools=openai_tools,
                 tool_choice=openai_tool_choice,
-                **parser._get_openai_chat_max_tokens_kwargs(max_tokens),
                 reasoning_effort=parser._get_openai_chat_reasoning_effort_or_omit(
                     reasoning_effort
                 ),
@@ -746,7 +776,9 @@ async def aiter_openai_responses_stream(
         duration_seconds = perf_counter() - start_time
 
         pending_tool_calls = [
-            tool_call for tool_call in tool_calls if tool_call.id not in completed_tool_ids
+            tool_call
+            for tool_call in tool_calls
+            if tool_call.id not in completed_tool_ids
         ]
 
         if current_chunk_type == "tool":

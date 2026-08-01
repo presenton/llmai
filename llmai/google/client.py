@@ -38,6 +38,7 @@ from google.genai.types import (
 from llmai.shared.base import BaseClient
 from llmai.shared.configs import GoogleClientConfig
 from llmai.shared.errors import LLMError, configuration_error, raise_llm_error
+from llmai.shared.generation import GenerationProfile
 from llmai.shared.messages import (
     AssistantMessage,
     AssistantToolCall,
@@ -52,7 +53,7 @@ from llmai.shared.messages import (
     normalize_content_parts,
 )
 from llmai.shared.model_listing import model_ids
-from llmai.shared.reasoning import ReasoningEffort
+from llmai.shared.reasoning import ReasoningConfig, ReasoningEffort
 from llmai.shared.response_formats import (
     JSONObjectResponse,
     JSONSchemaResponse,
@@ -116,7 +117,7 @@ class GoogleClient(BaseClient):
         config: GoogleClientConfig,
         logger: Logger | None = None,
     ):
-        super().__init__(logger=logger)
+        super().__init__(logger=logger, generation_defaults=config.generation)
         self._client = self._create_genai_client(
             api_key=config.api_key,
             http_options=self._http_options(config.base_url),
@@ -124,11 +125,35 @@ class GoogleClient(BaseClient):
 
     def list_available_models(self) -> list[str]:
         try:
-            return model_ids(
-                self._client.models.list(config={"page_size": 100})
-            )
+            return model_ids(self._client.models.list(config={"page_size": 100}))
         except Exception as exc:
             raise_llm_error(exc, provider=self.PROVIDER_NAME)
+
+    def prepare_generation(self, **kwargs):
+        prepared = super().prepare_generation(**kwargs)
+        effort = prepared.reasoning_effort
+        budget_limits = prepared.capabilities.reasoning_budget.value
+        if (
+            effort is not None
+            and effort.effort not in (None, "none")
+            and effort.tokens is None
+            and isinstance(budget_limits, dict)
+            and prepared.capabilities.reasoning_levels.source == "inferred"
+        ):
+            by_effort = {
+                "minimal": 128,
+                "low": 1_024,
+                "medium": 4_096,
+                "high": 8_192,
+                "xhigh": 16_384,
+                "max": 24_576,
+            }
+            desired = by_effort.get(effort.effort.value, 4_096)
+            minimum = int(budget_limits.get("min", 0))
+            maximum = int(budget_limits.get("max", desired))
+            prepared.reasoning.budget_tokens = max(minimum, min(desired, maximum))
+            prepared.reasoning.effort = None
+        return prepared
 
     def _http_options(self, base_url: str | None) -> HttpOptions | None:
         if base_url is None:
@@ -177,20 +202,24 @@ class GoogleClient(BaseClient):
             thinking_budget = 0
 
         thinking_level = None
-        if reasoning_effort.effort == "low":
+        if reasoning_effort.effort in {"minimal", "low"}:
             thinking_level = GoogleThinkingLevel.LOW
         elif reasoning_effort.effort == "medium":
             thinking_level = GoogleThinkingLevel.MEDIUM
-        elif reasoning_effort.effort in {"high", "xhigh"}:
+        elif reasoning_effort.effort in {"high", "xhigh", "max"}:
             thinking_level = GoogleThinkingLevel.HIGH
 
-        include_thoughts = None
+        include_thoughts = reasoning_effort.include_trace
         if reasoning_effort.effort == "none":
             include_thoughts = False
-        elif reasoning_effort.summary is not None:
-            include_thoughts = True
-        elif reasoning_effort.effort is not None or reasoning_effort.tokens is not None:
-            include_thoughts = True
+        elif include_thoughts is None:
+            if reasoning_effort.summary is not None:
+                include_thoughts = True
+            elif (
+                reasoning_effort.effort is not None
+                or reasoning_effort.tokens is not None
+            ):
+                include_thoughts = True
 
         return GoogleThinkingConfig(
             include_thoughts=include_thoughts,
@@ -503,10 +532,25 @@ class GoogleClient(BaseClient):
         tool_choice: ToolChoice | None = None,
         response_format: ResponseFormat | None = None,
         max_tokens: int | None = None,
+        max_output_tokens: int | None = None,
+        profile: GenerationProfile | str | None = None,
+        reasoning: ReasoningConfig | None = None,
         reasoning_effort: ReasoningEffort | None = None,
         extra_body: dict | None = None,
         stream: bool = False,
     ) -> ResponseResult:
+        prepared = self.prepare_generation(
+            model=model,
+            profile=profile,
+            max_tokens=max_tokens,
+            max_output_tokens=max_output_tokens,
+            reasoning=reasoning,
+            reasoning_effort=reasoning_effort,
+            tools_requested=bool(tools),
+        )
+        max_tokens = prepared.max_output_tokens
+        reasoning_effort = prepared.reasoning_effort
+        messages = self._prepare_reasoning_history(messages, prepared.reasoning.history)
         if stream:
             return self._generate_stream(
                 model=model,

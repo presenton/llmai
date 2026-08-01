@@ -17,6 +17,7 @@ from llmai.shared.configs import DeepSeekClientConfig
 from llmai.shared.errors import LLMError, raise_llm_error
 from llmai.shared.messages import (
     AssistantMessage,
+    AssistantReasoningItem,
     AssistantToolCall,
     Message,
     content_from_text,
@@ -26,6 +27,7 @@ from llmai.shared.responses import (
     ResponseStreamCompletionChunk,
     ResponseStreamContentChunk,
     ResponseStreamEvent,
+    ResponseStreamThinkingChunk,
     ResponseStreamToolChunk,
     ResponseStreamToolCompleteChunk,
 )
@@ -67,9 +69,16 @@ class AsyncDeepSeekClient(AsyncOpenAICompatibleClient):
         reasoning_effort: Any | None = None,
         extra_body: dict | None = None,
     ) -> ResponseContent:
-        del reasoning_effort
+        request_extra_body = dict(extra_body or {})
+        if reasoning_effort is not None and "thinking" not in request_extra_body:
+            disabled = reasoning_effort.effort == "none" or reasoning_effort.tokens == 0
+            request_extra_body["thinking"] = {
+                "type": "disabled" if disabled else "enabled"
+            }
+        extra_body = request_extra_body or None
 
         parser = self._parser
+        tool_choice = parser._adapt_tool_choice_for_thinking(model, tool_choice)
         deepseek_tools, deepseek_tool_choice, response_schema_tool_name = (
             parser._get_deepseek_tools_and_tool_choice_or_omit(
                 tools,
@@ -80,8 +89,9 @@ class AsyncDeepSeekClient(AsyncOpenAICompatibleClient):
 
         try:
             start_time = perf_counter()
-            response = await self._provider_client.chat.completions.create(
+            response = await self._create_chat_completion(
                 model=model,
+                max_tokens=max_tokens,
                 messages=parser._messages_to_openai_messages(messages),
                 temperature=temperature,
                 response_format=parser._get_deepseek_response_format_or_omit(
@@ -89,7 +99,6 @@ class AsyncDeepSeekClient(AsyncOpenAICompatibleClient):
                 ),
                 tools=deepseek_tools,
                 tool_choice=deepseek_tool_choice,
-                max_completion_tokens=max_tokens,
                 extra_body=extra_body,
             )
             duration_seconds = perf_counter() - start_time
@@ -97,8 +106,10 @@ class AsyncDeepSeekClient(AsyncOpenAICompatibleClient):
             if not response.choices:
                 raise LLMError(400, "No content returned from LLM")
 
-            raw_assistant_message = parser._chat_completion_message_to_assistant_message(
-                response.choices[0].message
+            raw_assistant_message = (
+                parser._chat_completion_message_to_assistant_message(
+                    response.choices[0].message
+                )
             )
             response_schema_content: dict | None = None
             user_tool_calls: list[AssistantToolCall] = []
@@ -112,6 +123,7 @@ class AsyncDeepSeekClient(AsyncOpenAICompatibleClient):
 
             assistant_message = AssistantMessage(
                 content=raw_assistant_message.content,
+                thinking=raw_assistant_message.thinking,
                 tool_calls=user_tool_calls,
             )
             new_messages = [*messages, assistant_message]
@@ -144,9 +156,16 @@ class AsyncDeepSeekClient(AsyncOpenAICompatibleClient):
         reasoning_effort: Any | None = None,
         extra_body: dict | None = None,
     ) -> AsyncIterator[ResponseStreamEvent]:
-        del reasoning_effort
+        request_extra_body = dict(extra_body or {})
+        if reasoning_effort is not None and "thinking" not in request_extra_body:
+            disabled = reasoning_effort.effort == "none" or reasoning_effort.tokens == 0
+            request_extra_body["thinking"] = {
+                "type": "disabled" if disabled else "enabled"
+            }
+        extra_body = request_extra_body or None
 
         parser = self._parser
+        tool_choice = parser._adapt_tool_choice_for_thinking(model, tool_choice)
         deepseek_tools, deepseek_tool_choice, response_schema_tool_name = (
             parser._get_deepseek_tools_and_tool_choice_or_omit(
                 tools,
@@ -158,8 +177,9 @@ class AsyncDeepSeekClient(AsyncOpenAICompatibleClient):
 
         try:
             start_time = perf_counter()
-            response = await self._provider_client.chat.completions.create(
+            response = await self._create_chat_completion(
                 model=model,
+                max_tokens=max_tokens,
                 messages=parser._messages_to_openai_messages(messages),
                 temperature=temperature,
                 response_format=parser._get_deepseek_response_format_or_omit(
@@ -167,7 +187,6 @@ class AsyncDeepSeekClient(AsyncOpenAICompatibleClient):
                 ),
                 tools=deepseek_tools,
                 tool_choice=deepseek_tool_choice,
-                max_completion_tokens=max_tokens,
                 extra_body=extra_body,
                 stream=True,
                 stream_options={"include_usage": True},
@@ -176,6 +195,7 @@ class AsyncDeepSeekClient(AsyncOpenAICompatibleClient):
             current_chunk_type = None
             current_tool = None
             content = ""
+            thinking = ""
             partial_tool_calls: dict[int, dict[str, str | int | None]] = {}
             tool_order: list[int] = []
             usage = None
@@ -189,6 +209,19 @@ class AsyncDeepSeekClient(AsyncOpenAICompatibleClient):
                     continue
 
                 delta = event.choices[0].delta
+                reasoning_delta = parser._chat_completion_delta_to_thinking_text(delta)
+                if reasoning_delta:
+                    thinking += reasoning_delta
+                    current_chunk_type, current_tool, stream_chunks = (
+                        parser._transition_stream_chunk(
+                            current_chunk_type=current_chunk_type,
+                            next_chunk_type="thinking",
+                            current_tool=current_tool,
+                        )
+                    )
+                    for stream_chunk in stream_chunks:
+                        yield stream_chunk
+                    yield ResponseStreamThinkingChunk(chunk=reasoning_delta)
 
                 if delta.content:
                     content += delta.content
@@ -299,6 +332,11 @@ class AsyncDeepSeekClient(AsyncOpenAICompatibleClient):
 
             assistant_message = AssistantMessage(
                 content=content_from_text(content or None),
+                thinking=(
+                    [AssistantReasoningItem(summary=[thinking], provider="deepseek")]
+                    if thinking
+                    else None
+                ),
                 tool_calls=user_tool_calls,
             )
             new_messages = [*messages, assistant_message]

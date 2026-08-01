@@ -33,6 +33,7 @@ class TogetherAIClient(OpenAIClient):
                 api_key=config.api_key,
                 base_url=self._models_base_url,
                 api_type=OpenAIApiType.COMPLETIONS,
+                generation=config.generation,
             ),
             logger=logger,
         )
@@ -89,7 +90,11 @@ class TogetherAIClient(OpenAIClient):
     def _get_openai_chat_max_tokens_kwargs(
         self,
         max_tokens: int | None,
+        *,
+        model: str | None = None,
     ) -> dict[str, int | None]:
+        if model is not None:
+            self._compatibility_cache[(model, "output_token_field")] = "max_tokens"
         return {"max_tokens": max_tokens}
 
     def _assistant_message_to_chat_completion_assistant_message_param(
