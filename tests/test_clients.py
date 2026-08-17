@@ -712,6 +712,12 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertFalse(parameters["additionalProperties"])
         self.assertFalse(parameters["properties"]["location"]["additionalProperties"])
         self.assertFalse(parameters["$defs"]["Address"]["additionalProperties"])
+        self.assertEqual(parameters["required"], ["location"])
+        self.assertEqual(
+            parameters["properties"]["location"]["required"],
+            ["city"],
+        )
+        self.assertEqual(parameters["$defs"]["Address"]["required"], ["line"])
 
     def test_openai_generate_filters_tools_without_custom_allowed_tools_wrapper(self):
         fake_message = SimpleNamespace(
@@ -1331,6 +1337,10 @@ class ClientBehaviorTests(unittest.TestCase):
             fake_completions.calls[0]["stream_options"],
             {"include_usage": True},
         )
+        self.assertIsInstance(
+            fake_completions.calls[0]["temperature"],
+            openai.Omit,
+        )
 
     def test_openai_generate_parses_structured_output(self):
         fake_message = SimpleNamespace(
@@ -1352,6 +1362,28 @@ class ClientBehaviorTests(unittest.TestCase):
         )
 
         self.assertEqual(result.content, {"answer": "pong"})
+        self.assertIsInstance(
+            fake_completions.calls[0]["temperature"],
+            openai.Omit,
+        )
+
+    def test_openai_generate_keeps_explicit_temperature(self):
+        fake_message = SimpleNamespace(content="answer", tool_calls=None)
+        fake_response = SimpleNamespace(choices=[SimpleNamespace(message=fake_message)])
+        fake_completions = FakeOpenAICompletions(fake_response)
+
+        client = OpenAIClient(config=OpenAIClientConfig(api_key="test"))
+        client._client = SimpleNamespace(
+            chat=SimpleNamespace(completions=fake_completions)
+        )
+
+        client.generate(
+            model="gpt-test",
+            messages=[UserMessage(content=text_parts("Hello"))],
+            temperature=0.2,
+        )
+
+        self.assertEqual(fake_completions.calls[0]["temperature"], 0.2)
 
     def test_openai_generate_accepts_dict_json_schema(self):
         fake_message = SimpleNamespace(
@@ -5246,6 +5278,9 @@ class ClientBehaviorTests(unittest.TestCase):
                         ImageContentPart(
                             url="https://example.com/cat.png", mime_type="image/png"
                         ),
+                        ImageContentPart(
+                            url="data:image/png;base64,cG5nLWJ5dGVz"
+                        ),
                         ImageContentPart(data=b"png-bytes", mime_type="image/png"),
                     ]
                 )
@@ -5259,6 +5294,28 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(messages[0].parts[1].file_data.mime_type, "image/png")
         self.assertEqual(messages[0].parts[2].inline_data.data, b"png-bytes")
         self.assertEqual(messages[0].parts[2].inline_data.mime_type, "image/png")
+        self.assertIsNone(messages[0].parts[2].file_data)
+        self.assertEqual(messages[0].parts[3].inline_data.data, b"png-bytes")
+        self.assertEqual(messages[0].parts[3].inline_data.mime_type, "image/png")
+
+    def test_google_rejects_malformed_image_data_uri(self):
+        client = GoogleClient(config=GoogleClientConfig(api_key="test"))
+
+        with self.assertRaises(LLMConfigurationError) as context:
+            client._messages_to_google_messages(
+                [
+                    UserMessage(
+                        content=[
+                            ImageContentPart(
+                                url="data:image/png;base64,not-valid-base64*"
+                            )
+                        ]
+                    )
+                ]
+            )
+
+        self.assertIn("malformed base64 payload", str(context.exception))
+        self.assertEqual(context.exception.provider, "google")
 
     def test_google_serializes_tool_response_string_content_parts(self):
         client = GoogleClient(config=GoogleClientConfig(api_key="test"))

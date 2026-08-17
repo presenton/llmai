@@ -153,7 +153,7 @@ class AsyncOpenAICompatibleClient(AsyncBaseClient):
                 model=model,
                 max_tokens=max_tokens,
                 messages=parser._messages_to_openai_messages(messages),
-                temperature=temperature,
+                temperature=parser._get_openai_temperature_or_omit(temperature),
                 response_format=parser._get_openai_response_format_or_omit(
                     response_format
                 ),
@@ -214,7 +214,7 @@ class AsyncOpenAICompatibleClient(AsyncBaseClient):
                 model=model,
                 max_tokens=max_tokens,
                 messages=parser._messages_to_openai_messages(messages),
-                temperature=temperature,
+                temperature=parser._get_openai_temperature_or_omit(temperature),
                 response_format=parser._get_openai_response_format_or_omit(
                     response_format
                 ),

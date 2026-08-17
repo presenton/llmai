@@ -560,6 +560,7 @@ class OpenAIClient(BaseClient):
             flatten_refs=False,
             flatten_allof=True,
             ensure_additional_properties=True,
+            ensure_required_properties=True,
             supported_string_types=self.STRICT_SUPPORTED_STRING_FORMATS,
             supported_schema_fields=self.STRICT_SUPPORTED_SCHEMA_FIELDS,
         )
@@ -749,6 +750,15 @@ class OpenAIClient(BaseClient):
             return Omit()
 
         return reasoning_effort.effort.value
+
+    def _get_openai_temperature_or_omit(
+        self,
+        temperature: float | None,
+    ) -> float | Omit:
+        if temperature is None:
+            return Omit()
+
+        return temperature
 
     def _get_openai_chat_max_tokens_kwargs(
         self,
@@ -994,7 +1004,7 @@ class OpenAIClient(BaseClient):
                 model=model,
                 max_tokens=max_tokens,
                 messages=self._messages_to_openai_messages(messages),
-                temperature=temperature,
+                temperature=self._get_openai_temperature_or_omit(temperature),
                 response_format=self._get_openai_response_format_or_omit(
                     response_format
                 ),
@@ -1052,7 +1062,7 @@ class OpenAIClient(BaseClient):
                 model=model,
                 max_tokens=max_tokens,
                 messages=self._messages_to_openai_messages(messages),
-                temperature=temperature,
+                temperature=self._get_openai_temperature_or_omit(temperature),
                 response_format=self._get_openai_response_format_or_omit(
                     response_format
                 ),
