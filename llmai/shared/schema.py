@@ -67,6 +67,7 @@ def process_schema(
     flatten_allof: bool = False,
     collapse_anyof: bool = False,
     ensure_additional_properties: bool = False,
+    ensure_required_properties: bool = False,
     forbid_additional_properties: bool = False,
     remove_additional_properties: bool = False,
     supported_string_types: list[str] | None = None,
@@ -106,6 +107,9 @@ def process_schema(
 
     if ensure_additional_properties or forbid_additional_properties:
         processed = _ensure_additional_properties(processed)
+
+    if ensure_required_properties:
+        processed = _ensure_required_properties(processed)
 
     if remove_additional_properties:
         processed = _strip_schema_keys(
@@ -383,6 +387,24 @@ def _ensure_additional_properties(schema: object) -> object:
     }
     if ensured.get("type") == "object":
         ensured["additionalProperties"] = False
+
+    return ensured
+
+
+def _ensure_required_properties(schema: object) -> object:
+    if isinstance(schema, list):
+        return [_ensure_required_properties(item) for item in schema]
+
+    if not isinstance(schema, dict):
+        return schema
+
+    ensured = {
+        key: _ensure_required_properties(value)
+        for key, value in schema.items()
+    }
+    properties = ensured.get("properties")
+    if isinstance(properties, dict):
+        ensured["required"] = list(properties)
 
     return ensured
 

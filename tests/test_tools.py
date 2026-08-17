@@ -491,6 +491,58 @@ class SchemaTests(unittest.TestCase):
         self.assertFalse(processed["$defs"]["Existing"]["additionalProperties"])
         self.assertNotIn("additionalProperties", processed["properties"]["name"])
 
+    def test_process_schema_can_require_all_object_properties(self):
+        schema = {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "metadata": {
+                    "type": "object",
+                    "properties": {
+                        "source": {"type": "string"},
+                        "note": {"type": ["string", "null"]},
+                    },
+                    "required": ["source"],
+                },
+                "entries": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "value": {"type": "number"},
+                        },
+                    },
+                },
+            },
+            "required": ["name"],
+            "$defs": {
+                "Result": {
+                    "type": "object",
+                    "properties": {
+                        "answer": {"type": "string"},
+                    },
+                }
+            },
+        }
+
+        processed = process_schema(schema, ensure_required_properties=True)
+
+        self.assertEqual(processed["required"], ["name", "metadata", "entries"])
+        self.assertEqual(
+            processed["properties"]["metadata"]["required"],
+            ["source", "note"],
+        )
+        self.assertEqual(
+            processed["properties"]["entries"]["items"]["required"],
+            ["value"],
+        )
+        self.assertEqual(processed["$defs"]["Result"]["required"], ["answer"])
+        self.assertEqual(schema["required"], ["name"])
+        self.assertEqual(
+            schema["properties"]["metadata"]["required"],
+            ["source"],
+        )
+
     def test_process_schema_can_forbid_additional_properties(self):
         processed = process_schema(
             {

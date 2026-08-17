@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import base64
+from binascii import Error as BinasciiError
 import json
 from logging import Logger
 from time import perf_counter
+from urllib.parse import unquote_to_bytes
 
 from google import genai
 from google.genai.types import (
@@ -298,12 +301,25 @@ class GoogleClient(BaseClient):
         for part in normalize_content_parts(content):
             if isinstance(part, ImageContentPart):
                 if part.url is not None:
-                    parts.append(
-                        GooglePart.from_uri(
-                            file_uri=part.url,
-                            mime_type=part.mime_type,
-                        )
+                    data_uri = self._decode_image_data_uri(
+                        part.url,
+                        fallback_mime_type=part.mime_type,
                     )
+                    if data_uri is not None:
+                        data, mime_type = data_uri
+                        parts.append(
+                            GooglePart.from_bytes(
+                                data=data,
+                                mime_type=mime_type,
+                            )
+                        )
+                    else:
+                        parts.append(
+                            GooglePart.from_uri(
+                                file_uri=part.url,
+                                mime_type=part.mime_type,
+                            )
+                        )
                 else:
                     parts.append(
                         GooglePart.from_bytes(
@@ -315,6 +331,51 @@ class GoogleClient(BaseClient):
                 parts.append(GooglePart.from_text(text=part.text))
 
         return parts
+
+    def _decode_image_data_uri(
+        self,
+        uri: str,
+        *,
+        fallback_mime_type: str | None,
+    ) -> tuple[bytes, str] | None:
+        if uri[:5].casefold() != "data:":
+            return None
+
+        metadata, separator, payload = uri[5:].partition(",")
+        if not separator:
+            raise configuration_error(
+                "Invalid image data URI: missing comma separator",
+                provider=self.PROVIDER_NAME,
+            )
+
+        metadata_parts = metadata.split(";")
+        mime_type = metadata_parts[0] or fallback_mime_type
+        if not mime_type or not mime_type.casefold().startswith("image/"):
+            raise configuration_error(
+                "Invalid image data URI: an image MIME type is required",
+                provider=self.PROVIDER_NAME,
+            )
+
+        encoded_payload = unquote_to_bytes(payload)
+        if any(part.casefold() == "base64" for part in metadata_parts[1:]):
+            try:
+                data = base64.b64decode(encoded_payload, validate=True)
+            except (BinasciiError, ValueError) as exc:
+                raise configuration_error(
+                    "Invalid image data URI: malformed base64 payload",
+                    provider=self.PROVIDER_NAME,
+                    cause=exc,
+                ) from exc
+        else:
+            data = encoded_payload
+
+        if not data:
+            raise configuration_error(
+                "Invalid image data URI: payload is empty",
+                provider=self.PROVIDER_NAME,
+            )
+
+        return data, mime_type
 
     def _messages_to_google_messages(
         self,

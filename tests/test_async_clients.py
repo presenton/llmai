@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 import llmai.client as client_module
+import openai
 from llmai import (
     AsyncBedrockClient,
     AsyncOpenAIClient,
@@ -203,6 +204,7 @@ class AsyncClientTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result.content[0].text, "native answer")
         create.assert_awaited_once()
+        self.assertIsInstance(create.await_args.kwargs["temperature"], openai.Omit)
         close.assert_awaited_once()
 
     async def test_async_openai_streams_native_async_events_incrementally(self):
@@ -273,6 +275,7 @@ class AsyncClientTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("completion", [chunk.type for chunk in remaining])
         self.assertTrue(stream_closed.is_set())
+        self.assertIsInstance(create.await_args.kwargs["temperature"], openai.Omit)
 
     async def test_cancellation_reaches_native_provider_request(self):
         started = asyncio.Event()
