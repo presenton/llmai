@@ -491,7 +491,7 @@ wheels = [
 
 [[package]]
 name = "llmai"
-version = "0.3.6+local"
+version = "0.3.8"
 source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
