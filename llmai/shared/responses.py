@@ -111,6 +111,7 @@ class ResponseContent(BaseModel):
     usage: ResponseUsage | None = None
     duration_seconds: float | None = None
     diagnostics: list[ResponseDiagnostic] = Field(default_factory=list)
+    finish_reason: str | None = None
 
     @model_validator(mode="after")
     def _normalize_reasoning(self) -> "ResponseContent":
@@ -228,6 +229,7 @@ class ResponseStreamCompletionChunk(BaseResponseStreamChunk):
     usage: ResponseUsage | None = None
     duration_seconds: float | None = None
     diagnostics: list[ResponseDiagnostic] = Field(default_factory=list)
+    finish_reason: str | None = None
 
     @model_validator(mode="after")
     def _normalize_reasoning(self) -> "ResponseStreamCompletionChunk":

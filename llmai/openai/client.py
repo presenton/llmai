@@ -237,11 +237,24 @@ class OpenAIClient(BaseClient):
             for tool_call in message.tool_calls
         ]
 
-        return ChatCompletionAssistantMessageParam(
+        result = ChatCompletionAssistantMessageParam(
             role="assistant",
             content=self._assistant_content_to_openai_content(message.content),
-            tool_calls=tool_calls or None,
         )
+        if tool_calls:
+            result["tool_calls"] = tool_calls
+        return result
+
+    def _responses_finish_reason(self, response: object) -> str | None:
+        """Normalize Responses API termination metadata to chat finish reasons."""
+
+        if getattr(response, "status", None) == "completed":
+            return "stop"
+        incomplete = getattr(response, "incomplete_details", None)
+        reason = getattr(incomplete, "reason", None)
+        if reason in {"max_output_tokens", "max_tokens"}:
+            return "length"
+        return str(reason) if reason else None
 
     def _assistant_content_to_openai_content(
         self,
@@ -1020,8 +1033,9 @@ class OpenAIClient(BaseClient):
             if not response.choices:
                 raise LLMError(400, "No content returned from LLM")
 
+            choice = response.choices[0]
             assistant_message = self._chat_completion_message_to_assistant_message(
-                response.choices[0].message
+                choice.message
             )
             new_messages = [*messages, assistant_message]
 
@@ -1035,6 +1049,7 @@ class OpenAIClient(BaseClient):
                 tool_calls=assistant_message.tool_calls,
                 usage=self._response_usage(getattr(response, "usage", None)),
                 duration_seconds=duration_seconds,
+                finish_reason=getattr(choice, "finish_reason", None),
             )
         except Exception as exc:
             raise_llm_error(exc, provider=self.PROVIDER_NAME)
@@ -1083,6 +1098,7 @@ class OpenAIClient(BaseClient):
             partial_tool_calls: dict[int, dict[str, str | None]] = {}
             tool_order: list[int] = []
             usage: ResponseUsage | None = None
+            finish_reason: str | None = None
 
             for event in response:
                 event_usage = self._response_usage(getattr(event, "usage", None))
@@ -1092,7 +1108,10 @@ class OpenAIClient(BaseClient):
                 if not getattr(event, "choices", None):
                     continue
 
-                delta = event.choices[0].delta
+                choice = event.choices[0]
+                if getattr(choice, "finish_reason", None) is not None:
+                    finish_reason = choice.finish_reason
+                delta = choice.delta
 
                 thinking_delta = self._chat_completion_delta_to_thinking_text(delta)
                 if thinking_delta:
@@ -1222,6 +1241,7 @@ class OpenAIClient(BaseClient):
                 tool_calls=tool_calls,
                 usage=usage,
                 duration_seconds=duration_seconds,
+                finish_reason=finish_reason,
             )
         except Exception as exc:
             raise_llm_error(exc, provider=self.PROVIDER_NAME)
@@ -1284,6 +1304,7 @@ class OpenAIClient(BaseClient):
                 tool_calls=assistant_message.tool_calls,
                 usage=self._response_usage(getattr(response, "usage", None)),
                 duration_seconds=duration_seconds,
+                finish_reason=self._responses_finish_reason(response),
             )
         except Exception as exc:
             raise_llm_error(exc, provider=self.PROVIDER_NAME)
@@ -1514,7 +1535,7 @@ class OpenAIClient(BaseClient):
                     )
                     continue
 
-                if event_type == "response.completed":
+                if event_type in {"response.completed", "response.incomplete"}:
                     final_response = event.response
 
             streamed_thinking_by_id: dict[str, AssistantReasoningItem] = {}
@@ -1626,6 +1647,11 @@ class OpenAIClient(BaseClient):
                 tool_calls=tool_calls,
                 usage=usage,
                 duration_seconds=duration_seconds,
+                finish_reason=(
+                    self._responses_finish_reason(final_response)
+                    if final_response is not None
+                    else None
+                ),
             )
         except Exception as exc:
             raise_llm_error(exc, provider=self.PROVIDER_NAME)

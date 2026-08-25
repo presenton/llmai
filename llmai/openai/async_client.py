@@ -169,8 +169,9 @@ class AsyncOpenAICompatibleClient(AsyncBaseClient):
             if not response.choices:
                 raise LLMError(400, "No content returned from LLM")
 
+            choice = response.choices[0]
             assistant_message = parser._chat_completion_message_to_assistant_message(
-                response.choices[0].message
+                choice.message
             )
             new_messages = [*messages, assistant_message]
 
@@ -184,6 +185,7 @@ class AsyncOpenAICompatibleClient(AsyncBaseClient):
                 tool_calls=assistant_message.tool_calls,
                 usage=parser._response_usage(getattr(response, "usage", None)),
                 duration_seconds=duration_seconds,
+                finish_reason=getattr(choice, "finish_reason", None),
             )
         except Exception as exc:
             raise_llm_error(exc, provider=parser.PROVIDER_NAME)
@@ -235,6 +237,7 @@ class AsyncOpenAICompatibleClient(AsyncBaseClient):
             partial_tool_calls: dict[int, dict[str, str | None]] = {}
             tool_order: list[int] = []
             usage: ResponseUsage | None = None
+            finish_reason: str | None = None
 
             async for event in response:
                 event_usage = parser._response_usage(getattr(event, "usage", None))
@@ -244,7 +247,10 @@ class AsyncOpenAICompatibleClient(AsyncBaseClient):
                 if not getattr(event, "choices", None):
                     continue
 
-                delta = event.choices[0].delta
+                choice = event.choices[0]
+                if getattr(choice, "finish_reason", None) is not None:
+                    finish_reason = choice.finish_reason
+                delta = choice.delta
 
                 thinking_delta = parser._chat_completion_delta_to_thinking_text(delta)
                 if thinking_delta:
@@ -372,6 +378,7 @@ class AsyncOpenAICompatibleClient(AsyncBaseClient):
                 tool_calls=tool_calls,
                 usage=usage,
                 duration_seconds=duration_seconds,
+                finish_reason=finish_reason,
             )
         except Exception as exc:
             raise_llm_error(exc, provider=parser.PROVIDER_NAME)
@@ -470,6 +477,7 @@ class AsyncOpenAICompatibleClient(AsyncBaseClient):
                 tool_calls=assistant_message.tool_calls,
                 usage=parser._response_usage(getattr(response, "usage", None)),
                 duration_seconds=duration_seconds,
+                finish_reason=parser._responses_finish_reason(response),
             )
         except Exception as exc:
             raise_llm_error(exc, provider=parser.PROVIDER_NAME)
@@ -703,7 +711,7 @@ async def aiter_openai_responses_stream(
                 )
                 continue
 
-            if event_type == "response.completed":
+            if event_type in {"response.completed", "response.incomplete"}:
                 final_response = event.response
 
         streamed_thinking_by_id: dict[str, AssistantReasoningItem] = {}
@@ -813,6 +821,11 @@ async def aiter_openai_responses_stream(
             tool_calls=tool_calls,
             usage=usage,
             duration_seconds=duration_seconds,
+            finish_reason=(
+                parser._responses_finish_reason(final_response)
+                if final_response is not None
+                else None
+            ),
         )
     except Exception as exc:
         raise_llm_error(exc, provider=parser.PROVIDER_NAME)

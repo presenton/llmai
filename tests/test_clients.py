@@ -1207,6 +1207,69 @@ class ClientBehaviorTests(unittest.TestCase):
                 ]
             )
 
+    def test_openai_omits_empty_assistant_tool_calls_from_history(self):
+        client = OpenAIClient(config=OpenAIClientConfig(api_key="test"))
+
+        messages = client._messages_to_openai_messages(
+            [AssistantMessage(content=text_parts("Previous answer"))]
+        )
+
+        self.assertNotIn("tool_calls", messages[0])
+
+    def test_openai_keeps_nonempty_assistant_tool_calls_as_array(self):
+        client = OpenAIClient(config=OpenAIClientConfig(api_key="test"))
+
+        messages = client._messages_to_openai_messages(
+            [
+                AssistantMessage(
+                    content=None,
+                    tool_calls=[
+                        AssistantToolCall(
+                            id="call_1",
+                            name="get_weather",
+                            arguments='{"city":"Kathmandu"}',
+                        )
+                    ],
+                )
+            ]
+        )
+
+        self.assertIsInstance(messages[0]["tool_calls"], list)
+        self.assertEqual(messages[0]["tool_calls"][0]["id"], "call_1")
+
+    def test_openai_exposes_length_finish_reason(self):
+        fake_message = SimpleNamespace(content="partial", tool_calls=None)
+        fake_response = SimpleNamespace(
+            choices=[
+                SimpleNamespace(message=fake_message, finish_reason="length")
+            ],
+            usage=None,
+        )
+        fake_completions = FakeOpenAICompletions(fake_response)
+        client = OpenAIClient(config=OpenAIClientConfig(api_key="test"))
+        client._client = SimpleNamespace(
+            chat=SimpleNamespace(completions=fake_completions)
+        )
+
+        result = client.generate(
+            model="gpt-test",
+            messages=[UserMessage(content=text_parts("Hello"))],
+        )
+
+        self.assertEqual(result.finish_reason, "length")
+
+    def test_openai_normalizes_responses_output_limit_finish_reason(self):
+        client = OpenAIClient(config=OpenAIClientConfig(api_key="test"))
+
+        reason = client._responses_finish_reason(
+            SimpleNamespace(
+                status="incomplete",
+                incomplete_details=SimpleNamespace(reason="max_output_tokens"),
+            )
+        )
+
+        self.assertEqual(reason, "length")
+
     def test_openai_stream_emits_tool_chunks_and_completion_tool_calls(self):
         events = iter(
             [

@@ -123,7 +123,8 @@ class AsyncClientTests(unittest.IsolatedAsyncioTestCase):
                     message=SimpleNamespace(
                         content="answer",
                         tool_calls=None,
-                    )
+                    ),
+                    finish_reason="stop",
                 )
             ],
             usage=SimpleNamespace(
@@ -159,6 +160,7 @@ class AsyncClientTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result.content[0].text, "answer")
         self.assertEqual(result.usage.total_tokens, 3)
+        self.assertEqual(result.finish_reason, "stop")
         openai_cls.assert_called_once()
         openai_cls.return_value.close.assert_called_once()
         await client.aclose()
