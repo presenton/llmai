@@ -1908,6 +1908,25 @@ class ClientBehaviorTests(unittest.TestCase):
                     },
                     "required": ["prompt"],
                 },
+                "progress": {
+                    "oneOf": [
+                        {
+                            "type": "object",
+                            "properties": {
+                                "type": {"const": "progress_bar"},
+                            },
+                        },
+                        {
+                            "type": "object",
+                            "properties": {
+                                "type": {"const": "gauge"},
+                            },
+                        },
+                    ],
+                    "discriminator": {"propertyName": "type"},
+                },
+                "oneOf": {"type": "string"},
+                "const": {"type": "string"},
             },
             "required": [
                 "title",
@@ -1957,6 +1976,24 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertNotIn(
             "maxWords",
             sent_schema["properties"]["image"]["properties"]["prompt"],
+        )
+        progress_schema = sent_schema["properties"]["progress"]
+        self.assertNotIn("oneOf", progress_schema)
+        self.assertNotIn("discriminator", progress_schema)
+        self.assertEqual(
+            progress_schema["anyOf"][0]["properties"]["type"],
+            {"type": "string", "enum": ["progress_bar"]},
+        )
+        self.assertEqual(
+            progress_schema["anyOf"][1]["properties"]["type"],
+            {"type": "string", "enum": ["gauge"]},
+        )
+        self.assertEqual(sent_schema["properties"]["oneOf"], {"type": "string"})
+        self.assertEqual(sent_schema["properties"]["const"], {"type": "string"})
+        self.assertIn("oneOf", schema["properties"]["progress"])
+        self.assertEqual(
+            schema["properties"]["progress"]["oneOf"][0]["properties"]["type"],
+            {"const": "progress_bar"},
         )
         self.assertEqual(schema["properties"]["url"]["format"], "uri")
         self.assertEqual(schema["properties"]["title"]["minLength"], 20)
@@ -3515,7 +3552,7 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(parameters["properties"]["cities"]["maxItems"], 3)
         self.assertIn("allOf", parameters["properties"]["location"])
 
-    def test_openrouter_strict_schemas_are_not_cleaned_up(self):
+    def test_openrouter_strict_schemas_use_openai_compatible_subset(self):
         client = OpenRouterClient(config=OpenRouterClientConfig(api_key="test"))
 
         response_format = client._get_openai_response_format_or_omit(
@@ -3556,9 +3593,32 @@ class ClientBehaviorTests(unittest.TestCase):
 
         schema = response_format["json_schema"]["schema"]
         parameters = tools[0]["function"]["parameters"]
-        self.assertNotIn("additionalProperties", schema)
+        self.assertFalse(schema["additionalProperties"])
+        self.assertEqual(schema["required"], ["cities"])
         self.assertEqual(schema["properties"]["cities"]["maxItems"], 3)
-        self.assertIn("allOf", parameters["properties"]["location"])
+        self.assertFalse(parameters["additionalProperties"])
+        self.assertEqual(parameters["required"], ["location"])
+        self.assertNotIn("allOf", parameters["properties"]["location"])
+        self.assertEqual(
+            parameters["properties"]["location"],
+            {"type": "string"},
+        )
+
+    def test_openrouter_non_strict_schema_is_unchanged(self):
+        client = OpenRouterClient(config=OpenRouterClientConfig(api_key="test"))
+        schema = {
+            "type": "object",
+            "properties": {
+                "value": {
+                    "oneOf": [
+                        {"const": "first"},
+                        {"const": "second"},
+                    ]
+                }
+            },
+        }
+
+        self.assertIs(client._openai_schema(schema, strict=False), schema)
 
     def test_fireworks_schemas_use_supported_schema_fields(self):
         client = FireworksClient(config=FireworksClientConfig(api_key="test"))

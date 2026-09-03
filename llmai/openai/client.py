@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from copy import deepcopy
 import json
 from logging import Logger
 from time import perf_counter
@@ -83,6 +84,78 @@ from llmai.shared.tools import (
     filter_resolved_tools_for_provider,
     resolve_tools,
 )
+
+
+def _json_type_for_const(value: object) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, int):
+        return "integer"
+    if isinstance(value, float):
+        return "number"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, list):
+        return "array"
+    if isinstance(value, dict):
+        return "object"
+    raise TypeError(
+        f"Unsupported JSON Schema const value type: {type(value).__name__}"
+    )
+
+
+def _normalize_openai_strict_schema(schema: dict) -> dict:
+    """Translate valid JSON Schema constructs to OpenAI's strict subset."""
+
+    def normalize(value: object, *, in_named_schema_map: bool = False) -> object:
+        if isinstance(value, list):
+            return [normalize(item) for item in value]
+        if not isinstance(value, dict):
+            return value
+
+        if in_named_schema_map:
+            return {key: normalize(item) for key, item in value.items()}
+
+        normalized = {
+            key: (
+                deepcopy(item)
+                if key in {"const", "enum", "default", "examples", "example"}
+                else normalize(
+                    item,
+                    in_named_schema_map=key
+                    in {"properties", "$defs", "definitions"},
+                )
+            )
+            for key, item in value.items()
+        }
+
+        one_of = normalized.get("oneOf")
+        if isinstance(one_of, list):
+            if "anyOf" in normalized:
+                raise ValueError(
+                    "OpenAI strict schema node cannot contain both oneOf and anyOf"
+                )
+            normalized.pop("oneOf")
+            normalized["anyOf"] = one_of
+
+        if "const" in normalized:
+            const_value = normalized.pop("const")
+            enum_values = normalized.get("enum")
+            if isinstance(enum_values, list) and const_value not in enum_values:
+                raise ValueError(
+                    "OpenAI strict schema const must be included in its enum"
+                )
+            normalized["enum"] = [const_value]
+            normalized.setdefault("type", _json_type_for_const(const_value))
+
+        return normalized
+
+    normalized = normalize(schema)
+    if not isinstance(normalized, dict):
+        raise TypeError("JSON Schema root must be an object")
+    return normalized
 
 
 class OpenAIClient(BaseClient):
@@ -569,7 +642,7 @@ class OpenAIClient(BaseClient):
             return schema
 
         return process_schema(
-            schema,
+            _normalize_openai_strict_schema(schema),
             flatten_refs=False,
             flatten_allof=True,
             ensure_additional_properties=True,

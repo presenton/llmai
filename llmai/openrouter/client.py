@@ -34,8 +34,9 @@ class OpenRouterClient(OpenAIClient):
         *,
         strict: bool,
     ) -> dict:
-        del strict
-        return schema
+        if not strict:
+            return schema
+        return super()._openai_schema(schema, strict=True)
 
     def _assistant_message_to_chat_completion_assistant_message_param(
         self,

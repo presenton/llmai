@@ -55,7 +55,7 @@ The transformations named below mean:
 | OpenAI | Unchanged; send `strict: false` | OpenAI strict processing; send `strict: true` | Unchanged; send `strict: false` | OpenAI strict processing; send `strict: true` |
 | Azure OpenAI | Same as OpenAI | Same as OpenAI | Same as OpenAI | Same as OpenAI |
 | Together AI | Same as OpenAI | Same as OpenAI | Same as OpenAI | Same as OpenAI |
-| OpenRouter | Unchanged; send `strict: false` | Unchanged; send `strict: true` | Unchanged; send `strict: false` | Unchanged; send `strict: true` |
+| OpenRouter | Unchanged; send `strict: false` | OpenAI strict processing; send `strict: true` | Unchanged; send `strict: false` | OpenAI strict processing; send `strict: true` |
 | LiteLLM | Unchanged; send `strict: false` | Unchanged; send `strict: true` | Unchanged; send `strict: false` | Unchanged; send `strict: true` |
 | ChatGPT | Unchanged; send `strict: false` | Unchanged; send `strict: true` | Unchanged; send `strict: false` | Unchanged; send `strict: true` |
 | Cerebras | Unchanged; send `strict: false` | Cerebras strict processing; send `strict: true` | Usually unchanged; see request-wide rule below | Cerebras strict processing; all tools become strict |
@@ -83,17 +83,19 @@ corresponding wire object contains `strict: false`.
 
 With `strict=true`, output and tool schemas are processed as follows:
 
-1. Flatten `allOf`, including resolving a `$ref` used inside an `allOf`.
-2. Keep only these schema fields:
+1. Convert `oneOf` to `anyOf` and convert `const` to a typed, single-value
+   `enum`.
+2. Flatten `allOf`, including resolving a `$ref` used inside an `allOf`.
+3. Keep only these schema fields:
    `$defs`, `$ref`, `additionalProperties`, `anyOf`, `description`, `enum`,
    `exclusiveMaximum`, `exclusiveMinimum`, `format`, `items`, `maxItems`,
    `maximum`, `minItems`, `minimum`, `maxLength`, `minLength`, `multipleOf`,
    `pattern`, `properties`, `required`, and `type`.
-3. For string schemas, keep only these formats: `date-time`, `time`, `date`,
+4. For string schemas, keep only these formats: `date-time`, `time`, `date`,
    `duration`, `email`, `hostname`, `ipv4`, `ipv6`, and `uuid`.
-4. Close every object with `additionalProperties: false`.
-5. Require every declared object property.
-6. Send `strict: true`.
+5. Close every object with `additionalProperties: false`.
+6. Require every declared object property.
+7. Send `strict: true`.
 
 OpenAI strict schemas cannot omit a declared property. Optional semantics must
 instead be represented by a required nullable property, such as a union with
@@ -103,12 +105,15 @@ General `$defs` and `$ref` values are preserved rather than flattened.
 
 ### OpenRouter and LiteLLM
 
-Both adapters use the OpenAI-compatible request shape but deliberately bypass
-OpenAI's schema cleanup. Output and tool schemas are forwarded unchanged in
-both modes. The requested `strict` boolean is still included on the wire.
+Both adapters use the OpenAI-compatible request shape. LiteLLM deliberately
+bypasses OpenAI's schema cleanup and forwards schemas unchanged in both modes.
+OpenRouter forwards non-strict schemas unchanged, but applies the OpenAI strict
+processing described above when `strict=true`. The requested `strict` boolean
+is still included on the wire.
 
-Consequently, the model/provider selected behind OpenRouter or LiteLLM is
-responsible for accepting the schema keywords and enforcing strictness.
+Consequently, the model/provider selected behind LiteLLM, or behind OpenRouter
+in non-strict mode, is responsible for accepting the schema keywords and
+enforcing strictness.
 
 ### ChatGPT
 
