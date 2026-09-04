@@ -3,6 +3,7 @@ import json
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
+from urllib.error import HTTPError
 
 import anthropic
 import httpx
@@ -5393,33 +5394,89 @@ class ClientBehaviorTests(unittest.TestCase):
     def test_google_serializes_user_images(self):
         client = GoogleClient(config=GoogleClientConfig(api_key="test"))
 
-        messages = client._messages_to_google_messages(
-            [
-                UserMessage(
-                    content=[
-                        TextContentPart(text="Describe this"),
-                        ImageContentPart(
-                            url="https://example.com/cat.png", mime_type="image/png"
-                        ),
-                        ImageContentPart(
-                            url="data:image/png;base64,cG5nLWJ5dGVz"
-                        ),
-                        ImageContentPart(data=b"png-bytes", mime_type="image/png"),
-                    ]
-                )
-            ]
-        )
+        s3_url = "https://bucket.s3.us-east-1.amazonaws.com/cat.png?signature=test"
+        with patch("llmai.google.client.build_opener") as build_s3_opener:
+            response = build_s3_opener.return_value.open.return_value.__enter__.return_value
+            response.headers = {"content-type": "image/png"}
+            response.read.side_effect = [b"s3-png-bytes", b""]
+            messages = client._messages_to_google_messages(
+                [
+                    UserMessage(
+                        content=[
+                            TextContentPart(text="Describe this"),
+                            ImageContentPart(url=s3_url, mime_type="image/png"),
+                            ImageContentPart(
+                                url="https://example.com/cat.png",
+                                mime_type="image/png",
+                            ),
+                            ImageContentPart(url="data:image/png;base64,cG5nLWJ5dGVz"),
+                            ImageContentPart(
+                                data=b"png-bytes",
+                                mime_type="image/png",
+                            ),
+                        ]
+                    )
+                ]
+            )
 
         self.assertEqual(messages[0].parts[0].text, "Describe this")
+        self.assertEqual(messages[0].parts[1].inline_data.data, b"s3-png-bytes")
+        self.assertEqual(messages[0].parts[1].inline_data.mime_type, "image/png")
+        self.assertIsNone(messages[0].parts[1].file_data)
         self.assertEqual(
-            messages[0].parts[1].file_data.file_uri, "https://example.com/cat.png"
+            messages[0].parts[2].file_data.file_uri, "https://example.com/cat.png"
         )
-        self.assertEqual(messages[0].parts[1].file_data.mime_type, "image/png")
-        self.assertEqual(messages[0].parts[2].inline_data.data, b"png-bytes")
-        self.assertEqual(messages[0].parts[2].inline_data.mime_type, "image/png")
-        self.assertIsNone(messages[0].parts[2].file_data)
+        self.assertEqual(messages[0].parts[2].file_data.mime_type, "image/png")
         self.assertEqual(messages[0].parts[3].inline_data.data, b"png-bytes")
         self.assertEqual(messages[0].parts[3].inline_data.mime_type, "image/png")
+        self.assertIsNone(messages[0].parts[3].file_data)
+        self.assertEqual(messages[0].parts[4].inline_data.data, b"png-bytes")
+        self.assertEqual(messages[0].parts[4].inline_data.mime_type, "image/png")
+
+    def test_google_reports_s3_image_download_failure_as_configuration_error(self):
+        client = GoogleClient(config=GoogleClientConfig(api_key="test"))
+        s3_url = "https://bucket.s3.us-east-1.amazonaws.com/private.png"
+        error = HTTPError(s3_url, 403, "Forbidden", {}, None)
+
+        with patch("llmai.google.client.build_opener") as build_s3_opener:
+            build_s3_opener.return_value.open.side_effect = error
+            with self.assertRaises(LLMConfigurationError) as context:
+                client._messages_to_google_messages(
+                    [
+                        UserMessage(
+                            content=[
+                                ImageContentPart(
+                                    url=s3_url,
+                                    mime_type="image/png",
+                                )
+                            ]
+                        )
+                    ]
+                )
+
+        self.assertIn("HTTP 403", str(context.exception))
+        self.assertEqual(context.exception.provider, "google")
+
+    def test_google_does_not_download_deceptive_s3_hostname(self):
+        client = GoogleClient(config=GoogleClientConfig(api_key="test"))
+        deceptive_url = "https://bucket.s3.amazonaws.com.attacker.example/cat.png"
+
+        with patch("llmai.google.client.build_opener") as build_s3_opener:
+            messages = client._messages_to_google_messages(
+                [
+                    UserMessage(
+                        content=[
+                            ImageContentPart(
+                                url=deceptive_url,
+                                mime_type="image/png",
+                            )
+                        ]
+                    )
+                ]
+            )
+
+        build_s3_opener.assert_not_called()
+        self.assertEqual(messages[0].parts[0].file_data.file_uri, deceptive_url)
 
     def test_google_rejects_malformed_image_data_uri(self):
         client = GoogleClient(config=GoogleClientConfig(api_key="test"))

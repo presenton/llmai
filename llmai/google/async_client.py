@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncIterator
 from logging import Logger
@@ -120,9 +121,13 @@ class AsyncGoogleCompatibleClient(AsyncBaseClient):
 
         try:
             start_time = perf_counter()
+            contents = await asyncio.to_thread(
+                parser._messages_to_google_messages,
+                messages,
+            )
             response = self._provider_client.aio.models.generate_content(
                 model=model,
-                contents=parser._messages_to_google_messages(messages),
+                contents=contents,
                 config=config,
             )
             response = await resolve_async_result(response)
@@ -203,10 +208,14 @@ class AsyncGoogleCompatibleClient(AsyncBaseClient):
             seen_images: set[tuple[str, str, bytes | str]] = set()
             usage: ResponseUsage | None = None
             start_time = perf_counter()
+            contents = await asyncio.to_thread(
+                parser._messages_to_google_messages,
+                messages,
+            )
 
             response = self._provider_client.aio.models.generate_content_stream(
                 model=model,
-                contents=parser._messages_to_google_messages(messages),
+                contents=contents,
                 config=config,
             )
             response = await resolve_async_result(response)
