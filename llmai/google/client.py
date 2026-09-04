@@ -4,8 +4,11 @@ import base64
 from binascii import Error as BinasciiError
 import json
 from logging import Logger
+import mimetypes
 from time import perf_counter
-from urllib.parse import unquote_to_bytes
+from urllib.error import HTTPError, URLError
+from urllib.parse import unquote_to_bytes, urlsplit
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from google import genai
 from google.genai.types import (
@@ -85,6 +88,11 @@ from llmai.shared.tools import (
 )
 
 
+class _RejectS3Redirects(HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
 class GoogleClient(BaseClient):
     PROVIDER_NAME = "google"
     PROVIDER_LABEL = "Google Gemini"
@@ -113,6 +121,8 @@ class GoogleClient(BaseClient):
         "title",
         "type",
     ]
+    S3_IMAGE_MAX_BYTES = 20 * 1024 * 1024
+    S3_IMAGE_TIMEOUT_SECONDS = 30.0
 
     def __init__(
         self,
@@ -313,6 +323,17 @@ class GoogleClient(BaseClient):
                                 mime_type=mime_type,
                             )
                         )
+                    elif self._is_s3_https_url(part.url):
+                        data, mime_type = self._download_s3_image(
+                            part.url,
+                            fallback_mime_type=part.mime_type,
+                        )
+                        parts.append(
+                            GooglePart.from_bytes(
+                                data=data,
+                                mime_type=mime_type,
+                            )
+                        )
                     else:
                         parts.append(
                             GooglePart.from_uri(
@@ -331,6 +352,97 @@ class GoogleClient(BaseClient):
                 parts.append(GooglePart.from_text(text=part.text))
 
         return parts
+
+    def _is_s3_https_url(self, uri: str) -> bool:
+        parsed = urlsplit(uri)
+        if parsed.scheme.casefold() != "https":
+            return False
+
+        hostname = (parsed.hostname or "").casefold().rstrip(".")
+        aws_suffixes = (".amazonaws.com", ".amazonaws.com.cn")
+        for suffix in aws_suffixes:
+            if hostname == suffix[1:]:
+                return False
+            if not hostname.endswith(suffix):
+                continue
+            aws_labels = hostname[: -len(suffix)].split(".")
+            return any(label == "s3" or label.startswith("s3-") for label in aws_labels)
+        return False
+
+    def _download_s3_image(
+        self,
+        uri: str,
+        *,
+        fallback_mime_type: str | None,
+    ) -> tuple[bytes, str]:
+        try:
+            request = Request(uri, headers={"Accept": "image/*"})
+            opener = build_opener(_RejectS3Redirects())
+            with opener.open(
+                request,
+                timeout=self.S3_IMAGE_TIMEOUT_SECONDS,
+            ) as response:
+                content_length = response.headers.get("content-length")
+                if content_length:
+                    try:
+                        declared_size = int(content_length)
+                    except ValueError:
+                        declared_size = None
+                    if (
+                        declared_size is not None
+                        and declared_size > self.S3_IMAGE_MAX_BYTES
+                    ):
+                        raise configuration_error(
+                            "S3 image exceeds Google's 20 MiB inline data limit",
+                            provider=self.PROVIDER_NAME,
+                        )
+
+                chunks: list[bytes] = []
+                downloaded_size = 0
+                while chunk := response.read(64 * 1024):
+                    downloaded_size += len(chunk)
+                    if downloaded_size > self.S3_IMAGE_MAX_BYTES:
+                        raise configuration_error(
+                            "S3 image exceeds Google's 20 MiB inline data limit",
+                            provider=self.PROVIDER_NAME,
+                        )
+                    chunks.append(chunk)
+
+                data = b"".join(chunks)
+                response_mime_type = (
+                    response.headers.get("content-type", "").split(";", 1)[0].strip()
+                )
+        except HTTPError as exc:
+            raise configuration_error(
+                f"Could not download S3 image: HTTP {exc.code}",
+                provider=self.PROVIDER_NAME,
+                cause=exc,
+            ) from exc
+        except (URLError, OSError) as exc:
+            raise configuration_error(
+                "Could not download S3 image",
+                provider=self.PROVIDER_NAME,
+                cause=exc,
+            ) from exc
+
+        if not data:
+            raise configuration_error(
+                "S3 image is empty",
+                provider=self.PROVIDER_NAME,
+            )
+
+        guessed_mime_type, _ = mimetypes.guess_type(
+            urlsplit(uri).path,
+            strict=False,
+        )
+        mime_type = fallback_mime_type or response_mime_type or guessed_mime_type
+        if not mime_type or not mime_type.casefold().startswith("image/"):
+            raise configuration_error(
+                "S3 image requires an image MIME type",
+                provider=self.PROVIDER_NAME,
+            )
+
+        return data, mime_type
 
     def _decode_image_data_uri(
         self,
