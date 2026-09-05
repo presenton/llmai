@@ -100,6 +100,17 @@ class ChatGPTClient(BaseClient):
     def _response_item_id(self, prefix: str = "item") -> str:
         return f"{prefix}_{uuid4().hex}"
 
+    def _responses_finish_reason(self, response: object) -> str | None:
+        """Normalize Responses API termination metadata to chat finish reasons."""
+
+        if getattr(response, "status", None) == "completed":
+            return "stop"
+        incomplete = getattr(response, "incomplete_details", None)
+        reason = getattr(incomplete, "reason", None)
+        if reason in {"max_output_tokens", "max_tokens"}:
+            return "length"
+        return str(reason) if reason else None
+
     def _assistant_content_to_openai_content(
         self,
         content: AssistantContent,

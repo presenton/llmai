@@ -8,6 +8,7 @@ import llmai.client as client_module
 import openai
 from llmai import (
     AsyncBedrockClient,
+    AsyncChatGPTClient,
     AsyncOpenAIClient,
     OpenAIClientConfig,
     get_async_client,
@@ -162,6 +163,58 @@ class AsyncClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.usage.total_tokens, 3)
         self.assertEqual(result.finish_reason, "stop")
         openai_cls.assert_called_once()
+        openai_cls.return_value.close.assert_called_once()
+        await client.aclose()
+
+    async def test_async_chatgpt_stream_exposes_completed_finish_reason(self):
+        completed_response = SimpleNamespace(
+            status="completed",
+            output=[
+                SimpleNamespace(
+                    type="message",
+                    content=[
+                        SimpleNamespace(type="output_text", text="final answer")
+                    ],
+                )
+            ],
+            usage=None,
+        )
+
+        async def response_stream():
+            yield SimpleNamespace(
+                type="response.completed",
+                response=completed_response,
+            )
+
+        provider_client = SimpleNamespace(
+            responses=SimpleNamespace(
+                create=AsyncMock(return_value=response_stream()),
+            ),
+            close=AsyncMock(),
+        )
+        with (
+            patch("llmai.chatgpt.client.OpenAI") as openai_cls,
+            patch(
+                "llmai.chatgpt.async_client.AsyncOpenAI",
+                return_value=provider_client,
+            ),
+        ):
+            client = AsyncChatGPTClient(
+                config=ChatGPTClientConfig(access_token="token"),
+            )
+
+        chunks = [
+            chunk
+            async for chunk in client.agenerate(
+                model="gpt-test",
+                messages=[UserMessage(content="Hello")],
+                stream=True,
+            )
+        ]
+
+        self.assertEqual(chunks[-1].type, "completion")
+        self.assertEqual(chunks[-1].content[0].text, "final answer")
+        self.assertEqual(chunks[-1].finish_reason, "stop")
         openai_cls.return_value.close.assert_called_once()
         await client.aclose()
 
