@@ -75,10 +75,12 @@ class ChatGPTClient(BaseClient):
         self._base_url = config.base_url or self.DEFAULT_BASE_URL
         resolved_access_token = self._resolve_access_token(config.access_token)
         resolved_account_id = _strip_or_none(config.account_id)
+        self._session_id = _strip_or_none(config.session_id) or str(uuid4())
 
         default_headers = {
             "OpenAI-Beta": "responses=experimental",
             "originator": "pi",
+            "x-opencode-session": self._session_id,
         }
         if resolved_account_id is not None:
             default_headers["chatgpt-account-id"] = resolved_account_id
@@ -96,6 +98,10 @@ class ChatGPTClient(BaseClient):
         if self._logger:
             self._logger.info("ChatGPT client created")
             self._logger.info("Base URL: %s", self._base_url)
+
+    @property
+    def session_id(self) -> str:
+        return self._session_id
 
     def _response_item_id(self, prefix: str = "item") -> str:
         return f"{prefix}_{uuid4().hex}"

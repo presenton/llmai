@@ -197,11 +197,25 @@ class AsyncClientTests(unittest.IsolatedAsyncioTestCase):
             patch(
                 "llmai.chatgpt.async_client.AsyncOpenAI",
                 return_value=provider_client,
-            ),
+            ) as async_openai_cls,
         ):
             client = AsyncChatGPTClient(
-                config=ChatGPTClientConfig(access_token="token"),
+                config=ChatGPTClientConfig(
+                    access_token="token",
+                    session_id="session-123",
+                ),
             )
+
+        self.assertEqual(
+            openai_cls.call_args.kwargs["default_headers"]["x-opencode-session"],
+            "session-123",
+        )
+        self.assertEqual(
+            async_openai_cls.call_args.kwargs["default_headers"][
+                "x-opencode-session"
+            ],
+            "session-123",
+        )
 
         chunks = [
             chunk
