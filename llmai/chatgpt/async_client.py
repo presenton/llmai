@@ -30,6 +30,7 @@ class AsyncChatGPTClient(AsyncBaseClient):
         default_headers = {
             "OpenAI-Beta": "responses=experimental",
             "originator": "pi",
+            "x-opencode-session": sync_client.session_id,
         }
         if config.account_id is not None:
             default_headers["chatgpt-account-id"] = config.account_id.strip()

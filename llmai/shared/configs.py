@@ -66,6 +66,7 @@ class ChatGPTClientConfig(BaseClientConfig):
     access_token: RequiredStr
     base_url: OptionalStr = None
     account_id: OptionalStr = None
+    session_id: OptionalStr = None
 
 
 class DeepSeekClientConfig(APIKeyClientConfig):

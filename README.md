@@ -481,7 +481,10 @@ from llmai.shared import UserMessage
 
 
 client = ChatGPTClient(
-    config=ChatGPTClientConfig(access_token="<your-chatgpt-access-token>"),
+    config=ChatGPTClientConfig(
+        access_token="<your-chatgpt-access-token>",
+        session_id="<stable-conversation-id>",
+    ),
 )
 
 result = client.generate(
@@ -494,7 +497,7 @@ result = client.generate(
 print(result.content)
 ```
 
-`ChatGPTClient` targets ChatGPT's Codex backend at `https://chatgpt.com/backend-api/codex` and always uses the Responses API internally. Credentials and optional overrides are passed through `ChatGPTClientConfig`, which uses `access_token`. When you include `SystemMessage` entries, ChatGPT collects them in order and sends them through the Responses API `instructions` field; otherwise it falls back to `instructions="Follow the prompt"`. The ChatGPT backend requires `stream=True`, so `generate(stream=False)` streams internally and returns the aggregated final response. It also does not support Responses `temperature` or `max_output_tokens`, so `temperature` and `max_tokens` are ignored for this client.
+`ChatGPTClient` targets ChatGPT's Codex backend at `https://chatgpt.com/backend-api/codex` and always uses the Responses API internally. Credentials and optional overrides are passed through `ChatGPTClientConfig`, which uses `access_token`. The client sends `session_id` as the `x-opencode-session` header for provider routing; when omitted, it generates a UUID that remains stable for the lifetime of the client. Applications that recreate clients during one conversation should pass their own stable conversation ID. When you include `SystemMessage` entries, ChatGPT collects them in order and sends them through the Responses API `instructions` field; otherwise it falls back to `instructions="Follow the prompt"`. The ChatGPT backend requires `stream=True`, so `generate(stream=False)` streams internally and returns the aggregated final response. It also does not support Responses `temperature` or `max_output_tokens`, so `temperature` and `max_tokens` are ignored for this client.
 
 ## DeepSeek
 

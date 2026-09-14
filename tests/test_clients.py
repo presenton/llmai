@@ -4,6 +4,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 from urllib.error import HTTPError
+from uuid import UUID
 
 import anthropic
 import httpx
@@ -830,6 +831,7 @@ class ClientBehaviorTests(unittest.TestCase):
                 config=ChatGPTClientConfig(
                     access_token="token-123",
                     account_id="account-123",
+                    session_id="session-123",
                 )
             )
 
@@ -847,9 +849,25 @@ class ClientBehaviorTests(unittest.TestCase):
         )
         self.assertEqual(kwargs["default_headers"]["originator"], "pi")
         self.assertEqual(
+            kwargs["default_headers"]["x-opencode-session"],
+            "session-123",
+        )
+        self.assertEqual(
             kwargs["default_headers"]["chatgpt-account-id"],
             "account-123",
         )
+
+    def test_chatgpt_init_generates_session_id_when_omitted(self):
+        with patch("llmai.chatgpt.client.OpenAI") as openai_cls:
+            client = ChatGPTClient(
+                config=ChatGPTClientConfig(access_token="token-123")
+            )
+
+        session_id = openai_cls.call_args.kwargs["default_headers"][
+            "x-opencode-session"
+        ]
+        self.assertEqual(session_id, client.session_id)
+        self.assertEqual(str(UUID(session_id)), session_id)
 
     def test_chatgpt_generate_uses_openai_responses_api(self):
         completed_response = SimpleNamespace(
