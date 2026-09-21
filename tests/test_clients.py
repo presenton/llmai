@@ -6569,6 +6569,50 @@ class ClientBehaviorTests(unittest.TestCase):
             [{"text": "sunny "}, {"text": "now"}],
         )
 
+    def test_bedrock_groups_parallel_tool_responses_in_one_user_message(self):
+        fake_runtime = FakeBedrockRuntimeClient(response={})
+        client, _, _ = self.make_bedrock_client(
+            fake_runtime,
+            region="us-east-1",
+            aws_access_key_id="aws-id",
+            aws_secret_access_key="aws-secret",
+        )
+
+        messages = client._messages_to_bedrock_messages(
+            [
+                AssistantMessage(
+                    content=None,
+                    tool_calls=[
+                        AssistantToolCall(
+                            id="call_1",
+                            name="get_weather",
+                            arguments='{"city": "Kathmandu"}',
+                        ),
+                        AssistantToolCall(
+                            id="call_2",
+                            name="get_time",
+                            arguments='{"timezone": "Asia/Kathmandu"}',
+                        ),
+                    ],
+                ),
+                ToolResponseMessage(
+                    id="call_1",
+                    content=[TextContentPart(text="sunny")],
+                ),
+                ToolResponseMessage(
+                    id="call_2",
+                    content=[TextContentPart(text="12:00")],
+                ),
+            ]
+        )
+
+        self.assertEqual(len(messages), 2)
+        self.assertEqual(messages[1]["role"], "user")
+        self.assertEqual(
+            [block["toolResult"]["toolUseId"] for block in messages[1]["content"]],
+            ["call_1", "call_2"],
+        )
+
     def test_bedrock_serializes_user_images_and_rejects_assistant_image_history(self):
         fake_runtime = FakeBedrockRuntimeClient(
             response={
