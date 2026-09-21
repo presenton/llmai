@@ -23,6 +23,7 @@ from llmai.shared import (
     DeepSeekClientConfig,
     FireworksClientConfig,
     GoogleClientConfig,
+    JSONSchemaResponse,
     LiteLLMClientConfig,
     LMStudioClientConfig,
     OpenRouterClientConfig,
@@ -438,6 +439,74 @@ class AsyncClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("/converse", captured["url"])
         self.assertEqual(captured["headers"]["Authorization"], "Bearer bedrock-key")
 
+    async def test_async_bedrock_falls_back_to_internal_schema_tool(self):
+        requests = []
+        client = AsyncBedrockClient(
+            config=BedrockClientConfig(region="us-east-1", api_key="bedrock-key"),
+        )
+        await client._http_client.aclose()
+
+        async def request(method, url, *, headers, content):
+            requests.append(content)
+            if len(requests) == 1:
+                return httpx.Response(
+                    400,
+                    json={
+                        "message": (
+                            "The model returned the following errors: "
+                            "output_config.format: Extra inputs are not permitted"
+                        )
+                    },
+                    request=httpx.Request(method, url),
+                )
+            return httpx.Response(
+                200,
+                json={
+                    "output": {
+                        "message": {
+                            "role": "assistant",
+                            "content": [
+                                {
+                                    "toolUse": {
+                                        "toolUseId": "schema_1",
+                                        "name": "final_answer",
+                                        "input": {"answer": "pong"},
+                                    }
+                                }
+                            ],
+                        }
+                    }
+                },
+                request=httpx.Request(method, url),
+            )
+
+        client._http_client = SimpleNamespace(
+            request=request,
+            aclose=AsyncMock(),
+        )
+
+        result = await client.agenerate(
+            model="anthropic.claude-3-5-haiku",
+            messages=[UserMessage(content="Answer in JSON")],
+            response_format=JSONSchemaResponse(
+                name="final_answer",
+                json_schema={
+                    "type": "object",
+                    "properties": {"answer": {"type": "string"}},
+                    "required": ["answer"],
+                },
+            ),
+        )
+        await client.aclose()
+
+        self.assertEqual(result.content, {"answer": "pong"})
+        self.assertEqual(result.tool_calls, [])
+        self.assertEqual(result.messages[-1].tool_calls, [])
+        self.assertEqual(len(requests), 2)
+        self.assertIn(b'"outputConfig"', requests[0])
+        self.assertNotIn(b'"outputConfig"', requests[1])
+        self.assertIn(b'"toolConfig"', requests[1])
+
     async def test_async_bedrock_uses_async_http_for_converse_stream(self):
         captured = {}
         stream_closed = asyncio.Event()
@@ -498,6 +567,108 @@ class AsyncClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("/converse-stream", captured["url"])
         self.assertEqual(captured["headers"]["Authorization"], "Bearer bedrock-key")
         self.assertTrue(stream_closed.is_set())
+
+    async def test_async_bedrock_stream_falls_back_to_internal_schema_tool(self):
+        requests = []
+
+        class FakeStreamContext:
+            def __init__(self, response):
+                self.response = response
+
+            async def __aenter__(self):
+                return self.response
+
+            async def __aexit__(self, exc_type, exc, traceback):
+                return None
+
+        def stream(method, url, *, headers, content):
+            requests.append(content)
+            status_code = 400 if len(requests) == 1 else 200
+            payload = (
+                {
+                    "message": (
+                        "The model returned the following errors: "
+                        "output_config.format: Extra inputs are not permitted"
+                    )
+                }
+                if status_code == 400
+                else {}
+            )
+            return FakeStreamContext(
+                httpx.Response(
+                    status_code,
+                    json=payload,
+                    request=httpx.Request(method, url),
+                )
+            )
+
+        async def iter_stream_events(response):
+            del response
+            yield {
+                "contentBlockStart": {
+                    "contentBlockIndex": 0,
+                    "start": {
+                        "toolUse": {
+                            "toolUseId": "schema_1",
+                            "name": "final_answer",
+                        }
+                    },
+                }
+            }
+            yield {
+                "contentBlockDelta": {
+                    "contentBlockIndex": 0,
+                    "delta": {"toolUse": {"input": '{"answer":"'}},
+                }
+            }
+            yield {
+                "contentBlockDelta": {
+                    "contentBlockIndex": 0,
+                    "delta": {"toolUse": {"input": 'pong"}'}},
+                }
+            }
+
+        client = AsyncBedrockClient(
+            config=BedrockClientConfig(region="us-east-1", api_key="bedrock-key"),
+        )
+        await client._http_client.aclose()
+        client._http_client = SimpleNamespace(
+            stream=stream,
+            aclose=AsyncMock(),
+        )
+        client._iter_stream_events = iter_stream_events
+
+        chunks = [
+            chunk
+            async for chunk in client.agenerate(
+                model="anthropic.claude-3-5-haiku",
+                messages=[UserMessage(content="Answer in JSON")],
+                response_format=JSONSchemaResponse(
+                    name="final_answer",
+                    json_schema={
+                        "type": "object",
+                        "properties": {"answer": {"type": "string"}},
+                        "required": ["answer"],
+                    },
+                ),
+                stream=True,
+            )
+        ]
+        await client.aclose()
+
+        content_chunks = [
+            chunk.chunk
+            for chunk in chunks
+            if isinstance(chunk, ResponseStreamContentChunk)
+        ]
+        completion = chunks[-1]
+        self.assertEqual("".join(content_chunks), '{"answer":"pong"}')
+        self.assertEqual(completion.content, {"answer": "pong"})
+        self.assertEqual(completion.tool_calls, [])
+        self.assertEqual(completion.messages[-1].tool_calls, [])
+        self.assertEqual(len(requests), 2)
+        self.assertIn(b'"outputConfig"', requests[0])
+        self.assertNotIn(b'"outputConfig"', requests[1])
 
     async def test_async_bedrock_parses_unwrapped_stream_event_payloads(self):
         client = AsyncBedrockClient(
