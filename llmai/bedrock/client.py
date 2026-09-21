@@ -290,8 +290,29 @@ class BedrockClient(BaseClient):
         messages: list[Message],
     ) -> list[dict[str, object]]:
         bedrock_messages: list[dict[str, object]] = []
+        pending_tool_results: list[dict[str, object]] = []
 
         for message in messages:
+            if isinstance(message, ToolResponseMessage):
+                pending_tool_results.append(
+                    {
+                        "toolResult": {
+                            "toolUseId": message.id,
+                            "content": self._tool_response_to_bedrock_content_blocks(
+                                message.content
+                            ),
+                            "status": "success",
+                        }
+                    }
+                )
+                continue
+
+            if pending_tool_results:
+                bedrock_messages.append(
+                    {"role": "user", "content": pending_tool_results}
+                )
+                pending_tool_results = []
+
             if isinstance(message, SystemMessage):
                 continue
 
@@ -310,23 +331,8 @@ class BedrockClient(BaseClient):
                 )
                 continue
 
-            if isinstance(message, ToolResponseMessage):
-                bedrock_messages.append(
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "toolResult": {
-                                    "toolUseId": message.id,
-                                    "content": self._tool_response_to_bedrock_content_blocks(
-                                        message.content
-                                    ),
-                                    "status": "success",
-                                }
-                            }
-                        ],
-                    }
-                )
+        if pending_tool_results:
+            bedrock_messages.append({"role": "user", "content": pending_tool_results})
 
         return bedrock_messages
 
