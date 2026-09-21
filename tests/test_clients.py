@@ -241,6 +241,22 @@ class FakeBedrockRuntimeClient:
         return self.stream_response
 
 
+def bedrock_structured_output_unsupported_error(operation: str):
+    return botocore_exceptions.ClientError(
+        {
+            "Error": {
+                "Code": "ValidationException",
+                "Message": (
+                    "The model returned the following errors: "
+                    "output_config.format: Extra inputs are not permitted"
+                ),
+            },
+            "ResponseMetadata": {"HTTPStatusCode": 400},
+        },
+        operation,
+    )
+
+
 class FakeBoto3Session:
     def __init__(self, runtime_client, *, kwargs):
         self.runtime_client = runtime_client
@@ -6226,6 +6242,64 @@ class ClientBehaviorTests(unittest.TestCase):
             ]["schema"],
         )
 
+    def test_bedrock_generate_falls_back_to_internal_schema_tool(self):
+        fallback_response = {
+            "output": {
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "toolUse": {
+                                "toolUseId": "schema_1",
+                                "name": "final_answer",
+                                "input": {"answer": "pong"},
+                            }
+                        }
+                    ],
+                }
+            }
+        }
+
+        class FallbackRuntime(FakeBedrockRuntimeClient):
+            def converse(self, **kwargs):
+                self.calls.append(kwargs)
+                if len(self.calls) == 1:
+                    raise bedrock_structured_output_unsupported_error("Converse")
+                return fallback_response
+
+        fake_runtime = FallbackRuntime()
+        client, _, _ = self.make_bedrock_client(
+            fake_runtime,
+            region="us-east-1",
+            aws_access_key_id="aws-id",
+            aws_secret_access_key="aws-secret",
+        )
+
+        result = client.generate(
+            model="anthropic.claude-3-5-haiku",
+            messages=[UserMessage(content=text_parts("Answer in JSON"))],
+            response_format=JSONSchemaResponse(
+                name="final_answer",
+                json_schema=AnswerSchema,
+            ),
+        )
+
+        self.assertEqual(result.content, {"answer": "pong"})
+        self.assertEqual(result.tool_calls, [])
+        self.assertEqual(result.messages[-1].tool_calls, [])
+        self.assertIn("outputConfig", fake_runtime.calls[0])
+        self.assertNotIn("toolConfig", fake_runtime.calls[0])
+        self.assertNotIn("outputConfig", fake_runtime.calls[1])
+        self.assertEqual(
+            fake_runtime.calls[1]["toolConfig"]["toolChoice"],
+            {"tool": {"name": "final_answer"}},
+        )
+        fallback_tool = fake_runtime.calls[1]["toolConfig"]["tools"][0][
+            "toolSpec"
+        ]
+        self.assertEqual(fallback_tool["name"], "final_answer")
+        self.assertNotIn("strict", fallback_tool)
+
     def test_bedrock_native_structured_output_forbids_additional_properties_for_both_strict_values(
         self,
     ):
@@ -6668,6 +6742,81 @@ class ClientBehaviorTests(unittest.TestCase):
         self.assertEqual(payload_chunks[-1].usage.total_tokens, 14)
         self.assertIsNotNone(payload_chunks[-1].duration_seconds)
         self.assertGreaterEqual(payload_chunks[-1].duration_seconds, 0)
+
+    def test_bedrock_stream_falls_back_to_internal_schema_tool(self):
+        fallback_stream = {
+            "stream": iter(
+                [
+                    {
+                        "contentBlockStart": {
+                            "contentBlockIndex": 0,
+                            "start": {
+                                "toolUse": {
+                                    "toolUseId": "schema_1",
+                                    "name": "final_answer",
+                                }
+                            },
+                        }
+                    },
+                    {
+                        "contentBlockDelta": {
+                            "contentBlockIndex": 0,
+                            "delta": {"toolUse": {"input": '{"answer":"'}},
+                        }
+                    },
+                    {
+                        "contentBlockDelta": {
+                            "contentBlockIndex": 0,
+                            "delta": {"toolUse": {"input": 'pong"}'}},
+                        }
+                    },
+                ]
+            )
+        }
+
+        class FallbackRuntime(FakeBedrockRuntimeClient):
+            def converse_stream(self, **kwargs):
+                self.stream_calls.append(kwargs)
+                if len(self.stream_calls) == 1:
+                    raise bedrock_structured_output_unsupported_error(
+                        "ConverseStream"
+                    )
+                return fallback_stream
+
+        fake_runtime = FallbackRuntime()
+        client, _, _ = self.make_bedrock_client(
+            fake_runtime,
+            region="us-east-1",
+            aws_access_key_id="aws-id",
+            aws_secret_access_key="aws-secret",
+        )
+
+        chunks = list(
+            client.generate(
+                model="anthropic.claude-3-5-haiku",
+                messages=[UserMessage(content=text_parts("Answer in JSON"))],
+                response_format=JSONSchemaResponse(
+                    name="final_answer",
+                    json_schema=AnswerSchema,
+                ),
+                stream=True,
+            )
+        )
+
+        payload_chunks = stream_payload_chunks(chunks)
+        self.assertEqual(
+            [chunk.type for chunk in payload_chunks],
+            ["content", "content", "completion"],
+        )
+        self.assertEqual(
+            "".join(chunk.chunk for chunk in payload_chunks[:-1]),
+            '{"answer":"pong"}',
+        )
+        self.assertEqual(payload_chunks[-1].content, {"answer": "pong"})
+        self.assertEqual(payload_chunks[-1].tool_calls, [])
+        self.assertEqual(payload_chunks[-1].messages[-1].tool_calls, [])
+        self.assertIn("outputConfig", fake_runtime.stream_calls[0])
+        self.assertNotIn("outputConfig", fake_runtime.stream_calls[1])
 
     def test_bedrock_stream_wraps_multiple_thinking_blocks(self):
         fake_runtime = FakeBedrockRuntimeClient(

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator
+from contextlib import AsyncExitStack
 from logging import Logger
 from time import perf_counter
 from typing import Any
@@ -109,6 +111,27 @@ class AsyncBedrockClient(AsyncBaseClient):
         response.raise_for_status()
         return response
 
+    async def _open_stream_response(
+        self,
+        request: AWSPreparedRequest,
+    ) -> tuple[AsyncExitStack, httpx.Response]:
+        stack = AsyncExitStack()
+        await stack.__aenter__()
+        try:
+            response = await stack.enter_async_context(
+                self._http_client.stream(
+                    request.method,
+                    request.url,
+                    headers=dict(request.headers),
+                    content=request.body,
+                )
+            )
+            response.raise_for_status()
+            return stack, response
+        except BaseException:
+            await stack.aclose()
+            raise
+
     def _parse_response(
         self,
         operation_name: str,
@@ -204,26 +227,67 @@ class AsyncBedrockClient(AsyncBaseClient):
         parser = self._parser
         try:
             start_time = perf_counter()
-            response = await self._send_request(
-                "Converse",
-                parser._converse_kwargs(
-                    model=model,
-                    messages=messages,
-                    temperature=temperature,
-                    tools=tools,
-                    tool_choice=tool_choice,
-                    response_format=response_format,
-                    max_tokens=max_tokens,
-                    reasoning_effort=reasoning_effort,
-                    extra_body=extra_body,
-                ),
-            )
+            native_structured_output = True
+            try:
+                response = await self._send_request(
+                    "Converse",
+                    parser._converse_kwargs(
+                        model=model,
+                        messages=messages,
+                        temperature=temperature,
+                        tools=tools,
+                        tool_choice=tool_choice,
+                        response_format=response_format,
+                        max_tokens=max_tokens,
+                        reasoning_effort=reasoning_effort,
+                        extra_body=extra_body,
+                    ),
+                )
+            except Exception as exc:
+                if not parser._should_retry_with_response_schema_tool(
+                    exc,
+                    response_format,
+                ):
+                    raise
+                parser._log_response_schema_tool_fallback()
+                native_structured_output = False
+                response = await self._send_request(
+                    "Converse",
+                    parser._converse_kwargs(
+                        model=model,
+                        messages=messages,
+                        temperature=temperature,
+                        tools=tools,
+                        tool_choice=tool_choice,
+                        response_format=response_format,
+                        max_tokens=max_tokens,
+                        reasoning_effort=reasoning_effort,
+                        extra_body=extra_body,
+                        native_structured_output=False,
+                    ),
+                )
             parsed = self._parse_response("Converse", response)
             duration_seconds = perf_counter() - start_time
 
             response_message = ((parsed.get("output") or {}).get("message")) or {}
-            assistant_message, user_tool_calls = (
+            raw_assistant_message, raw_tool_calls = (
                 parser._response_message_to_assistant_message(response_message)
+            )
+            response_schema_tool_name = (
+                None
+                if native_structured_output
+                else parser._response_schema_tool_name(response_format)
+            )
+            response_schema_content, user_tool_calls = (
+                parser._split_response_schema_tool_calls(
+                    raw_tool_calls,
+                    response_schema_tool_name,
+                )
+            )
+            assistant_message = AssistantMessage(
+                content=raw_assistant_message.content,
+                thinking=raw_assistant_message.thinking,
+                tool_calls=user_tool_calls,
             )
             new_messages = [*messages, assistant_message]
 
@@ -232,6 +296,7 @@ class AsyncBedrockClient(AsyncBaseClient):
                     assistant_message.content,
                     user_tool_calls,
                     response_format,
+                    response_schema_content=response_schema_content,
                 ),
                 thinking=assistant_message.thinking,
                 messages=new_messages,
@@ -257,8 +322,10 @@ class AsyncBedrockClient(AsyncBaseClient):
     ) -> AsyncIterator[ResponseStreamEvent]:
         parser = self._parser
         response = None
+        response_stack = None
         try:
             start_time = perf_counter()
+            native_structured_output = True
             request = self._prepare_request(
                 "ConverseStream",
                 parser._converse_kwargs(
@@ -273,14 +340,40 @@ class AsyncBedrockClient(AsyncBaseClient):
                     extra_body=extra_body,
                 ),
             )
-            async with self._http_client.stream(
-                request.method,
-                request.url,
-                headers=dict(request.headers),
-                content=request.body,
-            ) as stream_response:
-                stream_response.raise_for_status()
-                response = stream_response
+            try:
+                response_stack, response = await self._open_stream_response(request)
+            except Exception as exc:
+                if not parser._should_retry_with_response_schema_tool(
+                    exc,
+                    response_format,
+                ):
+                    raise
+                parser._log_response_schema_tool_fallback()
+                native_structured_output = False
+                request = self._prepare_request(
+                    "ConverseStream",
+                    parser._converse_kwargs(
+                        model=model,
+                        messages=messages,
+                        temperature=temperature,
+                        tools=tools,
+                        tool_choice=tool_choice,
+                        response_format=response_format,
+                        max_tokens=max_tokens,
+                        reasoning_effort=reasoning_effort,
+                        extra_body=extra_body,
+                        native_structured_output=False,
+                    ),
+                )
+                response_stack, response = await self._open_stream_response(request)
+
+            response_schema_tool_name = (
+                None
+                if native_structured_output
+                else parser._response_schema_tool_name(response_format)
+            )
+            stream_response = response
+            if stream_response is not None:
                 current_chunk_type = None
                 current_tool = None
                 active_thinking_index: int | None = None
@@ -437,23 +530,35 @@ class AsyncBedrockClient(AsyncBaseClient):
                         tool_name = current_tool_use.get("name")
                         if current_chunk_type == "thinking":
                             active_thinking_index = None
+                        chunk_type = (
+                            "content"
+                            if tool_name == response_schema_tool_name
+                            else "tool"
+                        )
                         current_chunk_type, current_tool, stream_chunks = (
                             parser._transition_stream_chunk(
                                 current_chunk_type=current_chunk_type,
-                                next_chunk_type="tool",
+                                next_chunk_type=chunk_type,
                                 current_tool=current_tool,
-                                next_tool=tool_name,
+                                next_tool=(
+                                    tool_name if chunk_type == "tool" else None
+                                ),
                             )
                         )
                         for stream_chunk in stream_chunks:
                             yield stream_chunk
-                        yield ResponseStreamToolChunk(
-                            id=parser._tool_call_id(
-                                current_tool_use.get("toolUseId")
-                            ),
-                            tool=tool_name,
-                            chunk=tool_use_delta["input"],
-                        )
+                        if chunk_type == "content":
+                            yield ResponseStreamContentChunk(
+                                chunk=tool_use_delta["input"]
+                            )
+                        else:
+                            yield ResponseStreamToolChunk(
+                                id=parser._tool_call_id(
+                                    current_tool_use.get("toolUseId")
+                                ),
+                                tool=tool_name,
+                                chunk=tool_use_delta["input"],
+                            )
 
                     image_delta = delta.get("image") or {}
                     if isinstance(image_delta, dict):
@@ -476,14 +581,30 @@ class AsyncBedrockClient(AsyncBaseClient):
                                 source["s3Location"] = delta_source["s3Location"]
 
                 content_parts: list[TextContentPart | ImageContentPart] = []
-                user_tool_calls: list[AssistantToolCall] = []
+                raw_tool_calls: list[AssistantToolCall] = []
                 for index in sorted(content_blocks):
                     block = content_blocks[index]
                     parser._append_generated_content_block(
                         block,
                         content_parts=content_parts,
                         thinking_blocks=[],
-                        user_tool_calls=user_tool_calls,
+                        user_tool_calls=raw_tool_calls,
+                    )
+
+                response_schema_content, user_tool_calls = (
+                    parser._split_response_schema_tool_calls(
+                        raw_tool_calls,
+                        response_schema_tool_name,
+                    )
+                )
+                if response_schema_content is not None:
+                    content_parts.append(
+                        TextContentPart(
+                            text=json.dumps(
+                                response_schema_content,
+                                ensure_ascii=False,
+                            )
+                        )
                     )
 
                 assistant_message = AssistantMessage(
@@ -527,6 +648,7 @@ class AsyncBedrockClient(AsyncBaseClient):
                         assistant_message.content,
                         user_tool_calls,
                         response_format,
+                        response_schema_content=response_schema_content,
                     ),
                     thinking=assistant_message.thinking,
                     messages=new_messages,
@@ -539,3 +661,5 @@ class AsyncBedrockClient(AsyncBaseClient):
         finally:
             if response is not None:
                 await response.aclose()
+            if response_stack is not None:
+                await response_stack.aclose()

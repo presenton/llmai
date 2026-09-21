@@ -11,8 +11,14 @@ from botocore.tokens import FrozenAuthToken, TokenProviderChain
 
 from llmai.shared.base import BaseClient
 from llmai.shared.configs import BedrockClientConfig
-from llmai.shared.errors import LLMError, configuration_error, raise_llm_error
+from llmai.shared.errors import (
+    LLMError,
+    configuration_error,
+    normalize_llm_error,
+    raise_llm_error,
+)
 from llmai.shared.generation import GenerationProfile
+from llmai.shared.logs import LogLevel
 from llmai.shared.messages import (
     AssistantMessage,
     AssistantReasoningItem,
@@ -34,6 +40,7 @@ from llmai.shared.response_formats import (
     JSONObjectResponse,
     JSONSchemaResponse,
     ResponseFormat,
+    get_response_format_name,
     get_response_format_strict,
     get_response_schema,
 )
@@ -337,24 +344,24 @@ class BedrockClient(BaseClient):
         return system_blocks or None
 
     def _llm_tools_to_bedrock_tools(self, tools: list[Tool]) -> list[dict[str, object]]:
-        return [
-            {
-                "toolSpec": {
-                    "name": tool.name,
-                    "description": tool.description,
-                    "inputSchema": {
-                        "json": self._bedrock_schema(
-                            get_schema_as_dict(
-                                tool.input_schema,
-                                strict=tool.strict,
-                            )
+        bedrock_tools: list[dict[str, object]] = []
+        for tool in tools:
+            tool_spec: dict[str, object] = {
+                "name": tool.name,
+                "description": tool.description,
+                "inputSchema": {
+                    "json": self._bedrock_schema(
+                        get_schema_as_dict(
+                            tool.input_schema,
+                            strict=tool.strict,
                         )
-                    },
-                    "strict": tool.strict,
-                }
+                    )
+                },
             }
-            for tool in tools
-        ]
+            if tool.strict:
+                tool_spec["strict"] = True
+            bedrock_tools.append({"toolSpec": tool_spec})
+        return bedrock_tools
 
     def _bedrock_schema(self, schema: dict) -> dict:
         return process_schema(
@@ -383,12 +390,29 @@ class BedrockClient(BaseClient):
         self,
         tools: list[LLMTool] | None,
         tool_choice: ToolChoice | None,
+        response_format: ResponseFormat | None = None,
     ) -> dict[str, object] | None:
         resolved = filter_resolved_tools_for_provider(
             resolve_tools(tools, tool_choice),
             supports_web_search=False,
         )
         bedrock_tools = self._llm_tools_to_bedrock_tools(resolved.function_tools)
+
+        response_schema = self._get_bedrock_response_schema(response_format)
+        response_schema_tool_name = self._response_schema_tool_name(response_format)
+        if response_schema and response_schema_tool_name:
+            bedrock_tools.extend(
+                self._llm_tools_to_bedrock_tools(
+                    [
+                        Tool(
+                            name=response_schema_tool_name,
+                            description="Provide the final response to the user",
+                            strict=False,
+                            input_schema=response_schema,
+                        )
+                    ]
+                )
+            )
 
         if not bedrock_tools:
             return None
@@ -402,8 +426,62 @@ class BedrockClient(BaseClient):
                 }
             else:
                 config["toolChoice"] = {"any": {}}
+        elif response_schema_tool_name:
+            if resolved.is_explicit and resolved.function_tools:
+                config["toolChoice"] = {"any": {}}
+            else:
+                config["toolChoice"] = {
+                    "tool": {"name": response_schema_tool_name}
+                }
 
         return config
+
+    def _response_schema_tool_name(
+        self,
+        response_format: ResponseFormat | None,
+    ) -> str | None:
+        if self._get_bedrock_response_schema(response_format) is None:
+            return None
+        return get_response_format_name(response_format, default="response")
+
+    def _split_response_schema_tool_calls(
+        self,
+        tool_calls: list[AssistantToolCall],
+        response_schema_tool_name: str | None,
+    ) -> tuple[dict | None, list[AssistantToolCall]]:
+        response_schema_content: dict | None = None
+        user_tool_calls: list[AssistantToolCall] = []
+        for tool_call in tool_calls:
+            if tool_call.name == response_schema_tool_name:
+                response_schema_content = self._parse_tool_arguments(
+                    tool_call.arguments
+                )
+            else:
+                user_tool_calls.append(tool_call)
+        return response_schema_content, user_tool_calls
+
+    def _should_retry_with_response_schema_tool(
+        self,
+        exc: Exception,
+        response_format: ResponseFormat | None,
+    ) -> bool:
+        if self._get_bedrock_response_schema(response_format) is None:
+            return False
+
+        normalized = normalize_llm_error(exc, provider="bedrock")
+        if normalized.status_code != 400:
+            return False
+
+        message = normalized.message.lower()
+        return "extra inputs are not permitted" in message and (
+            "output_config.format" in message or "outputconfig" in message
+        )
+
+    def _log_response_schema_tool_fallback(self) -> None:
+        self.log(
+            LogLevel.WARNING,
+            "Bedrock rejected native structured output; retrying with a schema tool.",
+        )
 
     def _get_output_config(
         self,
@@ -429,7 +507,12 @@ class BedrockClient(BaseClient):
         content: list[TextContentPart | ImageContentPart] | None,
         user_tool_calls: list[AssistantToolCall],
         response_format: ResponseFormat | None,
+        *,
+        response_schema_content: dict | None = None,
     ) -> object:
+        if response_schema_content is not None:
+            return response_schema_content
+
         text_content = "".join(
             part.text for part in (content or []) if isinstance(part, TextContentPart)
         )
@@ -591,6 +674,7 @@ class BedrockClient(BaseClient):
         max_tokens: int | None,
         reasoning_effort: ReasoningEffort | None,
         extra_body: dict | None,
+        native_structured_output: bool = True,
     ) -> dict[str, object]:
         kwargs: dict[str, object] = {
             "modelId": model,
@@ -612,11 +696,14 @@ class BedrockClient(BaseClient):
         tool_config = self._get_bedrock_tool_config(
             tools,
             tool_choice,
+            None if native_structured_output else response_format,
         )
         if tool_config:
             kwargs["toolConfig"] = tool_config
 
-        output_config = self._get_output_config(response_format)
+        output_config = self._get_output_config(
+            response_format if native_structured_output else None
+        )
         if output_config:
             kwargs["outputConfig"] = output_config
 
@@ -712,24 +799,64 @@ class BedrockClient(BaseClient):
     ) -> ResponseContent:
         try:
             start_time = perf_counter()
-            response = self._client.converse(
-                **self._converse_kwargs(
-                    model=model,
-                    messages=messages,
-                    temperature=temperature,
-                    tools=tools,
-                    tool_choice=tool_choice,
-                    response_format=response_format,
-                    max_tokens=max_tokens,
-                    reasoning_effort=reasoning_effort,
-                    extra_body=extra_body,
+            native_structured_output = True
+            try:
+                response = self._client.converse(
+                    **self._converse_kwargs(
+                        model=model,
+                        messages=messages,
+                        temperature=temperature,
+                        tools=tools,
+                        tool_choice=tool_choice,
+                        response_format=response_format,
+                        max_tokens=max_tokens,
+                        reasoning_effort=reasoning_effort,
+                        extra_body=extra_body,
+                    )
                 )
-            )
+            except Exception as exc:
+                if not self._should_retry_with_response_schema_tool(
+                    exc,
+                    response_format,
+                ):
+                    raise
+                self._log_response_schema_tool_fallback()
+                native_structured_output = False
+                response = self._client.converse(
+                    **self._converse_kwargs(
+                        model=model,
+                        messages=messages,
+                        temperature=temperature,
+                        tools=tools,
+                        tool_choice=tool_choice,
+                        response_format=response_format,
+                        max_tokens=max_tokens,
+                        reasoning_effort=reasoning_effort,
+                        extra_body=extra_body,
+                        native_structured_output=False,
+                    )
+                )
             duration_seconds = perf_counter() - start_time
 
             response_message = ((response.get("output") or {}).get("message")) or {}
-            assistant_message, user_tool_calls = (
+            raw_assistant_message, raw_tool_calls = (
                 self._response_message_to_assistant_message(response_message)
+            )
+            response_schema_tool_name = (
+                None
+                if native_structured_output
+                else self._response_schema_tool_name(response_format)
+            )
+            response_schema_content, user_tool_calls = (
+                self._split_response_schema_tool_calls(
+                    raw_tool_calls,
+                    response_schema_tool_name,
+                )
+            )
+            assistant_message = AssistantMessage(
+                content=raw_assistant_message.content,
+                thinking=raw_assistant_message.thinking,
+                tool_calls=user_tool_calls,
             )
             new_messages = [*messages, assistant_message]
 
@@ -738,6 +865,7 @@ class BedrockClient(BaseClient):
                     assistant_message.content,
                     user_tool_calls,
                     response_format,
+                    response_schema_content=response_schema_content,
                 ),
                 thinking=assistant_message.thinking,
                 messages=new_messages,
@@ -763,18 +891,47 @@ class BedrockClient(BaseClient):
     ):
         try:
             start_time = perf_counter()
-            response = self._client.converse_stream(
-                **self._converse_kwargs(
-                    model=model,
-                    messages=messages,
-                    temperature=temperature,
-                    tools=tools,
-                    tool_choice=tool_choice,
-                    response_format=response_format,
-                    max_tokens=max_tokens,
-                    reasoning_effort=reasoning_effort,
-                    extra_body=extra_body,
+            native_structured_output = True
+            try:
+                response = self._client.converse_stream(
+                    **self._converse_kwargs(
+                        model=model,
+                        messages=messages,
+                        temperature=temperature,
+                        tools=tools,
+                        tool_choice=tool_choice,
+                        response_format=response_format,
+                        max_tokens=max_tokens,
+                        reasoning_effort=reasoning_effort,
+                        extra_body=extra_body,
+                    )
                 )
+            except Exception as exc:
+                if not self._should_retry_with_response_schema_tool(
+                    exc,
+                    response_format,
+                ):
+                    raise
+                self._log_response_schema_tool_fallback()
+                native_structured_output = False
+                response = self._client.converse_stream(
+                    **self._converse_kwargs(
+                        model=model,
+                        messages=messages,
+                        temperature=temperature,
+                        tools=tools,
+                        tool_choice=tool_choice,
+                        response_format=response_format,
+                        max_tokens=max_tokens,
+                        reasoning_effort=reasoning_effort,
+                        extra_body=extra_body,
+                        native_structured_output=False,
+                    )
+                )
+            response_schema_tool_name = (
+                None
+                if native_structured_output
+                else self._response_schema_tool_name(response_format)
             )
             current_chunk_type = None
             current_tool = None
@@ -930,21 +1087,33 @@ class BedrockClient(BaseClient):
                     tool_name = current_tool_use.get("name")
                     if current_chunk_type == "thinking":
                         active_thinking_index = None
+                    chunk_type = (
+                        "content"
+                        if tool_name == response_schema_tool_name
+                        else "tool"
+                    )
                     current_chunk_type, current_tool, stream_chunks = (
                         self._transition_stream_chunk(
                             current_chunk_type=current_chunk_type,
-                            next_chunk_type="tool",
+                            next_chunk_type=chunk_type,
                             current_tool=current_tool,
-                            next_tool=tool_name,
+                            next_tool=(tool_name if chunk_type == "tool" else None),
                         )
                     )
                     for stream_chunk in stream_chunks:
                         yield stream_chunk
-                    yield ResponseStreamToolChunk(
-                        id=self._tool_call_id(current_tool_use.get("toolUseId")),
-                        tool=tool_name,
-                        chunk=tool_use_delta["input"],
-                    )
+                    if chunk_type == "content":
+                        yield ResponseStreamContentChunk(
+                            chunk=tool_use_delta["input"]
+                        )
+                    else:
+                        yield ResponseStreamToolChunk(
+                            id=self._tool_call_id(
+                                current_tool_use.get("toolUseId")
+                            ),
+                            tool=tool_name,
+                            chunk=tool_use_delta["input"],
+                        )
 
                 image_delta = delta.get("image") or {}
                 if isinstance(image_delta, dict):
@@ -967,14 +1136,27 @@ class BedrockClient(BaseClient):
                             source["s3Location"] = delta_source["s3Location"]
 
             content_parts: list[TextContentPart | ImageContentPart] = []
-            user_tool_calls: list[AssistantToolCall] = []
+            raw_tool_calls: list[AssistantToolCall] = []
             for index in sorted(content_blocks):
                 block = content_blocks[index]
                 self._append_generated_content_block(
                     block,
                     content_parts=content_parts,
                     thinking_blocks=[],
-                    user_tool_calls=user_tool_calls,
+                    user_tool_calls=raw_tool_calls,
+                )
+
+            response_schema_content, user_tool_calls = (
+                self._split_response_schema_tool_calls(
+                    raw_tool_calls,
+                    response_schema_tool_name,
+                )
+            )
+            if response_schema_content is not None:
+                content_parts.append(
+                    TextContentPart(
+                        text=json.dumps(response_schema_content, ensure_ascii=False)
+                    )
                 )
 
             assistant_message = AssistantMessage(
@@ -1018,6 +1200,7 @@ class BedrockClient(BaseClient):
                     assistant_message.content,
                     user_tool_calls,
                     response_format,
+                    response_schema_content=response_schema_content,
                 ),
                 thinking=assistant_message.thinking,
                 messages=new_messages,
